@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "SQLite-backed persistent memory MCP server with FTS5 search and project scoping"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "Alex Fayers" }]
 dependencies = [
     "mcp>=1.27",
@@ -12,6 +12,18 @@ dependencies = [
 
 [project.scripts]
 mcp-memory = "mcp_memory.server:main"
+
+[project.optional-dependencies]
+hooks = ["cline-hooks", "platformdirs>=4"]
+
+[tool.uv.sources]
+cline-hooks = { path = "../cline-hooks", editable = true }
+
+[project.entry-points."cline_hooks"]
+memory = "mcp_memory.hooks.plugin:MemoryPlugin"
+
+[project.entry-points."llm_prompts"]
+memory = "mcp_memory:get_prompts_dir"
 
 [build-system]
 requires = ["hatchling"]
@@ -53,7 +65,7 @@ ignore = [
 "src/mcp_memory/migrations/schema.py" = ["E501"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
