@@ -1,0 +1,65 @@
+[project]
+name = "mcp-memory"
+version = "0.1.0"
+description = "SQLite-backed persistent memory MCP server with FTS5 search and project scoping"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Alex Fayers" }]
+dependencies = [
+    "mcp>=1.27",
+]
+
+[project.scripts]
+mcp-memory = "mcp_memory.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_memory"]
+
+[tool.ruff]
+target-version = "py311"
+src = ["src", "tests"]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",       # pydocstyle - we use Google docstrings selectively
+    "ANN",     # flake8-annotations - we use type hints but not on every function
+    "COM812",  # trailing comma - conflicts with ruff format
+    "ISC001",  # single line implicit string concat - conflicts with ruff format
+    "S101",    # assert - used in tests
+    "PLR2004", # magic value comparison - too noisy
+    "PLR0913", # too many arguments - some functions need them
+    "EM",      # exception message style - f-strings in exceptions are fine
+    "TRY003",  # long exception messages - descriptive errors are good
+    "TRY300",  # return in try - acceptable for simple try/except patterns
+    "TRY301",  # raise in try - acceptable for validation
+    "BLE001",  # blind exception - intentional in MCP tool handlers
+    "N803",    # camelCase args - required by MCP protocol
+    "A002",    # shadowing builtin - 'type' param required by MCP protocol
+    "TC003",   # type-checking import - sqlite3 used at runtime
+    "S608",    # SQL injection - placeholders are safe, not user input
+    "PERF401", # list.extend - readability preferred
+    "SIM102",  # nested if - readability preferred
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG001", "ARG002", "PLR0917"]
+"src/mcp_memory/migrations/schema.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = ["ruff>=0.11", "mypy>=1.15", "pytest>=8"]
