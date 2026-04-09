@@ -23,8 +23,9 @@ def run_migrations(db: sqlite3.Connection) -> None:
     has_version = db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
 
     if has_entities and has_version is None:
-        logger.warning("Existing database without version tracking detected, skipping migrations")
-        return
+        logger.info("Existing database without version tracking detected, marking as v1")
+        db.execute("INSERT INTO schema_version (version) VALUES (?)", (1,))
+        has_version = 1
 
     current_version = has_version or 0
 
