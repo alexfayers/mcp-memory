@@ -10,7 +10,12 @@ from mcp.server.fastmcp import FastMCP
 from .database import DatabaseManager
 from .models import Relation
 
-mcp = FastMCP("mcp-memory", stateless_http=True, json_response=True)
+mcp = FastMCP(
+    "mcp-memory",
+    stateless_http=True,
+    json_response=True,
+    port=int(os.environ.get("MCP_MEMORY_PORT", "8000")),
+)
 
 RELATION_EXEMPT_TYPES = frozenset({"user-preferences", "pattern"})
 
