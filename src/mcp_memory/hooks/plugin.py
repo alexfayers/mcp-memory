@@ -18,6 +18,7 @@ _MEMORY_WRITE_TOOL_NAMES = frozenset(
         "delete_entity",
         "delete_relation",
         "delete_observations",
+        "set_entity_status",
     }
 )
 
