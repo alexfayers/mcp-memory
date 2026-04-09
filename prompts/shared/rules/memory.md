@@ -1,15 +1,15 @@
 ---
-description: Guide {{agent}} on using mcp-memory-sqlite for persistent memory.
+description: Guide {{agent}} on using mcp-memory for persistent memory.
 ---
 
-# Memory Usage with mcp-memory-sqlite
+# Memory Usage with mcp-memory
 
 You have one MCP memory server available: `memory`
 
 All tools require a `project` parameter that scopes data. Use two logical projects:
 
 - `global` - for cross-project knowledge (user preferences, patterns, reusable techniques)
-- `<repo-name>` - for project-specific knowledge (e.g. `fayers-mcp-memory-sqlite`)
+- `<repo-name>` - for project-specific knowledge (e.g. `mcp-memory`)
 
 You can (and should) use these MCP tools in _both_ PLAN and ACT mode.
 
@@ -39,7 +39,7 @@ Ensure you _always_ update memory as you progress through a task, and just befor
 ### If the `memory` server is unavailable
 
 If `memory` is not accessible and you need it for the current task:
-1. Start the server: `SQLITE_DB_PATH=~/.memory/memory.db alexfayers-mcp-memory-sqlite`
+1. Start the server: `mcp-memory`
 2. Ask the user to reload the MCP connection.
 3. Do not continue until `memory` is available.
 
