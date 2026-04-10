@@ -14,10 +14,12 @@ dependencies = [
 mcp-memory = "mcp_memory.server:main"
 
 [project.optional-dependencies]
-hooks = ["cline-hooks", "platformdirs>=4"]
+hooks = ["cline-hooks"]
+prompts = ["llm-prompts"]
 
 [tool.uv.sources]
 cline-hooks = { path = "../cline-hooks", editable = true }
+llm-prompts = { path = "../llm-prompts", editable = true }
 
 [project.entry-points."cline_hooks"]
 memory = "mcp_memory.hooks.plugin:MemoryPlugin"

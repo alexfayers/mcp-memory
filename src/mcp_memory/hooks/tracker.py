@@ -6,24 +6,28 @@ import json
 import logging
 from pathlib import Path
 
-from platformdirs import user_data_dir
+from mcp_memory.config import get_data_dir
 
 logger = logging.getLogger("hooks")
 
 _MEMORY_BLOCK_THRESHOLD = 10
-_STATE_PATH = Path(user_data_dir("cline-hooks")) / "memory-tracker-state.json"
+
+
+def _state_path() -> Path:
+    """Return the path to the state file, next to the memory database."""
+    return get_data_dir() / "memory-tracker-state.json"
 
 
 def _read() -> dict[str, int]:
     try:
-        return dict(json.loads(_STATE_PATH.read_text()))
+        return dict(json.loads(_state_path().read_text()))
     except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
         return {}
 
 
 def _write(data: dict[str, int]) -> None:
-    _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _STATE_PATH.write_text(json.dumps(data))
+    _state_path().parent.mkdir(parents=True, exist_ok=True)
+    _state_path().write_text(json.dumps(data))
 
 
 def increment(task_id: str) -> int:

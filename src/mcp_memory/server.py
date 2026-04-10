@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from .config import get_db_path
 from .database import DatabaseManager
 from .models import Relation
 from .visualise import register_visualise_routes
@@ -29,8 +29,6 @@ VALID_ENTITY_TYPES = frozenset(
         "knowledge",
     }
 )
-
-_DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
 
 # Tool descriptions
 CREATE_ENTITIES_DESC = (
@@ -85,8 +83,7 @@ def _get_db() -> DatabaseManager:
     """Lazily initialise and return the database manager."""
     global _db  # noqa: PLW0603
     if _db is None:
-        db_path = Path(os.environ.get("MCP_MEMORY_DB_PATH", _DEFAULT_DB_PATH)).expanduser()
-        _db = DatabaseManager(db_path)
+        _db = DatabaseManager(get_db_path())
     return _db
 
 
