@@ -132,11 +132,12 @@ def _validate_and_extract_relations(
                 )
 
         if isinstance(relations_raw, list):
+            entity_name = str(entity_data.get("name", ""))
             for rel in relations_raw:
                 if isinstance(rel, dict):
                     all_relations.append(
                         Relation(
-                            source=str(rel["source"]),
+                            source=str(rel.get("source", entity_name)),
                             target=str(rel["target"]),
                             relation_type=str(rel["type"]),
                         )
