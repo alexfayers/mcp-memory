@@ -53,6 +53,24 @@ class DatabaseManager:
         ).fetchone()
         return row["id"] if row else None
 
+    def entity_exists_in_project(self, name: str, project: str) -> bool:
+        """Check if an entity name exists in a specific project scope."""
+        row = self._db.execute(
+            "SELECT 1 FROM entities e JOIN projects p ON e.project_id = p.id "
+            "WHERE e.name = ? AND p.name = ?",
+            (name, project),
+        ).fetchone()
+        return row is not None
+
+    def entity_exists_outside_project(self, name: str, project: str) -> str | None:
+        """Return the first project where this entity exists, excluding the given project."""
+        row = self._db.execute(
+            "SELECT p.name FROM entities e JOIN projects p ON e.project_id = p.id "
+            "WHERE e.name = ? AND p.name != ?",
+            (name, project),
+        ).fetchone()
+        return row["name"] if row else None
+
     def _get_observations(self, entity_id: int) -> list[str]:
         rows = self._db.execute(
             "SELECT content FROM observations WHERE entity_id = ? ORDER BY id",
@@ -206,6 +224,8 @@ class DatabaseManager:
         project_id = self._get_or_create_project_id(project)
 
         for relation in relations:
+            if relation.source == relation.target:
+                raise ValueError(f"Self-referential relation not allowed: '{relation.source}'")
             source_id = self._get_entity_id(relation.source, project_id)
             if source_id is None:
                 raise ValueError(
@@ -226,18 +246,28 @@ class DatabaseManager:
         self._db.commit()
 
     def delete_entity(self, project: str, name: str) -> None:
-        """Delete an entity and all its observations and relations."""
+        """Delete an entity, cascading outgoing relations but blocking on incoming."""
         project_id = self._get_or_create_project_id(project)
         entity_id = self._get_entity_id(name, project_id)
         if entity_id is None:
             raise ValueError(f"Entity '{name}' not found in project '{project}'")
 
+        incoming = self._db.execute(
+            "SELECT e.name FROM relations r "
+            "JOIN entities e ON r.source_id = e.id "
+            "WHERE r.target_id = ? AND r.source_id != ?",
+            (entity_id, entity_id),
+        ).fetchall()
+        if incoming:
+            sources = [row["name"] for row in incoming]
+            raise ValueError(
+                f"Cannot delete '{name}': {len(sources)} incoming relation(s) from: "
+                + ", ".join(sources)
+            )
+
         with self._db:
             self._db.execute("DELETE FROM observations WHERE entity_id = ?", (entity_id,))
-            self._db.execute(
-                "DELETE FROM relations WHERE source_id = ? OR target_id = ?",
-                (entity_id, entity_id),
-            )
+            self._db.execute("DELETE FROM relations WHERE source_id = ?", (entity_id,))
             self._db.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
 
     def delete_relation(self, project: str, source: str, target: str, relation_type: str) -> None:

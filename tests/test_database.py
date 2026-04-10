@@ -177,6 +177,11 @@ class TestRelations:
         with pytest.raises(ValueError, match="not found"):
             db.delete_relation("proj", "a", "b", "nonexistent")
 
+    def test_self_referential_relation_rejected(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "a", "entityType": "pattern", "observations": ["x"]}])
+        with pytest.raises(ValueError, match="Self-referential"):
+            db.create_relations("proj", [Relation(source="a", target="a", relation_type="x")])
+
 
 class TestDeleteEntity:
     def test_delete_entity(self, db: DatabaseManager) -> None:
@@ -201,6 +206,18 @@ class TestDeleteEntity:
     def test_delete_missing_entity_raises(self, db: DatabaseManager) -> None:
         with pytest.raises(ValueError, match="not found"):
             db.delete_entity("proj", "missing")
+
+    def test_delete_blocked_by_incoming_relations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        db.create_relations("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
+        with pytest.raises(ValueError, match=r"Cannot delete 'b'.*incoming relation.*from: a"):
+            db.delete_entity("proj", "b")
 
 
 class TestGetEntityWithRelations:

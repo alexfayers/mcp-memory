@@ -21,20 +21,18 @@ Ensure you _always_ update memory as you progress through a task, and just befor
 
 - Use `project="global"` for:
   - General user preferences (coding style, stack choices, tooling).
-  - Cross-project summaries - brief notes about recent work across projects.
   - Reusable patterns and techniques (infra patterns, testing approach, migration strategies).
-  - Long-lived knowledge that should be shared across projects.
-  - For project-related entries, keep observations short and summary-level.
+  - Cross-project knowledge (oncall procedures, ADC partition info, team references).
   - Update after any change (successful or failed - note failures explicitly), any new information gained from the user, and any insight discovered during the task.
 
 - Use `project="<repo-name>"` for:
-  - Architecture, design decisions, and constraints specific to this repo.
+  - **Everything project-specific** - including the `project/` entity itself, all features, tasks, and architecture.
   - Module/API contracts, invariants, and non-obvious gotchas.
   - Project-specific user preferences that don't apply globally.
   - TODOs, partial work, and context that only matters in this codebase.
 
+- **Do NOT create project summary entities in global scope.** Each project's `project/` entity lives in its own project scope. Global is only for things that span multiple projects.
 - **NEVER put workspace-specific facts (repo names, file paths, workspace specific rules, tool configs specific to a repo) into global memory.**
-- When in doubt: if the fact only applies to the current workspace, it goes in project memory.
 
 ### If the `memory` server is unavailable
 
@@ -81,9 +79,8 @@ Entity names must be unique across all entity types. Always prefix the name with
 | A repository / codebase | `project` | `project/<repo-name>` | `project/ExampleProject` |
 | A feature area or module | `feature` | `feature/<project>/<area>` | `feature/ExampleProject/ticketing` |
 | A task or ticket | `task` | `task/<TICKET-ID>-<slug>` | `task/ABC-123-idempotency-simplification` |
-| A user preference or style | `user-preferences` | `user-preferences/<alias>-<topic>` | `user-preferences/fayers-workflow` |
+| A user preference or style | `user-preferences` | `user-preferences/<alias>-<topic>` | `user-preferences/jdoe-workflow` |
 | A reusable pattern | `pattern` | `pattern/<short-noun>` | `pattern/dynamodb-batch-get-retry` |
-| A completed change | `changelog` | `changelog/<TICKET-ID>-<slug>` or `changelog/<project>-<date>-<slug>` | `changelog/ABC-123-idempotency-simplification` |
 
 ### Task entity discipline
 
@@ -110,15 +107,13 @@ Use relations to link related entities, e.g.:
 - task `belongs-to` project
 - feature `belongs-to` project
 - pattern `used-in` project
-- changelog `modified` project or feature
-- changelog `follows` previous changelog (chain chronological changes for full history traversal)
 
 ### Observation wording
 
 Use entity type to distinguish current facts from past actions:
 
 - **`project` / `feature` observations** - use present tense for current facts: "process_ticket requires relationship_manager"
-- **`changelog` / `task` observations** - use past tense for completed actions: "Removed is_tracked and is_processed_or_tracked helpers"
+- **`task` observations** - use past tense for completed actions: "Removed is_tracked and is_processed_or_tracked helpers"
 - Do not include rationale in the same observation as the fact - add a separate observation for "why"
 
 ## While working

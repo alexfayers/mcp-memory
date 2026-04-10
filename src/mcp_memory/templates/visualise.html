@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-memory graph</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; overflow: hidden; }
+#controls { position: fixed; top: 12px; left: 12px; z-index: 10; display: flex; gap: 8px; align-items: center; }
+select, button { background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+select:hover, button:hover { border-color: #58a6ff; }
+#status { position: fixed; top: 16px; right: 12px; font-size: 11px; color: #484f58; z-index: 10; }
+#panel { position: fixed; right: 0; top: 0; width: 340px; height: 100%; background: #161b22; border-left: 1px solid #30363d; padding: 16px; overflow-y: auto; transform: translateX(100%); transition: transform 0.2s; z-index: 10; }
+#panel.open { transform: translateX(0); }
+#panel h2 { font-size: 15px; margin-bottom: 4px; color: #58a6ff; word-break: break-all; }
+#panel h3 { font-size: 12px; color: #484f58; margin-bottom: 12px; }
+#panel .status-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #30363d; margin-bottom: 12px; }
+#panel .obs { font-size: 12px; line-height: 1.6; color: #8b949e; padding: 4px 0; border-bottom: 1px solid #21262d; }
+#panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #484f58; cursor: pointer; font-size: 18px; }
+svg { width: 100vw; height: 100vh; }
+.link { stroke-opacity: 0.4; }
+.link-label { font-size: 9px; fill: #484f58; pointer-events: none; }
+.node circle { stroke-width: 1.5; cursor: pointer; }
+.node text { font-size: 10px; fill: #8b949e; pointer-events: none; }
+.node.selected circle { stroke: #f0f6fc !important; stroke-width: 3; }
+.node.orphan circle { stroke: #f85149; stroke-dasharray: 4 2; }
+#legend { position: fixed; bottom: 12px; left: 12px; z-index: 10; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; font-size: 11px; }
+#legend h4 { font-size: 11px; color: #484f58; margin-bottom: 6px; }
+#legend .row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+#legend .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+#legend .section { margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="controls">
+  <select id="project"><option value="">All projects</option></select>
+  <button id="refresh">Refresh</button>
+  <label style="font-size:12px;color:#484f58"><input type="checkbox" id="auto" checked> Auto (2s)</label>
+</div>
+<div id="status"></div>
+<div id="legend">
+  <h4>Entity type</h4>
+  <div id="legend-types"></div>
+  <div class="section">
+    <h4>Status (border)</h4>
+    <div id="legend-statuses"></div>
+  </div>
+</div>
+<div id="panel">
+  <button id="panel-close">&times;</button>
+  <h2 id="p-name"></h2>
+  <h3 id="p-type"></h3>
+  <div id="p-status"></div>
+  <div id="p-obs"></div>
+</div>
+<svg></svg>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+const TYPE_COLOURS = {
+  project: "#58a6ff", feature: "#3fb950", task: "#d29922",
+  "user-preferences": "#bc8cff", pattern: "#f778ba",
+  changelog: "#79c0ff", knowledge: "#56d364"
+};
+const fallbackColour = "#8b949e";
+const statusColours = {
+  planned: "#484f58", "in-progress": "#d29922",
+  blocked: "#f85149", resolved: "#3fb950", archived: "#484f58"
+};
+
+const svg = d3.select("svg");
+const width = () => window.innerWidth;
+const height = () => window.innerHeight;
+const g = svg.append("g");
+
+svg.call(d3.zoom().on("zoom", e => g.attr("transform", e.transform)));
+
+let simulation, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, orphans = new Set();
+
+const panel = document.getElementById("panel");
+document.getElementById("panel-close").onclick = () => { panel.classList.remove("open"); selectedNode = null; updateSelection(); };
+
+async function loadProjects() {
+  const res = await fetch("/api/projects");
+  const projects = await res.json();
+  const sel = document.getElementById("project");
+  sel.innerHTML = '<option value="">All projects</option>' + projects.map(p => `<option value="${p}">${p}</option>`).join("");
+  fetchGraph();
+}
+
+function buildLegend() {
+  const types = document.getElementById("legend-types");
+  for (const [name, colour] of Object.entries(TYPE_COLOURS)) {
+    types.innerHTML += `<div class="row"><span class="dot" style="background:${colour}"></span>${name}</div>`;
+  }
+  types.innerHTML += `<div class="row"><span class="dot" style="background:${fallbackColour}"></span>other</div>`;
+  const statuses = document.getElementById("legend-statuses");
+  for (const [name, colour] of Object.entries(statusColours)) {
+    statuses.innerHTML += `<div class="row"><span class="dot" style="border:2px solid ${colour};background:transparent"></span>${name}</div>`;
+  }
+  statuses.innerHTML += `<div class="row"><span class="dot" style="border:2px dashed #f85149;background:transparent"></span>orphan (no relations)</div>`;
+}
+buildLegend();
+
+async function fetchGraph() {
+  const project = document.getElementById("project").value;
+  const url = project ? `/api/graph?project=${encodeURIComponent(project)}` : "/api/graph";
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    document.getElementById("status").textContent = `${data.entities.length} nodes, ${data.relations.length} edges`;
+    const connected = new Set();
+    data.relations.forEach(r => { connected.add(r.source); connected.add(r.target); });
+    const orphanCount = data.entities.filter(e => !connected.has(e.name) && e.entity_type !== "project").length;
+    if (orphanCount) document.getElementById("status").textContent += `, ${orphanCount} orphan${orphanCount > 1 ? "s" : ""}`;
+    if (JSON.stringify(data) !== JSON.stringify(currentData)) { currentData = data; render(data); }
+  } catch (e) { document.getElementById("status").textContent = "error: " + e.message; }
+}
+
+function render(data) {
+  const nodes = data.entities.map(e => ({ id: e.name, ...e }));
+  const nodeSet = new Set(nodes.map(n => n.id));
+  const links = data.relations.filter(r => nodeSet.has(r.source) && nodeSet.has(r.target))
+    .map(r => ({ source: r.source, target: r.target, type: r.relation_type }));
+
+  const connected = new Set();
+  data.relations.forEach(r => { connected.add(r.source); connected.add(r.target); });
+  orphans = new Set(nodes.filter(n => !connected.has(n.id) && n.entity_type !== "project").map(n => n.id));
+
+  const relCount = new Map(nodes.map(n => [n.id, 0]));
+  data.relations.forEach(r => {
+    if (relCount.has(r.source)) relCount.set(r.source, relCount.get(r.source) + 1);
+    if (relCount.has(r.target)) relCount.set(r.target, relCount.get(r.target) + 1);
+  });
+  const nodeRadius = d => 5 + Math.min((relCount.get(d.id) || 0) * 2, 25);
+
+  // preserve positions from previous simulation
+  if (simulation) {
+    const old = new Map(simulation.nodes().map(n => [n.id, { x: n.x, y: n.y }]));
+    nodes.forEach(n => { const p = old.get(n.id); if (p) { n.x = p.x; n.y = p.y; } });
+  }
+
+  g.selectAll(".link").remove();
+  g.selectAll(".link-label").remove();
+  g.selectAll(".node").remove();
+
+  linkSel = g.selectAll(".link").data(links).join("line")
+    .attr("class", "link").attr("stroke", "#30363d").attr("stroke-width", 1);
+
+  labelSel = g.selectAll(".link-label").data(links).join("text")
+    .attr("class", "link-label").text(d => d.type);
+
+  nodeSel = g.selectAll(".node").data(nodes, d => d.id).join("g")
+    .attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""))
+    .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd))
+    .on("click", (e, d) => { selectedNode = d.id; showPanel(d); updateSelection(); });
+
+  nodeSel.append("circle")
+    .attr("r", nodeRadius)
+    .attr("fill", d => TYPE_COLOURS[d.entity_type] || fallbackColour)
+    .attr("stroke", d => d.status ? statusColours[d.status] || "#30363d" : "#30363d");
+
+  nodeSel.append("text").attr("dx", d => 3 + nodeRadius(d)).attr("dy", 4)
+    .text(d => d.name.length > 40 ? d.name.slice(0, 37) + "..." : d.name);
+
+  simulation = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(d => d.id).distance(80))
+    .force("charge", d3.forceManyBody().strength(-120))
+    .force("center", d3.forceCenter(width() / 2, height() / 2))
+    .force("collision", d3.forceCollide().radius(d => 5 + nodeRadius(d)))
+    .on("tick", ticked);
+}
+
+function ticked() {
+  linkSel.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+    .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+  labelSel.attr("x", d => (d.source.x + d.target.x) / 2).attr("y", d => (d.source.y + d.target.y) / 2);
+  nodeSel.attr("transform", d => `translate(${d.x},${d.y})`);
+}
+
+function dragStart(e, d) { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
+function dragged(e, d) { d.fx = e.x; d.fy = e.y; }
+function dragEnd(e, d) { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
+
+function showPanel(d) {
+  document.getElementById("p-name").textContent = d.name;
+  document.getElementById("p-type").textContent = d.entity_type;
+  const sb = document.getElementById("p-status");
+  sb.innerHTML = d.status ? `<span class="status-badge" style="color:${statusColours[d.status] || '#c9d1d9'}">${d.status}</span>` : "";
+  document.getElementById("p-obs").innerHTML = d.observations.map(o => `<div class="obs">${o.replace(/</g,"&lt;")}</div>`).join("");
+  panel.classList.add("open");
+}
+
+function updateSelection() {
+  if (nodeSel) nodeSel.attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""));
+}
+
+document.getElementById("project").onchange = () => { currentData = null; fetchGraph(); };
+document.getElementById("refresh").onclick = fetchGraph;
+
+let timer = setInterval(fetchGraph, 2000);
+document.getElementById("auto").onchange = function() {
+  clearInterval(timer);
+  if (this.checked) timer = setInterval(fetchGraph, 2000);
+};
+
+loadProjects();
+</script>
+</body>
+</html>

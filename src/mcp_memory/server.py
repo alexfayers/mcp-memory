@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .database import DatabaseManager
 from .models import Relation
+from .visualise import register_visualise_routes
 
 mcp = FastMCP(
     "mcp-memory",
@@ -17,7 +18,17 @@ mcp = FastMCP(
     port=int(os.environ.get("MCP_MEMORY_PORT", "8000")),
 )
 
-RELATION_EXEMPT_TYPES = frozenset({"user-preferences", "pattern"})
+RELATION_EXEMPT_TYPES = frozenset({"user-preferences", "pattern", "project"})
+VALID_ENTITY_TYPES = frozenset(
+    {
+        "project",
+        "feature",
+        "task",
+        "user-preferences",
+        "pattern",
+        "knowledge",
+    }
+)
 
 _DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
 
@@ -26,6 +37,7 @@ CREATE_ENTITIES_DESC = (
     "Create or update entities with observations in the knowledge graph. "
     "All data is scoped to the given project. "
     "create_entities OVERWRITES all observations; use add_observations to append safely. "
+    "Valid entity types: project, feature, task, user-preferences, pattern, knowledge. "
     "Non-exempt entity types (not user-preferences or pattern) MUST include at least one relation."
 )
 SEARCH_NODES_DESC = (
@@ -78,6 +90,63 @@ def _get_db() -> DatabaseManager:
     return _db
 
 
+_GLOBAL_PROJECT = "global"
+
+
+def _ensure_project_root(db: DatabaseManager, project: str) -> None:
+    """Auto-create a project/<name> root entity if it doesn't exist yet."""
+    if project == _GLOBAL_PROJECT:
+        return
+    root_name = f"project/{project}"
+    try:
+        db.get_entity(project, root_name)
+    except ValueError:
+        entity: dict[str, object] = {
+            "name": root_name,
+            "entityType": "project",
+            "observations": [f"Root entity for {project}"],
+        }
+        db.create_entities(project, [entity])
+
+
+register_visualise_routes(mcp, _get_db)
+
+
+def _validate_and_extract_relations(
+    entities: list[dict[str, str | list[str] | list[dict[str, str]] | None]],
+) -> list[Relation]:
+    """Validate entity types and extract inline relations."""
+    all_relations: list[Relation] = []
+    for entity_data in entities:
+        entity_type = entity_data.get("entityType", "")
+        relations_raw = entity_data.get("relations")
+
+        if not isinstance(entity_type, str) or not entity_type:
+            raise ValueError(f"Entity type must be a non-empty string, got: {entity_type!r}")
+        if entity_type not in VALID_ENTITY_TYPES:
+            raise ValueError(
+                f"Invalid entity type '{entity_type}'. Valid types: {sorted(VALID_ENTITY_TYPES)}"
+            )
+        if entity_type not in RELATION_EXEMPT_TYPES:
+            if not relations_raw or not isinstance(relations_raw, list):
+                raise ValueError(
+                    f"Entity type '{entity_type}' requires at least one relation. "
+                    f"Only {sorted(RELATION_EXEMPT_TYPES)} are exempt."
+                )
+
+        if isinstance(relations_raw, list):
+            for rel in relations_raw:
+                if isinstance(rel, dict):
+                    all_relations.append(
+                        Relation(
+                            source=str(rel["source"]),
+                            target=str(rel["target"]),
+                            relation_type=str(rel["type"]),
+                        )
+                    )
+    return all_relations
+
+
 @mcp.tool(description=CREATE_ENTITIES_DESC)
 def create_entities(
     project: str,
@@ -86,29 +155,23 @@ def create_entities(
     """Create or update entities with observations, enforcing relation requirements."""
     try:
         db = _get_db()
+        _ensure_project_root(db, project)
+        all_relations = _validate_and_extract_relations(entities)
 
-        all_relations: list[Relation] = []
         for entity_data in entities:
-            entity_type = entity_data.get("entityType", "")
-            relations_raw = entity_data.get("relations")
-
-            if isinstance(entity_type, str) and entity_type not in RELATION_EXEMPT_TYPES:
-                if not relations_raw or not isinstance(relations_raw, list):
+            name = str(entity_data.get("name", ""))
+            if project == _GLOBAL_PROJECT:
+                conflict = db.entity_exists_outside_project(name, _GLOBAL_PROJECT)
+                if conflict:
                     raise ValueError(
-                        f"Entity type '{entity_type}' requires at least one relation. "
-                        f"Only {sorted(RELATION_EXEMPT_TYPES)} are exempt."
+                        f"Entity '{name}' already exists in project '{conflict}'. "
+                        f"Cannot duplicate in global scope."
                     )
-
-            if isinstance(relations_raw, list):
-                for rel in relations_raw:
-                    if isinstance(rel, dict):
-                        all_relations.append(
-                            Relation(
-                                source=str(rel["source"]),
-                                target=str(rel["target"]),
-                                relation_type=str(rel["type"]),
-                            )
-                        )
+            elif db.entity_exists_in_project(name, _GLOBAL_PROJECT):
+                raise ValueError(
+                    f"Entity '{name}' already exists in global scope. "
+                    f"Cannot duplicate in project '{project}'."
+                )
 
         db.create_entities(project, entities)  # type: ignore[arg-type]
 
