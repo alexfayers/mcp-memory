@@ -34,7 +34,6 @@ Project and task entities accumulate session-level detail over time. Trim them:
 ## 4. Clean up stale entities
 
 - Archive or delete resolved tasks that are no longer useful context
-- Delete `changelog/` entities - resolved tasks already capture what changed (the `changelog` entity type is deprecated)
 - Delete old ticket/CR entities that were one-off investigations
 - Archive superseded project entities (e.g. old TS project replaced by Python rewrite)
 
