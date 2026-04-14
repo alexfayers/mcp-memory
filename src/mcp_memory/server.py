@@ -36,7 +36,9 @@ CREATE_ENTITIES_DESC = (
     "All data is scoped to the given project. "
     "create_entities OVERWRITES all observations; use add_observations to append safely. "
     "Valid entity types: project, feature, task, user-preferences, pattern, knowledge. "
-    "Non-exempt entity types (not user-preferences or pattern) MUST include at least one relation."
+    "Non-exempt entity types (not user-preferences or pattern) MUST include at least one relation. "
+    "Each entity dict must have keys: name (str), entityType (str), observations (list[str]). "
+    "Optional keys: status (str), relations (list of {target, type} dicts)."
 )
 SEARCH_NODES_DESC = (
     "Search entities and relations by text query within a project. "
