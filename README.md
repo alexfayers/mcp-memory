@@ -18,6 +18,20 @@ SQLite-backed persistent memory MCP server with FTS5 search and project scoping.
 uv tool install mcp-memory
 ```
 
+### As an overlay
+
+mcp-memory ships prompt rules and skills for [llm-prompts](https://github.com/alexfayers/llm-prompts) and a hook plugin for [cline-hooks](https://github.com/alexfayers/cline-hooks). Add it to your `~/.config/llm-prompts/config.toml`:
+
+```toml
+[[tools]]
+name = "mcp-memory"
+source = "mcp-memory"
+standalone = true
+overlays_for = ["llm-prompts", "cline-hooks"]
+```
+
+Then run `llm-prompts setup` to install everything.
+
 ### Configuration
 
 | Environment variable | Description | Default |
@@ -96,3 +110,8 @@ just lint        # ruff check + format
 just type-check  # mypy
 just test        # pytest
 ```
+
+## Related
+
+- [llm-prompts](https://github.com/alexfayers/llm-prompts) - cross-agent rules, workflows, and skills
+- [cline-hooks](https://github.com/alexfayers/cline-hooks) - lifecycle hooks framework for AI coding assistants
