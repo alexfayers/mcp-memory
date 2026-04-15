@@ -59,7 +59,7 @@ def get_all_graph_data(
         entity_ids.append(row["id"])
         project_ids.add(row["project_id"])
 
-    all_relations: list[dict[str, str]] = []
+    all_relations: list[dict[str, object]] = []
     for pid in project_ids:
         for r in db._get_relations_for_entities(pid, entity_ids):
             all_relations.append(
