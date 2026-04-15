@@ -13,14 +13,6 @@ dependencies = [
 [project.scripts]
 mcp-memory = "mcp_memory.server:main"
 
-[project.optional-dependencies]
-hooks = ["cline-hooks"]
-prompts = ["llm-prompts"]
-
-[tool.uv.sources]
-cline-hooks = { git = "https://github.com/alexfayers/cline-hooks.git" }
-llm-prompts = { git = "https://github.com/alexfayers/llm-prompts.git" }
-
 [project.entry-points."cline_hooks"]
 memory = "mcp_memory.hooks.plugin:MemoryPlugin"
 
