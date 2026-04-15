@@ -25,7 +25,7 @@ mcp-memory ships prompt rules and skills for [llm-prompts](https://github.com/al
 ```toml
 [[tools]]
 name = "mcp-memory"
-source = "mcp-memory"
+source = "git+https://github.com/alexfayers/mcp-memory.git"
 standalone = true
 overlays_for = ["llm-prompts", "cline-hooks"]
 ```
