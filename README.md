@@ -15,7 +15,7 @@ SQLite-backed persistent memory MCP server with FTS5 search and project scoping.
 ## Installation
 
 ```bash
-uv tool install mcp-memory
+uv tool install "git+https://github.com/alexfayers/mcp-memory.git"
 ```
 
 ### As an overlay
