@@ -25,7 +25,7 @@ llm-prompts = { path = "../llm-prompts", editable = true }
 memory = "mcp_memory.hooks.plugin:MemoryPlugin"
 
 [project.entry-points."llm_prompts"]
-memory = "mcp_memory.llm_prompts:get_prompts_dir"
+memory = "mcp_memory"
 
 [build-system]
 requires = ["hatchling"]
