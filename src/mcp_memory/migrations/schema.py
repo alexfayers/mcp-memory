@@ -449,4 +449,39 @@ MIGRATIONS: list[Migration] = [
             "CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status)",
         ],
     ),
+    Migration(
+        version=15,
+        statements=[
+            "DROP TRIGGER IF EXISTS entities_fts_insert",
+            "DROP TRIGGER IF EXISTS entities_fts_delete",
+            "DROP TRIGGER IF EXISTS observations_fts_insert",
+            "DROP TRIGGER IF EXISTS observations_fts_delete",
+            "INSERT INTO entities_fts(entities_fts) VALUES('delete-all')",
+            "DROP TABLE IF EXISTS entities_fts",
+            "CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(name, entity_type, observations, project, content='', tokenize='porter unicode61')",
+            "INSERT INTO entities_fts(rowid, name, entity_type, observations, project) SELECT e.id, e.name, t.name, COALESCE((SELECT GROUP_CONCAT(o.content, ' ') FROM observations o WHERE o.entity_id = e.id), ''), p.name FROM entities e JOIN entity_types t ON t.id = e.entity_type_id JOIN projects p ON p.id = e.project_id",
+            """CREATE TRIGGER IF NOT EXISTS entities_fts_insert AFTER INSERT ON entities BEGIN
+                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)
+                VALUES (new.id, new.name, (SELECT name FROM entity_types WHERE id = new.entity_type_id), '', (SELECT name FROM projects WHERE id = new.project_id));
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS entities_fts_delete AFTER DELETE ON entities BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)
+                VALUES('delete', old.id, old.name, (SELECT name FROM entity_types WHERE id = old.entity_type_id), '', (SELECT name FROM projects WHERE id = old.project_id));
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS observations_fts_insert AFTER INSERT ON observations BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)
+                VALUES('delete', new.entity_id, (SELECT name FROM entities WHERE id = new.entity_id), (SELECT t.name FROM entity_types t JOIN entities e ON e.entity_type_id = t.id WHERE e.id = new.entity_id), COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_id = new.entity_id AND id != new.id), ''), (SELECT p.name FROM projects p JOIN entities e ON e.project_id = p.id WHERE e.id = new.entity_id));
+                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)
+                SELECT e.id, e.name, t.name, (SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_id = new.entity_id), p.name
+                FROM entities e JOIN entity_types t ON t.id = e.entity_type_id JOIN projects p ON p.id = e.project_id WHERE e.id = new.entity_id;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS observations_fts_delete AFTER DELETE ON observations BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)
+                VALUES('delete', old.entity_id, (SELECT name FROM entities WHERE id = old.entity_id), (SELECT t.name FROM entity_types t JOIN entities e ON e.entity_type_id = t.id WHERE e.id = old.entity_id), COALESCE((SELECT GROUP_CONCAT(content, ' ') || ' ' FROM observations WHERE entity_id = old.entity_id), '') || old.content, (SELECT p.name FROM projects p JOIN entities e ON e.project_id = p.id WHERE e.id = old.entity_id));
+                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)
+                SELECT e.id, e.name, t.name, COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_id = old.entity_id), ''), p.name
+                FROM entities e JOIN entity_types t ON t.id = e.entity_type_id JOIN projects p ON p.id = e.project_id WHERE e.id = old.entity_id;
+            END""",
+        ],
+    ),
 ]
