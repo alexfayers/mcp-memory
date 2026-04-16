@@ -40,10 +40,19 @@ Project and task entities accumulate session-level detail over time. Trim them:
 ## 5. Verify relations
 
 - Every non-exempt entity should have at least one relation
-- `task/` entities must have `belongs-to` relation to their parent project
+- `task/` entities must have `implements` relation(s) to the feature(s) they modify - NOT `belongs-to` project
 - `feature/` entities must have `belongs-to` relation to their parent project
 - `pattern/` entities should be linked to relevant `user-preferences/` or `project/` entities
 - `knowledge/` entities should be linked to relevant projects or preferences
+- Use specific relation types (`implements`, `depends-on`) over generic ones (`relates-to`)
+
+## 5a. Fix star graphs
+
+A common anti-pattern is every task having a `belongs-to` relation directly to the project root, creating a star graph. Fix this by:
+- Ensuring feature entities exist for each major area of the project
+- Replacing `task belongs-to project` with `task implements feature`
+- Tasks are still reachable from the project via feature traversal (feature belongs-to project)
+- Only link a task directly to a project if no relevant feature entity exists yet
 
 ## 6. Check global vs project scope
 
