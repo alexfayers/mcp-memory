@@ -88,8 +88,9 @@ Entity names must be unique across all entity types. Always prefix the name with
 
 - Every `task/` entity MUST have its `status` field set to one of: `planned`, `in-progress`, `blocked`, `resolved`, `archived`
 - Use `set_entity_status` or pass `status` in `create_entities` - do NOT add a `STATUS:` text observation
-- Task entities MUST be linked to their parent project with a `belongs-to` relation
-- Only link a task to a project if the task modifies that project's code — do not associate general tooling, config, or environment tasks with the current workspace project just because you happen to be working in it
+- Tasks MUST link to the feature(s) they modify via `implements` relations - this connects them to the project through the feature graph
+- Do not add redundant `belongs-to` project relations on tasks - they are reachable via feature traversal
+- Only link a task directly to a project if no relevant feature entity exists yet
 - When starting a new piece of work, create the `task/` entity and relation immediately - before writing any code
 - When completing a task, call `set_entity_status` with `status="resolved"`
 - Do not store implementation details or work-in-progress notes on the `project/` entity
@@ -103,10 +104,13 @@ Memory is a graph database - use `get_entity_with_relations` to traverse linked 
 Every entity MUST have at least one relation, except `user-preferences` and `pattern` entities which are global singletons not tied to a specific project.
 
 Use relations to link related entities, e.g.:
-- task `implements` feature
-- task `belongs-to` project
+- task `implements` feature (every task should link to the feature(s) it modifies)
+- task `depends-on` task
+- task `relates-to` task
 - feature `belongs-to` project
 - pattern `used-in` project
+
+Prefer specific relation types (`implements`, `depends-on`) over generic ones (`relates-to`). A rich graph with meaningful edges is far more useful than a star graph where everything just points at the project root.
 
 ### Observation wording
 
