@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
 from .migrations.runner import run_migrations
 from .models import VALID_STATUSES, Entity, EntityStatus, Relation
+
+_RECENCY_HALF_LIFE_DAYS = 30.0
+_RECENCY_FLOOR = 0.1
 
 
 class DatabaseManager:
@@ -379,13 +384,14 @@ class DatabaseManager:
         entity_type: str | None = None,
         status: EntityStatus | None = None,
     ) -> dict[str, list[Entity] | list[Relation]]:
-        """Search entities using FTS5 full-text search with BM25 ranking."""
+        """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
         sanitized = self._sanitize_fts_query(query)
         if not sanitized:
             return {"entities": [], "relations": []}
 
         sql = (
-            "SELECT e.id, e.name, et.name AS entity_type, e.status "
+            "SELECT e.id, e.name, et.name AS entity_type, e.status, "
+            "e.created_at, bm25(entities_fts) AS rank "
             "FROM entities_fts fts "
             "JOIN entities e ON fts.rowid = e.id "
             "JOIN entity_types et ON e.entity_type_id = et.id "
@@ -401,13 +407,23 @@ class DatabaseManager:
             sql += " AND e.status = ?"
             params.append(status)
 
-        sql += " ORDER BY bm25(entities_fts) LIMIT ?"
-        params.append(limit)
-
         rows = self._db.execute(sql, params).fetchall()
 
-        entities = [self._build_entity(row, row["id"]) for row in rows]
-        entity_ids = [row["id"] for row in rows]
+        now = datetime.now(tz=UTC)
+        scored: list[tuple[float, sqlite3.Row]] = []
+        for row in rows:
+            bm25_score = -float(row["rank"])
+            created_at = datetime.fromisoformat(row["created_at"]).replace(tzinfo=UTC)
+            age_days = max((now - created_at).total_seconds() / 86400, 0)
+            decay = -math.log(2) * age_days / _RECENCY_HALF_LIFE_DAYS
+            recency = max(math.exp(decay), _RECENCY_FLOOR)
+            scored.append((bm25_score * recency, row))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top_rows = [row for _, row in scored[:limit]]
+
+        entities = [self._build_entity(row, row["id"]) for row in top_rows]
+        entity_ids = [row["id"] for row in top_rows]
 
         project_id = self._get_or_create_project_id(project)
         relations = self._get_relations_for_entities(project_id, entity_ids)

@@ -368,6 +368,23 @@ class TestSearchNodes:
         assert len(result["entities"]) == 1
         assert result["entities"][0].name == "e1"
 
+    def test_recency_decay_favours_newer_entities(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "old", "entityType": "task", "observations": ["keyword"]},
+                {"name": "new", "entityType": "task", "observations": ["keyword"]},
+            ],
+        )
+        db._db.execute(
+            "UPDATE entities SET created_at = datetime('now', '-90 days') WHERE name = 'old'"
+        )
+        db._db.commit()
+        result = db.search_nodes("proj", "keyword")
+        assert len(result["entities"]) == 2
+        assert result["entities"][0].name == "new"
+        assert result["entities"][1].name == "old"
+
 
 class TestReadGraph:
     def test_returns_recent_entities(self, db: DatabaseManager) -> None:
