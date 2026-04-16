@@ -209,7 +209,7 @@ function showPanel(d) {
   document.getElementById("p-type").textContent = d.entity_type;
   const sb = document.getElementById("p-status");
   sb.innerHTML = d.status ? `<span class="status-badge" style="color:${statusColours[d.status] || '#c9d1d9'}">${d.status}</span>` : "";
-  document.getElementById("p-created").textContent = d.created_at ? `Created: ${new Date(d.created_at + "Z").toLocaleString()}` : "";
+  document.getElementById("p-created").textContent = d.created_at ? `Created: ${new Date(d.created_at + "Z").toLocaleString()}` + (d.updated_at && d.updated_at !== d.created_at ? ` | Updated: ${new Date(d.updated_at + "Z").toLocaleString()}` : "") : "";
   document.getElementById("p-obs").innerHTML = d.observations.map(o => `<div class="obs">${o.replace(/</g,"&lt;")}</div>`).join("");
   panel.classList.add("open");
 }

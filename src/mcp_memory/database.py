@@ -105,6 +105,7 @@ class DatabaseManager:
             observations=self._get_observations(entity_id),
             status=row["status"],
             created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
     def _sanitize_fts_query(self, query: str) -> str:
@@ -322,7 +323,7 @@ class DatabaseManager:
         """Get a single entity by name."""
         project_id = self._get_or_create_project_id(project)
         row = self._db.execute(
-            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at "
+            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at "
             "FROM entities e "
             "JOIN entity_types et ON e.entity_type_id = et.id "
             "WHERE e.name = ? AND e.project_id = ?",
@@ -409,7 +410,7 @@ class DatabaseManager:
 
         sql = (
             "SELECT e.id, e.name, et.name AS entity_type, e.status, "
-            "e.created_at, bm25(entities_fts) AS rank "
+            "e.created_at, e.updated_at, bm25(entities_fts) AS rank "
             "FROM entities_fts fts "
             "JOIN entities e ON fts.rowid = e.id "
             "JOIN entity_types et ON e.entity_type_id = et.id "
@@ -437,8 +438,8 @@ class DatabaseManager:
         scored: list[tuple[float, sqlite3.Row]] = []
         for row in rows:
             bm25_score = -float(row["rank"])
-            created_at = datetime.fromisoformat(row["created_at"]).replace(tzinfo=UTC)
-            age_days = max((now - created_at).total_seconds() / 86400, 0)
+            updated_at = datetime.fromisoformat(row["updated_at"]).replace(tzinfo=UTC)
+            age_days = max((now - updated_at).total_seconds() / 86400, 0)
             decay = -math.log(2) * age_days / _RECENCY_HALF_LIFE_DAYS
             recency = max(math.exp(decay), _RECENCY_FLOOR)
             scored.append((bm25_score * recency, row))
@@ -461,7 +462,7 @@ class DatabaseManager:
         project_id = self._get_or_create_project_id(project)
 
         sql = (
-            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at "
+            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at "
             "FROM entities e "
             "JOIN entity_types et ON e.entity_type_id = et.id "
             "WHERE e.project_id = ?"

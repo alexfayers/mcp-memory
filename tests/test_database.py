@@ -377,7 +377,8 @@ class TestSearchNodes:
             ],
         )
         db._db.execute(
-            "UPDATE entities SET created_at = datetime('now', '-90 days') WHERE name = 'old'"
+            "UPDATE entities SET created_at = datetime('now', '-90 days'), "
+            "updated_at = datetime('now', '-90 days') WHERE name = 'old'"
         )
         db._db.commit()
         result = db.search_nodes("proj", "keyword")
@@ -458,3 +459,31 @@ class TestReadGraph:
         db.create_relations("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
         result = db.read_graph("proj")
         assert len(result["relations"]) == 1
+
+
+class TestUpdatedAt:
+    def test_updated_at_set_on_creation(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        entity = db.get_entity("proj", "e1")
+        assert entity.updated_at is not None
+        assert entity.updated_at == entity.created_at
+
+    def test_updated_at_changes_on_add_observations(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-1 day') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        backdated = db.get_entity("proj", "e1").updated_at
+        db.add_observations("proj", "e1", ["new obs"])
+        assert db.get_entity("proj", "e1").updated_at != backdated
+
+    def test_updated_at_changes_on_status_change(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-1 day') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        before = db.get_entity("proj", "e1").updated_at
+        db.set_entity_status("proj", "e1", "resolved")
+        assert db.get_entity("proj", "e1").updated_at != before

@@ -17,6 +17,7 @@ class Entity:
     observations: list[str]
     status: EntityStatus | None = None
     created_at: str | None = None
+    updated_at: str | None = None
 
 
 @dataclass

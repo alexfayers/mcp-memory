@@ -484,4 +484,23 @@ MIGRATIONS: list[Migration] = [
             END""",
         ],
     ),
+    Migration(
+        version=16,
+        statements=[
+            "ALTER TABLE entities ADD COLUMN updated_at DATETIME",
+            "UPDATE entities SET updated_at = created_at",
+            """CREATE TRIGGER IF NOT EXISTS entities_updated_at_status
+                AFTER UPDATE OF status ON entities BEGIN
+                UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = new.id;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS entities_updated_at_obs_insert
+                AFTER INSERT ON observations BEGIN
+                UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = new.entity_id;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS entities_updated_at_obs_delete
+                AFTER DELETE ON observations BEGIN
+                UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = old.entity_id;
+            END""",
+        ],
+    ),
 ]
