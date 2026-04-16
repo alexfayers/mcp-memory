@@ -72,10 +72,14 @@ const svg = d3.select("svg");
 const width = () => window.innerWidth;
 const height = () => window.innerHeight;
 const g = svg.append("g");
+const linkLayer = g.append("g");
+const labelLayer = g.append("g");
+const nodeLayer = g.append("g");
 
 svg.call(d3.zoom().on("zoom", e => g.attr("transform", e.transform)));
 
-let simulation, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, orphans = new Set();
+let simulation = null, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, orphans = new Set();
+let nodes = [], links = [], relCount = new Map();
 
 const panel = document.getElementById("panel");
 document.getElementById("panel-close").onclick = () => { panel.classList.remove("open"); selectedNode = null; updateSelection(); };
@@ -117,58 +121,75 @@ async function fetchGraph() {
   } catch (e) { document.getElementById("status").textContent = "error: " + e.message; }
 }
 
+const nodeRadius = d => 5 + Math.min((relCount.get(d.id) || 0) * 2, 25);
+
 function render(data) {
-  const nodes = data.entities.map(e => ({ id: e.name, ...e }));
-  const nodeSet = new Set(nodes.map(n => n.id));
-  const links = data.relations.filter(r => nodeSet.has(r.source) && nodeSet.has(r.target))
+  const incoming = data.entities.map(e => ({ id: e.name, ...e }));
+  const nodeSet = new Set(incoming.map(n => n.id));
+  const newLinks = data.relations.filter(r => nodeSet.has(r.source) && nodeSet.has(r.target))
     .map(r => ({ source: r.source, target: r.target, type: r.relation_type }));
 
   const connected = new Set();
   data.relations.forEach(r => { connected.add(r.source); connected.add(r.target); });
-  orphans = new Set(nodes.filter(n => !connected.has(n.id) && n.entity_type !== "project").map(n => n.id));
+  orphans = new Set(incoming.filter(n => !connected.has(n.id) && n.entity_type !== "project").map(n => n.id));
 
-  const relCount = new Map(nodes.map(n => [n.id, 0]));
+  relCount = new Map(incoming.map(n => [n.id, 0]));
   data.relations.forEach(r => {
     if (relCount.has(r.source)) relCount.set(r.source, relCount.get(r.source) + 1);
     if (relCount.has(r.target)) relCount.set(r.target, relCount.get(r.target) + 1);
   });
-  const nodeRadius = d => 5 + Math.min((relCount.get(d.id) || 0) * 2, 25);
 
-  // preserve positions from previous simulation
-  if (simulation) {
-    const old = new Map(simulation.nodes().map(n => [n.id, { x: n.x, y: n.y }]));
-    nodes.forEach(n => { const p = old.get(n.id); if (p) { n.x = p.x; n.y = p.y; } });
-  }
+  const oldMap = new Map(nodes.map(n => [n.id, n]));
+  nodes = incoming.map(n => {
+    const old = oldMap.get(n.id);
+    if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, observations: n.observations }); return old; }
+    return n;
+  });
+  links = newLinks;
 
-  g.selectAll(".link").remove();
-  g.selectAll(".link-label").remove();
-  g.selectAll(".node").remove();
+  linkSel = linkLayer.selectAll(".link").data(links, d => d.source.id || d.source + "-" + (d.target.id || d.target) + "-" + d.type)
+    .join("line").attr("class", "link").attr("stroke", "#30363d").attr("stroke-width", 1);
 
-  linkSel = g.selectAll(".link").data(links).join("line")
-    .attr("class", "link").attr("stroke", "#30363d").attr("stroke-width", 1);
+  labelSel = labelLayer.selectAll(".link-label").data(links, d => d.source.id || d.source + "-" + (d.target.id || d.target) + "-" + d.type)
+    .join("text").attr("class", "link-label").text(d => d.type);
 
-  labelSel = g.selectAll(".link-label").data(links).join("text")
-    .attr("class", "link-label").text(d => d.type);
+  nodeSel = nodeLayer.selectAll(".node").data(nodes, d => d.id).join(
+    enter => {
+      const grp = enter.append("g");
+      grp.append("circle");
+      grp.append("text");
+      return grp;
+    },
+    update => update,
+    exit => exit.remove()
+  );
 
-  nodeSel = g.selectAll(".node").data(nodes, d => d.id).join("g")
+  nodeSel
     .attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""))
     .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd))
     .on("click", (e, d) => { selectedNode = d.id; showPanel(d); updateSelection(); });
 
-  nodeSel.append("circle")
+  nodeSel.select("circle")
     .attr("r", nodeRadius)
     .attr("fill", d => TYPE_COLOURS[d.entity_type] || fallbackColour)
     .attr("stroke", d => d.status ? statusColours[d.status] || "#30363d" : "#30363d");
 
-  nodeSel.append("text").attr("dx", d => 3 + nodeRadius(d)).attr("dy", 4)
+  nodeSel.select("text").attr("dx", d => 3 + nodeRadius(d)).attr("dy", 4)
     .text(d => d.name.length > 40 ? d.name.slice(0, 37) + "..." : d.name);
 
-  simulation = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id(d => d.id).distance(80))
-    .force("charge", d3.forceManyBody().strength(-120))
-    .force("center", d3.forceCenter(width() / 2, height() / 2))
-    .force("collision", d3.forceCollide().radius(d => 5 + nodeRadius(d)))
-    .on("tick", ticked);
+  if (!simulation) {
+    simulation = d3.forceSimulation(nodes)
+      .force("link", d3.forceLink(links).id(d => d.id).distance(80))
+      .force("charge", d3.forceManyBody().strength(-120))
+      .force("center", d3.forceCenter(width() / 2, height() / 2))
+      .force("collision", d3.forceCollide().radius(d => 5 + nodeRadius(d)))
+      .on("tick", ticked);
+  } else {
+    simulation.nodes(nodes);
+    simulation.force("link").links(links);
+    simulation.force("collision").radius(d => 5 + nodeRadius(d));
+    simulation.alpha(0.05).restart();
+  }
 }
 
 function ticked() {
@@ -195,7 +216,7 @@ function updateSelection() {
   if (nodeSel) nodeSel.attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""));
 }
 
-document.getElementById("project").onchange = () => { currentData = null; fetchGraph(); };
+document.getElementById("project").onchange = () => { currentData = null; if (simulation) { simulation.stop(); simulation = null; } fetchGraph(); };
 document.getElementById("refresh").onclick = fetchGraph;
 
 let timer = setInterval(fetchGraph, 2000);
