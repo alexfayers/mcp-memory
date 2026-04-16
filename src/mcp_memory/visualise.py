@@ -38,7 +38,7 @@ def get_all_graph_data(
         params = ()
 
     entity_rows = db._db.execute(
-        "SELECT e.id, e.name, et.name AS entity_type, e.status, e.project_id "
+        "SELECT e.id, e.name, et.name AS entity_type, e.status, e.project_id, e.created_at "
         "FROM entities e "
         "JOIN entity_types et ON e.entity_type_id = et.id " + where_clause,
         params,
@@ -53,6 +53,7 @@ def get_all_graph_data(
                 "name": row["name"],
                 "entity_type": row["entity_type"],
                 "status": row["status"],
+                "created_at": row["created_at"],
                 "observations": db._get_observations(row["id"]),
             }
         )

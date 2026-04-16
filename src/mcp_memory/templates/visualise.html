@@ -52,6 +52,7 @@ svg { width: 100vw; height: 100vh; }
   <h2 id="p-name"></h2>
   <h3 id="p-type"></h3>
   <div id="p-status"></div>
+  <div id="p-created" style="font-size:11px;color:#484f58;margin-bottom:12px"></div>
   <div id="p-obs"></div>
 </div>
 <svg></svg>
@@ -208,6 +209,7 @@ function showPanel(d) {
   document.getElementById("p-type").textContent = d.entity_type;
   const sb = document.getElementById("p-status");
   sb.innerHTML = d.status ? `<span class="status-badge" style="color:${statusColours[d.status] || '#c9d1d9'}">${d.status}</span>` : "";
+  document.getElementById("p-created").textContent = d.created_at ? `Created: ${new Date(d.created_at + "Z").toLocaleString()}` : "";
   document.getElementById("p-obs").innerHTML = d.observations.map(o => `<div class="obs">${o.replace(/</g,"&lt;")}</div>`).join("");
   panel.classList.add("open");
 }
