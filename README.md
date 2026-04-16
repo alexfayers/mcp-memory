@@ -5,7 +5,7 @@ SQLite-backed persistent memory MCP server with FTS5 search and project scoping.
 ## Features
 
 - **Project-scoped data** - all tools take a `project` parameter to isolate data per project
-- **FTS5 full-text search** - BM25-ranked search across entity names, types, and observations
+- **FTS5 full-text search** - recency-weighted BM25 ranking with porter stemming, time-range filtering
 - **Graph traversal** - explore entity relationships with filtering by type
 - **Safe observation updates** - append or delete individual observations without overwriting
 - **Entity status tracking** - track entity lifecycle with status fields
@@ -69,7 +69,7 @@ Delete specific observations from an existing entity by exact content match. Ret
 
 ### search_nodes
 
-FTS5 full-text search with BM25 relevance ranking. Optional `entity_type` and `status` filters.
+FTS5 full-text search with recency-weighted BM25 ranking. Optional `entity_type`, `status`, and time-range (`start_date`/`end_date`) filters. Date params support relative formats (`7d`, `2w`, `3m`) and ISO dates.
 
 ### read_graph
 
