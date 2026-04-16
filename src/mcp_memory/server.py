@@ -42,8 +42,10 @@ CREATE_ENTITIES_DESC = (
 )
 SEARCH_NODES_DESC = (
     "Search entities and relations by text query within a project. "
-    "Uses FTS5 full-text search with BM25 ranking. "
-    "Optionally filter by entityType and/or status."
+    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency "
+    "(newer entities rank higher). "
+    "Optionally filter by entityType, status, and/or date range "
+    "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates)."
 )
 READ_GRAPH_DESC = (
     "Get the most recent entities and their relations for a project. "
@@ -190,8 +192,10 @@ def search_nodes(
     limit: int = 10,
     entityType: str | None = None,
     status: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> dict[str, object]:
-    """Search entities using FTS5 full-text search with BM25 ranking."""
+    """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
     try:
         db = _get_db()
         return db.search_nodes(  # type: ignore[return-value]
@@ -200,6 +204,8 @@ def search_nodes(
             limit=limit,
             entity_type=entityType,
             status=status,  # type: ignore[arg-type]
+            start_date=start_date,
+            end_date=end_date,
         )
     except Exception as e:
         return {"error": str(e)}

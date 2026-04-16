@@ -385,6 +385,46 @@ class TestSearchNodes:
         assert result["entities"][0].name == "new"
         assert result["entities"][1].name == "old"
 
+    def test_start_date_filters_old_entities(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "old", "entityType": "task", "observations": ["keyword"]},
+                {"name": "new", "entityType": "task", "observations": ["keyword"]},
+            ],
+        )
+        db._db.execute(
+            "UPDATE entities SET created_at = datetime('now', '-90 days') WHERE name = 'old'"
+        )
+        db._db.commit()
+        result = db.search_nodes("proj", "keyword", start_date="30d")
+        assert len(result["entities"]) == 1
+        assert result["entities"][0].name == "new"
+
+    def test_end_date_filters_new_entities(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "old", "entityType": "task", "observations": ["keyword"]},
+                {"name": "new", "entityType": "task", "observations": ["keyword"]},
+            ],
+        )
+        db._db.execute(
+            "UPDATE entities SET created_at = datetime('now', '-90 days') WHERE name = 'old'"
+        )
+        db._db.commit()
+        result = db.search_nodes("proj", "keyword", end_date="30d")
+        assert len(result["entities"]) == 1
+        assert result["entities"][0].name == "old"
+
+    def test_iso_date_filtering(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["keyword"]}],
+        )
+        result = db.search_nodes("proj", "keyword", start_date="2099-01-01")
+        assert len(result["entities"]) == 0
+
 
 class TestReadGraph:
     def test_returns_recent_entities(self, db: DatabaseManager) -> None:

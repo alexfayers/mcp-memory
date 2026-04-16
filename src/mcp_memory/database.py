@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+import re
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -13,6 +14,20 @@ from .models import VALID_STATUSES, Entity, EntityStatus, Relation
 
 _RECENCY_HALF_LIFE_DAYS = 30.0
 _RECENCY_FLOOR = 0.1
+
+_RELATIVE_DATE_RE = re.compile(r"^(\d+)([dwm])$")
+_RELATIVE_UNITS = {"d": 1, "w": 7, "m": 30}
+
+
+def _parse_date(value: str) -> str:
+    """Parse a relative ('7d', '2w', '3m') or ISO date string to an ISO timestamp."""
+    match = _RELATIVE_DATE_RE.match(value.strip())
+    if match:
+        amount, unit = int(match.group(1)), match.group(2)
+        days = amount * _RELATIVE_UNITS[unit]
+        dt = datetime.now(tz=UTC) - timedelta(days=days)
+        return dt.isoformat()
+    return datetime.fromisoformat(value).isoformat()
 
 
 class DatabaseManager:
@@ -383,6 +398,8 @@ class DatabaseManager:
         limit: int = 10,
         entity_type: str | None = None,
         status: EntityStatus | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> dict[str, list[Entity] | list[Relation]]:
         """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
         sanitized = self._sanitize_fts_query(query)
@@ -406,6 +423,12 @@ class DatabaseManager:
         if status is not None:
             sql += " AND e.status = ?"
             params.append(status)
+        if start_date is not None:
+            sql += " AND e.created_at >= ?"
+            params.append(_parse_date(start_date))
+        if end_date is not None:
+            sql += " AND e.created_at <= ?"
+            params.append(_parse_date(end_date))
 
         rows = self._db.execute(sql, params).fetchall()
 
