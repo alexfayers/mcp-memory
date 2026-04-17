@@ -52,6 +52,7 @@ ignore = [
     "S608",    # SQL injection - placeholders are safe, not user input
     "PERF401", # list.extend - readability preferred
     "SIM102",  # nested if - readability preferred
+    "SIM108",  # ternary operator - if/else preferred for clarity
 ]
 
 [tool.ruff.lint.per-file-ignores]

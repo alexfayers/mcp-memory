@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -148,6 +149,30 @@ def _cmd_setup_service(args: argparse.Namespace) -> None:
     print(f"Server running on http://localhost:{port}/mcp")
 
 
+def _cmd_install_kiro(args: argparse.Namespace) -> None:
+    """Patch Kiro MCP config with the memory server entry."""
+    port = args.port
+    mcp_config = Path(args.mcp_config).expanduser()
+
+    mcp_config.parent.mkdir(parents=True, exist_ok=True)
+
+    if mcp_config.exists():
+        config = json.loads(mcp_config.read_text(encoding="utf-8"))
+    else:
+        config = {}
+
+    servers = config.setdefault("mcpServers", {})
+    entry = {"url": f"http://localhost:{port}/mcp"}
+
+    if "memory" in servers:
+        print(f"{mcp_config} already has memory server entry.")
+        return
+
+    servers["memory"] = entry
+    mcp_config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(f"Patched {mcp_config} with memory server (port {port}).")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
@@ -165,6 +190,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Database path (default: ~/.local/share/mcp-memory/memory.db, or MCP_MEMORY_DB_PATH)",
     )
 
+    install = sub.add_parser("install", help="Patch agent MCP config with memory server entry")
+    install.add_argument("target", choices=["kiro"], help="Agent to install for.")
+    install.add_argument(
+        "--port",
+        default=os.environ.get("MCP_MEMORY_PORT", _DEFAULT_PORT),
+        help=f"HTTP port (default: {_DEFAULT_PORT}, or MCP_MEMORY_PORT)",
+    )
+    install.add_argument(
+        "--mcp-config",
+        default="~/.kiro/settings/mcp.json",
+        help="Path to Kiro MCP config (default: ~/.kiro/settings/mcp.json)",
+    )
+
     return parser
 
 
@@ -175,6 +213,8 @@ def main() -> None:
 
     if args.command == "setup-service":
         _cmd_setup_service(args)
+    elif args.command == "install":
+        _cmd_install_kiro(args)
     else:
         from .server import main as serve
 
