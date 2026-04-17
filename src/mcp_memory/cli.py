@@ -86,16 +86,16 @@ def _setup_launchd(binary: str, port: str, db_path: Path) -> None:
 
 
 def _setup_systemd(binary: str, port: str, db_path: Path) -> None:
-    """Generate and install a Linux systemd user unit."""
-    unit_dir = Path.home() / ".config" / "systemd" / "user"
-    unit_path = unit_dir / "mcp-memory.service"
-    log_path = db_path.parent / "mcp-memory.log"
+    """Generate and install a system-wide systemd unit."""
+    import getpass
 
-    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_path = Path("/etc/systemd/system/mcp-memory.service")
+    log_path = db_path.parent / "mcp-memory.log"
+    user = getpass.getuser()
+
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    unit_path.write_text(
-        textwrap.dedent(f"""\
+    unit_content = textwrap.dedent(f"""\
         [Unit]
         Description=mcp-memory server
         After=network.target
@@ -104,24 +104,30 @@ def _setup_systemd(binary: str, port: str, db_path: Path) -> None:
         ExecStart={binary}
         Environment=MCP_MEMORY_DB_PATH={db_path}
         Environment=MCP_MEMORY_PORT={port}
+        User={user}
         Restart=always
         RestartSec=3
         StandardOutput=append:{log_path}
         StandardError=append:{log_path}
 
         [Install]
-        WantedBy=default.target
+        WantedBy=multi-user.target
     """)
-    )
 
-    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     subprocess.run(
-        ["systemctl", "--user", "enable", "--now", "mcp-memory.service"],
+        ["sudo", "tee", str(unit_path)],
+        input=unit_content.encode(),
+        capture_output=True,
         check=True,
     )
-    print(f"Installed systemd user service: {unit_path}")
+    subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+    subprocess.run(
+        ["sudo", "systemctl", "enable", "--now", "mcp-memory.service"],
+        check=True,
+    )
+    print(f"Installed systemd service: {unit_path}")
     print(f"  Logs: {log_path}")
-    print("  Status: systemctl --user status mcp-memory")
+    print("  Status: sudo systemctl status mcp-memory")
 
 
 def _cmd_setup_service(args: argparse.Namespace) -> None:

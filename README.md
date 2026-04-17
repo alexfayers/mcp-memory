@@ -83,19 +83,19 @@ rm ~/Library/LaunchAgents/com.mcp-memory.plist
 
 #### Linux (systemd)
 
-The command creates a user unit at `~/.config/systemd/user/mcp-memory.service`. To manage:
+The command creates a system unit at `/etc/systemd/system/mcp-memory.service` (requires sudo). To manage:
 
 ```bash
 # Restart
-systemctl --user restart mcp-memory
+sudo systemctl restart mcp-memory
 
 # Stop
-systemctl --user stop mcp-memory
+sudo systemctl stop mcp-memory
 
 # Uninstall
-systemctl --user disable --now mcp-memory
-rm ~/.config/systemd/user/mcp-memory.service
-systemctl --user daemon-reload
+sudo systemctl disable --now mcp-memory
+sudo rm /etc/systemd/system/mcp-memory.service
+sudo systemctl daemon-reload
 ```
 
 #### Logs
