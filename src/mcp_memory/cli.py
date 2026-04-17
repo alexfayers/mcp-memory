@@ -17,6 +17,26 @@ from .config import get_db_path
 _DEFAULT_PORT = "8000"
 
 
+def _detect_service_port() -> str:
+    """Read the port from an installed service config, falling back to default."""
+    plist = Path.home() / "Library" / "LaunchAgents" / "com.mcp-memory.plist"
+    if plist.exists():
+        import re
+
+        content = plist.read_text(encoding="utf-8")
+        match = re.search(r"<key>MCP_MEMORY_PORT</key>\s*<string>(\d+)</string>", content)
+        if match:
+            return match.group(1)
+
+    unit = Path("/etc/systemd/system/mcp-memory.service")
+    if unit.exists():
+        for line in unit.read_text(encoding="utf-8").splitlines():
+            if line.startswith("Environment=MCP_MEMORY_PORT="):
+                return line.split("=", 2)[2]
+
+    return os.environ.get("MCP_MEMORY_PORT", _DEFAULT_PORT)
+
+
 def _find_binary() -> str:
     """Find the mcp-memory binary path."""
     path = shutil.which("mcp-memory")
@@ -161,10 +181,17 @@ def _cmd_install_kiro(args: argparse.Namespace) -> None:
     agent = json.loads(agent_path.read_text(encoding="utf-8"))
     changed = False
 
-    servers: dict[str, object] = agent.get("mcpServers", {})
-    if "memory" not in servers:
-        servers["memory"] = {"url": f"http://localhost:{port}/mcp"}
-        agent["mcpServers"] = servers
+    # Check agent config and global mcp.json for existing memory entry.
+    agent_servers: dict[str, object] = agent.get("mcpServers", {})
+    global_mcp = Path.home() / ".kiro" / "settings" / "mcp.json"
+    global_has_memory = False
+    if global_mcp.exists():
+        global_config = json.loads(global_mcp.read_text(encoding="utf-8"))
+        global_has_memory = "memory" in global_config.get("mcpServers", {})
+
+    if "memory" not in agent_servers and not global_has_memory:
+        agent_servers["memory"] = {"url": f"http://localhost:{port}/mcp"}
+        agent["mcpServers"] = agent_servers
         changed = True
         print(f"Added memory MCP server (port {port}) to {agent_path}.")
     else:
@@ -208,8 +235,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     install.add_argument(
         "--port",
-        default=os.environ.get("MCP_MEMORY_PORT", _DEFAULT_PORT),
-        help=f"HTTP port (default: {_DEFAULT_PORT}, or MCP_MEMORY_PORT)",
+        default=_detect_service_port(),
+        help=f"HTTP port (default: auto-detected from service, or {_DEFAULT_PORT})",
     )
 
     return parser
