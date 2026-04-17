@@ -77,6 +77,10 @@ def _setup_launchd(binary: str, port: str, db_path: Path) -> None:
         ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
         check=True,
     )
+    subprocess.run(
+        ["launchctl", "kickstart", f"gui/{uid}/{label}"],
+        check=True,
+    )
     print(f"Installed launchd service: {plist_path}")
     print(f"  Logs: {log_path}")
 
