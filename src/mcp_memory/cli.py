@@ -150,41 +150,37 @@ def _cmd_setup_service(args: argparse.Namespace) -> None:
 
 
 def _cmd_install_kiro(args: argparse.Namespace) -> None:
-    """Patch Kiro MCP config and optionally agent config for memory."""
+    """Patch Kiro agent config with memory MCP server and allowedTools."""
     port = args.port
-    mcp_config = Path(args.mcp_config).expanduser()
+    agent_path = Path(args.agent_config).expanduser()
 
-    mcp_config.parent.mkdir(parents=True, exist_ok=True)
+    if not agent_path.exists():
+        print(f"error: {agent_path} does not exist", file=sys.stderr)
+        sys.exit(1)
 
-    if mcp_config.exists():
-        config = json.loads(mcp_config.read_text(encoding="utf-8"))
-    else:
-        config = {}
+    agent = json.loads(agent_path.read_text(encoding="utf-8"))
+    changed = False
 
-    servers = config.setdefault("mcpServers", {})
-
-    if "memory" in servers:
-        print(f"{mcp_config} already has memory server entry.")
-    else:
+    servers: dict[str, object] = agent.get("mcpServers", {})
+    if "memory" not in servers:
         servers["memory"] = {"url": f"http://localhost:{port}/mcp"}
-        mcp_config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-        print(f"Patched {mcp_config} with memory server (port {port}).")
+        agent["mcpServers"] = servers
+        changed = True
+        print(f"Added memory MCP server (port {port}) to {agent_path}.")
+    else:
+        print(f"{agent_path} already has memory MCP server.")
 
-    agent_config = getattr(args, "agent_config", None)
-    if agent_config:
-        agent_path = Path(agent_config).expanduser()
-        if agent_path.exists():
-            agent = json.loads(agent_path.read_text(encoding="utf-8"))
-            allowed: list[str] = agent.get("allowedTools", [])
-            if "@memory" not in allowed:
-                allowed.append("@memory")
-                agent["allowedTools"] = allowed
-                agent_path.write_text(json.dumps(agent, indent=2) + "\n", encoding="utf-8")
-                print(f"Added @memory to allowedTools in {agent_path}.")
-            else:
-                print(f"{agent_path} already has @memory in allowedTools.")
-        else:
-            print(f"Agent config {agent_path} not found, skipping allowedTools.", file=sys.stderr)
+    allowed: list[str] = agent.get("allowedTools", [])
+    if "@memory" not in allowed:
+        allowed.append("@memory")
+        agent["allowedTools"] = allowed
+        changed = True
+        print(f"Added @memory to allowedTools in {agent_path}.")
+    else:
+        print(f"{agent_path} already has @memory in allowedTools.")
+
+    if changed:
+        agent_path.write_text(json.dumps(agent, indent=2) + "\n", encoding="utf-8")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -204,22 +200,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Database path (default: ~/.local/share/mcp-memory/memory.db, or MCP_MEMORY_DB_PATH)",
     )
 
-    install = sub.add_parser("install", help="Patch agent MCP config with memory server entry")
+    install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument("target", choices=["kiro"], help="Agent to install for.")
+    install.add_argument(
+        "agent_config",
+        help="Path to the Kiro agent JSON file to patch.",
+    )
     install.add_argument(
         "--port",
         default=os.environ.get("MCP_MEMORY_PORT", _DEFAULT_PORT),
         help=f"HTTP port (default: {_DEFAULT_PORT}, or MCP_MEMORY_PORT)",
-    )
-    install.add_argument(
-        "--mcp-config",
-        default="~/.kiro/settings/mcp.json",
-        help="Path to Kiro MCP config (default: ~/.kiro/settings/mcp.json)",
-    )
-    install.add_argument(
-        "--agent-config",
-        metavar="PATH",
-        help="Kiro agent JSON to patch with @memory in allowedTools.",
     )
 
     return parser
