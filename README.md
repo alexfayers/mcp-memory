@@ -51,6 +51,57 @@ Then run `llm-prompts setup` to install everything.
 }
 ```
 
+### Running as a service
+
+mcp-memory uses HTTP transport, so it needs to run as a persistent background service. A setup script is included for macOS and Linux:
+
+```bash
+# Install with defaults (port 8000, DB at ~/.local/share/mcp-memory/memory.db)
+scripts/setup-service.sh
+
+# Custom port and DB path
+scripts/setup-service.sh --port 3000 --db-path ~/.memory/memory.db
+```
+
+The script auto-detects the platform and generates the appropriate service config.
+
+#### macOS (launchd)
+
+The script creates a plist at `~/Library/LaunchAgents/com.mcp-memory.plist`. To manage:
+
+```bash
+# Restart
+launchctl kickstart -k "gui/$(id -u)/com.mcp-memory"
+
+# Stop
+launchctl bootout "gui/$(id -u)/com.mcp-memory"
+
+# Uninstall
+launchctl bootout "gui/$(id -u)/com.mcp-memory"
+rm ~/Library/LaunchAgents/com.mcp-memory.plist
+```
+
+#### Linux (systemd)
+
+The script creates a user unit at `~/.config/systemd/user/mcp-memory.service`. To manage:
+
+```bash
+# Restart
+systemctl --user restart mcp-memory
+
+# Stop
+systemctl --user stop mcp-memory
+
+# Uninstall
+systemctl --user disable --now mcp-memory
+rm ~/.config/systemd/user/mcp-memory.service
+systemctl --user daemon-reload
+```
+
+#### Logs
+
+Logs are written to the same directory as the database file (e.g. `~/.local/share/mcp-memory/mcp-memory.log`).
+
 ## Tools
 
 All tools require a `project` parameter to scope data.
