@@ -206,6 +206,13 @@ def _cmd_install_kiro(args: argparse.Namespace) -> None:
     else:
         print(f"{agent_path} already has @memory in allowedTools.")
 
+    tools: list[str] = agent.get("tools", [])
+    if tools != ["*"] and "@memory" not in tools:
+        tools.append("@memory")
+        agent["tools"] = tools
+        changed = True
+        print(f"Added @memory to tools in {agent_path}.")
+
     if changed:
         agent_path.write_text(json.dumps(agent, indent=2) + "\n", encoding="utf-8")
 
