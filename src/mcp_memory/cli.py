@@ -150,7 +150,11 @@ def _cmd_setup_service(args: argparse.Namespace) -> None:
 
 
 def _cmd_install_kiro(args: argparse.Namespace) -> None:
+<<<<<<< Updated upstream
     """Patch Kiro MCP config with the memory server entry."""
+=======
+    """Patch Kiro MCP config and optionally agent config for memory."""
+>>>>>>> Stashed changes
     port = args.port
     mcp_config = Path(args.mcp_config).expanduser()
 
@@ -162,6 +166,7 @@ def _cmd_install_kiro(args: argparse.Namespace) -> None:
         config = {}
 
     servers = config.setdefault("mcpServers", {})
+<<<<<<< Updated upstream
     entry = {"url": f"http://localhost:{port}/mcp"}
 
     if "memory" in servers:
@@ -171,6 +176,31 @@ def _cmd_install_kiro(args: argparse.Namespace) -> None:
     servers["memory"] = entry
     mcp_config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     print(f"Patched {mcp_config} with memory server (port {port}).")
+=======
+
+    if "memory" in servers:
+        print(f"{mcp_config} already has memory server entry.")
+    else:
+        servers["memory"] = {"url": f"http://localhost:{port}/mcp"}
+        mcp_config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        print(f"Patched {mcp_config} with memory server (port {port}).")
+
+    agent_config = getattr(args, "agent_config", None)
+    if agent_config:
+        agent_path = Path(agent_config).expanduser()
+        if agent_path.exists():
+            agent = json.loads(agent_path.read_text(encoding="utf-8"))
+            allowed: list[str] = agent.get("allowedTools", [])
+            if "@memory" not in allowed:
+                allowed.append("@memory")
+                agent["allowedTools"] = allowed
+                agent_path.write_text(json.dumps(agent, indent=2) + "\n", encoding="utf-8")
+                print(f"Added @memory to allowedTools in {agent_path}.")
+            else:
+                print(f"{agent_path} already has @memory in allowedTools.")
+        else:
+            print(f"Agent config {agent_path} not found, skipping allowedTools.", file=sys.stderr)
+>>>>>>> Stashed changes
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -202,6 +232,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default="~/.kiro/settings/mcp.json",
         help="Path to Kiro MCP config (default: ~/.kiro/settings/mcp.json)",
     )
+<<<<<<< Updated upstream
+=======
+    install.add_argument(
+        "--agent-config",
+        metavar="PATH",
+        help="Kiro agent JSON to patch with @memory in allowedTools.",
+    )
+>>>>>>> Stashed changes
 
     return parser
 
