@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mcp-memory = "mcp_memory.server:main"
+mcp-memory = "mcp_memory.cli:main"
 
 [project.entry-points."cline_hooks"]
 memory = "mcp_memory.hooks.plugin:MemoryPlugin"
@@ -58,6 +58,7 @@ ignore = [
 "tests/**" = ["ARG001", "ARG002", "PLR0917", "SLF001"]
 "src/mcp_memory/migrations/schema.py" = ["E501"]
 "src/mcp_memory/visualise.py" = ["E501", "SLF001", "ARG001", "TC002"]
+"src/mcp_memory/cli.py" = ["T201", "S603", "S607", "PLC0415"]
 
 [tool.mypy]
 python_version = "3.12"
