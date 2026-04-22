@@ -18,14 +18,17 @@ def _state_path() -> Path:
     return get_data_dir() / "memory-tracker-state.json"
 
 
-def _read() -> dict[str, int]:
+_StateData = dict[str, int | list[str]]
+
+
+def _read() -> _StateData:
     try:
         return dict(json.loads(_state_path().read_text()))
     except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
         return {}
 
 
-def _write(data: dict[str, int]) -> None:
+def _write(data: _StateData) -> None:
     _state_path().parent.mkdir(parents=True, exist_ok=True)
     _state_path().write_text(json.dumps(data))
 
@@ -33,9 +36,11 @@ def _write(data: dict[str, int]) -> None:
 def increment(task_id: str) -> int:
     """Increment the tool-call counter for a task and return the new value."""
     data = _read()
-    data[task_id] = data.get(task_id, 0) + 1
+    count = data.get(task_id, 0)
+    new_count = (count if isinstance(count, int) else 0) + 1
+    data[task_id] = new_count
     _write(data)
-    return data[task_id]
+    return new_count
 
 
 def reset(task_id: str) -> None:
@@ -47,7 +52,8 @@ def reset(task_id: str) -> None:
 
 def should_block(task_id: str, threshold: int = _MEMORY_BLOCK_THRESHOLD) -> bool:
     """Return True if the counter has reached the blocking threshold."""
-    return _read().get(task_id, 0) >= threshold
+    count = _read().get(task_id, 0)
+    return isinstance(count, int) and count >= threshold
 
 
 def clear(task_id: str) -> None:
@@ -56,3 +62,21 @@ def clear(task_id: str) -> None:
     if task_id in data:
         del data[task_id]
         _write(data)
+
+
+def has_scope_blocked(task_id: str, project: str) -> bool:
+    """Return True if a scope mismatch block has already fired for this project."""
+    blocked = _read().get(f"{task_id}:scope_blocked", [])
+    return isinstance(blocked, list) and project in blocked
+
+
+def mark_scope_blocked(task_id: str, project: str) -> None:
+    """Record that a scope mismatch block has fired for a project."""
+    data = _read()
+    blocked = data.get(f"{task_id}:scope_blocked", [])
+    if not isinstance(blocked, list):
+        blocked = []
+    if project not in blocked:
+        blocked.append(project)
+    data[f"{task_id}:scope_blocked"] = blocked
+    _write(data)
