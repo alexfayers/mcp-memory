@@ -82,6 +82,8 @@ Entity names must be unique across all entity types. Always prefix the name with
 | A user preference or style | `user-preferences` | `user-preferences/<alias>-<topic>` | `user-preferences/jdoe-workflow` |
 | A reusable pattern | `pattern` | `pattern/<short-noun>` | `pattern/dynamodb-batch-get-retry` |
 
+When first interacting with a workspace, verify the `project/` entity name in memory matches the actual package/repo name. If no entity exists, create one. If the name is wrong (e.g. from a rename), create a new entity with the correct name, migrate observations, and delete the old one.
+
 ### Task entity discipline
 
 **CRITICAL: In-progress work MUST be tracked as a separate `task/` entity - never as observations on a `project/` entity.** This includes external tickets under investigation - each ticket gets its own `task/` entity with a `belongs-to` relation to the relevant knowledge or project entity. Do not store ticket-specific details as observations on a parent knowledge entity.
