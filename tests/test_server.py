@@ -114,3 +114,51 @@ class TestInlineRelations:
         )
         assert len(result) == 2
         assert all(r.source == "task/t" for r in result)
+
+    def test_accepts_relation_type_key(self) -> None:
+        result = _validate_and_extract_relations(
+            [
+                {
+                    "name": "task/t",
+                    "entityType": "task",
+                    "observations": ["obs"],
+                    "relations": [
+                        {"target": "project/a", "relation_type": "belongs-to"},
+                    ],
+                }
+            ]
+        )
+        assert len(result) == 1
+        assert result[0].relation_type == "belongs-to"
+
+    def test_type_key_takes_precedence_over_relation_type(self) -> None:
+        result = _validate_and_extract_relations(
+            [
+                {
+                    "name": "task/t",
+                    "entityType": "task",
+                    "observations": ["obs"],
+                    "relations": [
+                        {
+                            "target": "project/a",
+                            "type": "implements",
+                            "relation_type": "belongs-to",
+                        },
+                    ],
+                }
+            ]
+        )
+        assert result[0].relation_type == "implements"
+
+    def test_missing_both_type_keys_raises(self) -> None:
+        with pytest.raises(KeyError, match=r"type.*relation_type"):
+            _validate_and_extract_relations(
+                [
+                    {
+                        "name": "task/t",
+                        "entityType": "task",
+                        "observations": ["obs"],
+                        "relations": [{"target": "project/a"}],
+                    }
+                ]
+            )

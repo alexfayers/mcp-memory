@@ -503,4 +503,62 @@ MIGRATIONS: list[Migration] = [
             END""",
         ],
     ),
+    Migration(
+        version=17,
+        statements=[
+            "PRAGMA legacy_alter_table = ON",
+            "DROP TRIGGER IF EXISTS entities_fts_insert",
+            "DROP TRIGGER IF EXISTS entities_fts_delete",
+            "DROP TRIGGER IF EXISTS observations_fts_insert",
+            "DROP TRIGGER IF EXISTS observations_fts_delete",
+            "DROP TRIGGER IF EXISTS entities_updated_at_obs_insert",
+            "DROP TRIGGER IF EXISTS entities_updated_at_obs_delete",
+            "ALTER TABLE projects RENAME TO projects_old",
+            """CREATE TABLE projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL COLLATE NOCASE,
+                UNIQUE(name)
+            )""",
+            """INSERT INTO projects (id, name)
+                SELECT MIN(id), name FROM projects_old GROUP BY name COLLATE NOCASE""",
+            """UPDATE entities SET project_id = (
+                SELECT p.id FROM projects p
+                JOIN projects_old po ON po.id = entities.project_id
+                WHERE p.name = po.name COLLATE NOCASE
+            ) WHERE project_id NOT IN (SELECT id FROM projects)""",
+            "DROP TABLE projects_old",
+            "PRAGMA legacy_alter_table = OFF",
+            "CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name)",
+            """CREATE TRIGGER IF NOT EXISTS entities_fts_insert AFTER INSERT ON entities BEGIN
+                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)
+                VALUES (new.id, new.name, (SELECT name FROM entity_types WHERE id = new.entity_type_id), '', (SELECT name FROM projects WHERE id = new.project_id));
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS entities_fts_delete AFTER DELETE ON entities BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)
+                VALUES('delete', old.id, old.name, (SELECT name FROM entity_types WHERE id = old.entity_type_id), '', (SELECT name FROM projects WHERE id = old.project_id));
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS observations_fts_insert AFTER INSERT ON observations BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)
+                VALUES('delete', new.entity_id, (SELECT name FROM entities WHERE id = new.entity_id), (SELECT t.name FROM entity_types t JOIN entities e ON e.entity_type_id = t.id WHERE e.id = new.entity_id), COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_id = new.entity_id AND id != new.id), ''), (SELECT p.name FROM projects p JOIN entities e ON e.project_id = p.id WHERE e.id = new.entity_id));
+                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)
+                SELECT e.id, e.name, t.name, (SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_id = new.entity_id), p.name
+                FROM entities e JOIN entity_types t ON t.id = e.entity_type_id JOIN projects p ON p.id = e.project_id WHERE e.id = new.entity_id;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS observations_fts_delete AFTER DELETE ON observations BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)
+                VALUES('delete', old.entity_id, (SELECT name FROM entities WHERE id = old.entity_id), (SELECT t.name FROM entity_types t JOIN entities e ON e.entity_type_id = t.id WHERE e.id = old.entity_id), COALESCE((SELECT GROUP_CONCAT(content, ' ') || ' ' FROM observations WHERE entity_id = old.entity_id), '') || old.content, (SELECT p.name FROM projects p JOIN entities e ON e.project_id = p.id WHERE e.id = old.entity_id));
+                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)
+                SELECT e.id, e.name, t.name, COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_id = old.entity_id), ''), p.name
+                FROM entities e JOIN entity_types t ON t.id = e.entity_type_id JOIN projects p ON p.id = e.project_id WHERE e.id = old.entity_id;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS entities_updated_at_obs_insert
+                AFTER INSERT ON observations BEGIN
+                UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = new.entity_id;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS entities_updated_at_obs_delete
+                AFTER DELETE ON observations BEGIN
+                UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = old.entity_id;
+            END""",
+        ],
+    ),
 ]

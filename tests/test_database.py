@@ -58,6 +58,20 @@ class TestCreateEntities:
             )
 
 
+class TestProjectCaseInsensitivity:
+    def test_project_names_are_case_insensitive(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "MyProject", [{"name": "e1", "entityType": "task", "observations": ["a"]}]
+        )
+        entity = db.get_entity("myproject", "e1")
+        assert entity.observations == ["a"]
+
+    def test_case_insensitive_project_does_not_duplicate(self, db: DatabaseManager) -> None:
+        db.create_entities("Proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["b"]}])
+        assert db.get_entity("PROJ", "e1").observations == ["b"]
+
+
 class TestObservations:
     def test_add_observations(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])

@@ -113,6 +113,15 @@ def _ensure_project_root(db: DatabaseManager, project: str) -> None:
 register_visualise_routes(mcp, _get_db)
 
 
+def _extract_relation_type(rel: dict[str, str]) -> str:
+    """Extract relation type from a dict, accepting both 'type' and 'relation_type' keys."""
+    if "type" in rel:
+        return str(rel["type"])
+    if "relation_type" in rel:
+        return str(rel["relation_type"])
+    raise KeyError("Relation must have a 'type' or 'relation_type' key.")
+
+
 def _validate_and_extract_relations(
     entities: list[dict[str, str | list[str] | list[dict[str, str]] | None]],
 ) -> list[Relation]:
@@ -143,7 +152,7 @@ def _validate_and_extract_relations(
                         Relation(
                             source=str(rel.get("source", entity_name)),
                             target=str(rel["target"]),
-                            relation_type=str(rel["type"]),
+                            relation_type=_extract_relation_type(rel),
                         )
                     )
     return all_relations
@@ -236,7 +245,7 @@ def create_relations(
             Relation(
                 source=rel["source"],
                 target=rel["target"],
-                relation_type=rel["type"],
+                relation_type=_extract_relation_type(rel),
             )
             for rel in relations
         ]
