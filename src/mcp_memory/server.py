@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
+from typing import cast
 
 from mcp.server.fastmcp import FastMCP
 
 from .config import get_db_path
 from .database import DatabaseManager
-from .models import Relation
+from .models import Entity, Relation
 from .visualise import register_visualise_routes
 
 mcp = FastMCP(
@@ -80,6 +81,14 @@ SEARCH_RELATED_NODES_DESC = (
     "Optionally filter by entityType and/or relationType."
 )
 LIST_PROJECTS_DESC = "List all project names in the knowledge graph."
+
+SEARCH_ALL_PROJECTS_DESC = (
+    "Search entities and relations across ALL projects in a single call. "
+    "Returns results grouped by project name. "
+    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency. "
+    "Optionally filter by entityType, status, and/or date range "
+    "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates)."
+)
 
 _db: DatabaseManager | None = None
 
@@ -240,6 +249,49 @@ def list_projects() -> dict[str, object]:
     try:
         db = _get_db()
         return {"projects": db.list_projects()}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=SEARCH_ALL_PROJECTS_DESC)
+def search_all_projects(
+    query: str,
+    limit: int = 50,
+    entityType: str | None = None,
+    status: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, object]:
+    """Search entities across all projects, returning results grouped by project."""
+    try:
+        db = _get_db()
+        result = db.search_nodes(
+            None,
+            query,
+            limit=limit,
+            entity_type=entityType,
+            status=status,  # type: ignore[arg-type]
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        grouped: dict[str, dict[str, list[object]]] = {}
+        entity_names_by_project: dict[str, set[str]] = {}
+        for entity in cast("list[Entity]", result["entities"]):
+            project_name = entity.project_name or "unknown"
+            if project_name not in grouped:
+                grouped[project_name] = {"entities": [], "relations": []}
+                entity_names_by_project[project_name] = set()
+            grouped[project_name]["entities"].append(entity)
+            entity_names_by_project[project_name].add(entity.name)
+
+        for relation in cast("list[Relation]", result["relations"]):
+            for project_name, names in entity_names_by_project.items():
+                if relation.source in names or relation.target in names:
+                    grouped[project_name]["relations"].append(relation)
+                    break
+
+        return {"results": grouped}
     except Exception as e:
         return {"error": str(e)}
 

@@ -440,6 +440,80 @@ class TestSearchNodes:
         result = db.search_nodes("proj", "keyword", start_date="2099-01-01")
         assert len(result["entities"]) == 0
 
+    def test_cross_project_search(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "p1",
+            [{"name": "t1", "entityType": "task", "observations": ["hello"]}],
+        )
+        db.create_entities(
+            "p2",
+            [{"name": "t2", "entityType": "task", "observations": ["hello"]}],
+        )
+        result = db.search_nodes(None, "hello")
+        names = {e.name for e in result["entities"]}
+        assert names == {"t1", "t2"}
+
+    def test_cross_project_search_includes_project_name(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "alpha",
+            [{"name": "e1", "entityType": "task", "observations": ["keyword"]}],
+        )
+        result = db.search_nodes(None, "keyword")
+        assert len(result["entities"]) == 1
+        assert result["entities"][0].project_name == "alpha"
+
+    def test_cross_project_search_with_status_filter(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "p1",
+            [
+                {
+                    "name": "a",
+                    "entityType": "task",
+                    "observations": ["x"],
+                    "status": "in-progress",
+                },
+            ],
+        )
+        db.create_entities(
+            "p2",
+            [
+                {
+                    "name": "b",
+                    "entityType": "task",
+                    "observations": ["x"],
+                    "status": "resolved",
+                },
+            ],
+        )
+        result = db.search_nodes(None, "x", status="in-progress")
+        assert len(result["entities"]) == 1
+        assert result["entities"][0].name == "a"
+
+    def test_cross_project_search_returns_relations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "p1",
+            [
+                {"name": "t1", "entityType": "task", "observations": ["hello"]},
+                {"name": "f1", "entityType": "feature", "observations": ["other"]},
+            ],
+        )
+        db.create_relations(
+            "p1",
+            [Relation(source="t1", target="f1", relation_type="implements")],
+        )
+        result = db.search_nodes(None, "hello")
+        assert len(result["entities"]) == 1
+        assert len(result["relations"]) == 1
+        assert result["relations"][0].source == "t1"
+
+    def test_scoped_search_includes_project_name(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["keyword"]}],
+        )
+        result = db.search_nodes("proj", "keyword")
+        assert result["entities"][0].project_name == "proj"
+
 
 class TestReadGraph:
     def test_returns_recent_entities(self, db: DatabaseManager) -> None:

@@ -18,6 +18,7 @@ class Entity:
     status: EntityStatus | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    project_name: str | None = None
 
 
 @dataclass

@@ -111,6 +111,11 @@ class DatabaseManager:
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            project_name=(
+                row["project_name"]
+                if "project_name" in row.keys()  # noqa: SIM118
+                else None
+            ),
         )
 
     def _sanitize_fts_query(self, query: str) -> str:
@@ -138,6 +143,31 @@ class DatabaseManager:
         ).fetchall()
         return [
             Relation(source=row["source"], target=row["target"], relation_type=row["relation_type"])
+            for row in rows
+        ]
+
+    def _get_relations_for_entity_ids(self, entity_ids: list[int]) -> list[Relation]:
+        """Get relations for entity IDs across all projects."""
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" * len(entity_ids))
+        rows = self._db.execute(
+            f"SELECT e_src.name AS source, e_tgt.name AS target, "
+            f"rt.name AS relation_type "
+            f"FROM relations r "
+            f"JOIN entities e_src ON r.source_id = e_src.id "
+            f"JOIN entities e_tgt ON r.target_id = e_tgt.id "
+            f"JOIN relation_types rt ON r.relation_type_id = rt.id "
+            f"WHERE r.source_id IN ({placeholders}) "
+            f"OR r.target_id IN ({placeholders})",
+            [*entity_ids, *entity_ids],
+        ).fetchall()
+        return [
+            Relation(
+                source=row["source"],
+                target=row["target"],
+                relation_type=row["relation_type"],
+            )
             for row in rows
         ]
 
@@ -400,7 +430,7 @@ class DatabaseManager:
 
     def search_nodes(
         self,
-        project: str,
+        project: str | None,
         query: str,
         limit: int = 10,
         entity_type: str | None = None,
@@ -414,16 +444,20 @@ class DatabaseManager:
             return {"entities": [], "relations": []}
 
         sql = (
-            "SELECT e.id, e.name, et.name AS entity_type, e.status, "
+            "SELECT e.id, e.project_id, p.name AS project_name, "
+            "e.name, et.name AS entity_type, e.status, "
             "e.created_at, e.updated_at, bm25(entities_fts) AS rank "
             "FROM entities_fts fts "
             "JOIN entities e ON fts.rowid = e.id "
             "JOIN entity_types et ON e.entity_type_id = et.id "
             "JOIN projects p ON e.project_id = p.id "
-            "WHERE entities_fts MATCH ? AND p.name = ?"
+            "WHERE entities_fts MATCH ?"
         )
-        params: list[str | int] = [sanitized, project]
+        params: list[str | int] = [sanitized]
 
+        if project is not None:
+            sql += " AND p.name = ?"
+            params.append(project)
         if entity_type is not None:
             sql += " AND et.name = ?"
             params.append(entity_type)
@@ -455,8 +489,11 @@ class DatabaseManager:
         entities = [self._build_entity(row, row["id"]) for row in top_rows]
         entity_ids = [row["id"] for row in top_rows]
 
-        project_id = self._get_or_create_project_id(project)
-        relations = self._get_relations_for_entities(project_id, entity_ids)
+        if project is not None:
+            project_id = self._get_or_create_project_id(project)
+            relations = self._get_relations_for_entities(project_id, entity_ids)
+        else:
+            relations = self._get_relations_for_entity_ids(entity_ids)
 
         return {"entities": entities, "relations": relations}
 

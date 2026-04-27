@@ -154,6 +154,10 @@ Delete a specific relation between two entities.
 
 List all project names in the knowledge graph. Takes no parameters.
 
+### search_all_projects
+
+Search entities across all projects in a single call. Returns results grouped by project name. Same FTS5 search and filters as `search_nodes` but without the `project` parameter.
+
 ## Development
 
 ```bash
