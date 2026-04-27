@@ -47,6 +47,11 @@ class DatabaseManager:
 
         run_migrations(self._db)
 
+    def list_projects(self) -> list[str]:
+        """Return all project names from the database."""
+        rows = self._db.execute("SELECT name FROM projects ORDER BY name").fetchall()
+        return [row["name"] for row in rows]
+
     def _get_or_create_project_id(self, project: str) -> int:
         self._db.execute("INSERT OR IGNORE INTO projects (name) VALUES (?)", (project,))
         row = self._db.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()

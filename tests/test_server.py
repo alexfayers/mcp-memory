@@ -162,3 +162,15 @@ class TestInlineRelations:
                     }
                 ]
             )
+
+
+class TestListProjects:
+    def test_returns_all_projects(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "alpha", [{"name": "e1", "entityType": "project", "observations": ["a"]}]
+        )
+        db.create_entities("beta", [{"name": "e2", "entityType": "project", "observations": ["b"]}])
+        assert db.list_projects() == ["alpha", "beta"]
+
+    def test_empty_database(self, db: DatabaseManager) -> None:
+        assert db.list_projects() == []

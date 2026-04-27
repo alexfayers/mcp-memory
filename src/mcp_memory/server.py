@@ -79,6 +79,7 @@ SEARCH_RELATED_NODES_DESC = (
     "Get an entity along with all its directly related entities within a project. "
     "Optionally filter by entityType and/or relationType."
 )
+LIST_PROJECTS_DESC = "List all project names in the knowledge graph."
 
 _db: DatabaseManager | None = None
 
@@ -229,6 +230,16 @@ def read_graph(
     try:
         db = _get_db()
         return db.read_graph(project, status=status)  # type: ignore[arg-type,return-value]
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=LIST_PROJECTS_DESC)
+def list_projects() -> dict[str, object]:
+    """List all project names in the knowledge graph."""
+    try:
+        db = _get_db()
+        return {"projects": db.list_projects()}
     except Exception as e:
         return {"error": str(e)}
 

@@ -22,8 +22,7 @@ _VISUALISE_HTML = (
 
 def get_projects(db: DatabaseManager) -> list[str]:
     """Return all project names from the database."""
-    rows = db._db.execute("SELECT name FROM projects ORDER BY name").fetchall()
-    return [row["name"] for row in rows]
+    return db.list_projects()
 
 
 def get_all_graph_data(

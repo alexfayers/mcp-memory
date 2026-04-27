@@ -150,6 +150,10 @@ Delete an entity and all associated observations and relations.
 
 Delete a specific relation between two entities.
 
+### list_projects
+
+List all project names in the knowledge graph. Takes no parameters.
+
 ## Development
 
 ```bash
