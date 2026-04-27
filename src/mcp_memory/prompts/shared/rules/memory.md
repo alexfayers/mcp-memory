@@ -41,6 +41,10 @@ If `memory` is not accessible and you need it for the current task:
 2. Ask the user to reload the MCP connection.
 3. Do not continue until `memory` is available.
 
+### Restarting the memory service
+
+**NEVER** manually restart the mcp-memory service (e.g. `launchctl kickstart`, `systemctl restart`). Always use `llm-prompts update`, which handles setup, reinstall, and service restart in one command.
+
 ## Before starting a task
 
 For ANY and EVERY task, you **MUST** follow ALL of these steps - no exceptions, no shortcuts!
