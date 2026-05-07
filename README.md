@@ -51,6 +51,15 @@ Then run `llm-prompts setup` to install everything.
 }
 ```
 
+### Agent installation
+
+Automatically configure the MCP server for your agent:
+
+```bash
+mcp-memory install kiro <agent-config.json>   # patches Kiro agent JSON
+mcp-memory install claude-code                # adds via `claude mcp add`
+```
+
 ### Running as a service
 
 mcp-memory uses HTTP transport, so it needs to run as a persistent background service. A setup command is included for macOS and Linux:

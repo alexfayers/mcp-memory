@@ -217,6 +217,59 @@ def _cmd_install_kiro(args: argparse.Namespace) -> None:
         agent_path.write_text(json.dumps(agent, indent=2) + "\n", encoding="utf-8")
 
 
+def _cmd_install_claude_code() -> None:
+    """Add mcp-memory as a user-scoped MCP server in Claude Code."""
+    import shutil
+    import subprocess
+
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        print("error: claude not found on PATH", file=sys.stderr)
+        sys.exit(1)
+
+    result = subprocess.run(
+        [claude_bin, "mcp", "get", "memory"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        print("memory MCP server already configured in Claude Code.")
+    else:
+        port = _detect_service_port()
+        url = f"http://localhost:{port}/mcp"
+
+        subprocess.run(
+            [
+                claude_bin,
+                "mcp",
+                "add",
+                "--transport",
+                "http",
+                "--scope",
+                "user",
+                "memory",
+                url,
+            ],
+            check=False,
+        )
+        print(f"Added mcp-memory MCP server to Claude Code (url: {url}).")
+
+    # Auto-allow all memory MCP tools
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.exists():
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    else:
+        settings = {}
+    permissions: dict[str, list[str]] = settings.setdefault("permissions", {})
+    allow: list[str] = permissions.setdefault("allow", [])
+    rule = "mcp__memory__*"
+    if rule not in allow:
+        allow.append(rule)
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+        print("Added mcp__memory__* to permissions.allow.")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
@@ -235,10 +288,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
-    install.add_argument("target", choices=["kiro"], help="Agent to install for.")
+    install.add_argument("target", choices=["kiro", "claude-code"], help="Agent to install for.")
     install.add_argument(
         "agent_config",
-        help="Path to the Kiro agent JSON file to patch.",
+        nargs="?",
+        help="Path to the Kiro agent JSON file to patch (required for kiro).",
     )
     install.add_argument(
         "--port",
@@ -257,7 +311,12 @@ def main() -> None:
     if args.command == "setup-service":
         _cmd_setup_service(args)
     elif args.command == "install":
-        _cmd_install_kiro(args)
+        if args.target == "claude-code":
+            _cmd_install_claude_code()
+        else:
+            if not args.agent_config:
+                parser.error("agent_config is required for kiro")
+            _cmd_install_kiro(args)
     else:
         from .server import main as serve
 
