@@ -127,6 +127,7 @@ Use entity type to distinguish current facts from past actions:
 - **`project` / `feature` observations** - use present tense for current facts: "process_ticket requires relationship_manager"
 - **`task` observations** - use past tense for completed actions: "Removed is_tracked and is_processed_or_tracked helpers"
 - Do not include rationale in the same observation as the fact - add a separate observation for "why"
+- **Never include dates or timestamps in observations** - entities already have automatic `created_at`/`updated_at` timestamps that track when observations were added
 
 ## While working
 
