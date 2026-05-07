@@ -140,6 +140,14 @@ function render(data) {
     if (relCount.has(r.target)) relCount.set(r.target, relCount.get(r.target) + 1);
   });
 
+  const oldNodeIds = new Set(nodes.map(n => n.id));
+  const oldLinkKeys = new Set(links.map(d => (d.source.id || d.source) + "-" + (d.target.id || d.target) + "-" + d.type));
+  const newLinkKeys = new Set(newLinks.map(d => d.source + "-" + d.target + "-" + d.type));
+  const topologyChanged = incoming.length !== oldNodeIds.size
+    || incoming.some(n => !oldNodeIds.has(n.id))
+    || newLinkKeys.size !== oldLinkKeys.size
+    || [...newLinkKeys].some(k => !oldLinkKeys.has(k));
+
   const oldMap = new Map(nodes.map(n => [n.id, n]));
   nodes = incoming.map(n => {
     const old = oldMap.get(n.id);
@@ -185,7 +193,7 @@ function render(data) {
       .force("center", d3.forceCenter(width() / 2, height() / 2))
       .force("collision", d3.forceCollide().radius(d => 5 + nodeRadius(d)))
       .on("tick", ticked);
-  } else {
+  } else if (topologyChanged) {
     simulation.nodes(nodes);
     simulation.force("link").links(links);
     simulation.force("collision").radius(d => 5 + nodeRadius(d));
