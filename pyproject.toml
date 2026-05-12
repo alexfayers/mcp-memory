@@ -53,6 +53,7 @@ ignore = [
     "PERF401", # list.extend - readability preferred
     "SIM102",  # nested if - readability preferred
     "SIM108",  # ternary operator - if/else preferred for clarity
+    "FBT",     # boolean args - acceptable for keyword-only params like compact=True
 ]
 
 [tool.ruff.lint.per-file-ignores]

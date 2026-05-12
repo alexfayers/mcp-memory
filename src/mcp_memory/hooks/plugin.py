@@ -146,12 +146,11 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     parts.append(
         "REQUIRED before starting:\n"
         "1. `read_graph` on BOTH `global` and `<repo-name>` projects\n"
-        "2. `search_all_projects(query='task', status='in-progress')` and "
-        "`search_all_projects(query='task', status='planned')` for cross-project task summary\n"
-        "3. `search_nodes` for `user-preferences` in global `memory`\n"
-        "4. `search_nodes` for task keywords in `<repo-name>` project\n"
-        "5. `search_related_nodes` on any relevant result\n"
-        "6. Include a `task_progress` checklist in your first tool call"
+        "2. `search_all_projects(query='task', status='in-progress', compact=true)` and "
+        "`search_all_projects(query='task', status='planned', compact=true)` "
+        "for cross-project task summary\n"
+        "3. `search_nodes` for task keywords in `<repo-name>` project\n"
+        "4. `search_related_nodes` on any relevant result"
     )
     return parts
 

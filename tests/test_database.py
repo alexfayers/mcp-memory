@@ -575,3 +575,75 @@ class TestUpdatedAt:
         before = db.get_entity("proj", "e1").updated_at
         db.set_entity_status("proj", "e1", "resolved")
         assert db.get_entity("proj", "e1").updated_at != before
+
+
+class TestCompactMode:
+    def test_read_graph_compact_omits_observations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2"]}]
+        )
+        result = db.read_graph("proj", compact=True)
+        assert len(result["entities"]) == 1
+        assert result["entities"][0].name == "e1"
+        assert result["entities"][0].observations == []
+
+    def test_read_graph_non_compact_includes_observations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2"]}]
+        )
+        result = db.read_graph("proj", compact=False)
+        assert result["entities"][0].observations == ["obs1", "obs2"]
+
+    def test_search_nodes_compact_omits_observations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/foo", "entityType": "task", "observations": ["some detail"]}]
+        )
+        result = db.search_nodes("proj", "foo", compact=True)
+        assert len(result["entities"]) == 1
+        assert result["entities"][0].name == "task/foo"
+        assert result["entities"][0].observations == []
+
+    def test_search_nodes_compact_preserves_metadata(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/bar",
+                    "entityType": "task",
+                    "observations": ["x"],
+                    "status": "planned",
+                }
+            ],
+        )
+        result = db.search_nodes("proj", "bar", compact=True)
+        entity = result["entities"][0]
+        assert entity.entity_type == "task"
+        assert entity.status == "planned"
+        assert entity.created_at is not None
+
+    def test_cross_project_search_compact(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "alpha", [{"name": "task/a1", "entityType": "task", "observations": ["alpha detail"]}]
+        )
+        db.create_entities(
+            "beta", [{"name": "task/b1", "entityType": "task", "observations": ["beta detail"]}]
+        )
+        result = db.search_nodes(None, "task", compact=True)
+        for entity in result["entities"]:
+            assert entity.observations == []
+            assert entity.name in {"task/a1", "task/b1"}
+
+    def test_compact_still_returns_relations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "task/x", "entityType": "task", "observations": ["o"]},
+                {"name": "project/p", "entityType": "project", "observations": ["o"]},
+            ],
+        )
+        db.create_relations(
+            "proj", [Relation(source="task/x", target="project/p", relation_type="belongs-to")]
+        )
+        result = db.read_graph("proj", compact=True)
+        assert len(result["relations"]) == 1
+        assert result["relations"][0].relation_type == "belongs-to"

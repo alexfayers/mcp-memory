@@ -103,11 +103,11 @@ class DatabaseManager:
         ).fetchall()
         return [row["content"] for row in rows]
 
-    def _build_entity(self, row: sqlite3.Row, entity_id: int) -> Entity:
+    def _build_entity(self, row: sqlite3.Row, entity_id: int, compact: bool = False) -> Entity:
         return Entity(
             name=row["name"],
             entity_type=row["entity_type"],
-            observations=self._get_observations(entity_id),
+            observations=[] if compact else self._get_observations(entity_id),
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -437,6 +437,7 @@ class DatabaseManager:
         status: EntityStatus | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        compact: bool = False,
     ) -> dict[str, list[Entity] | list[Relation]]:
         """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
         sanitized = self._sanitize_fts_query(query)
@@ -486,7 +487,7 @@ class DatabaseManager:
         scored.sort(key=lambda x: x[0], reverse=True)
         top_rows = [row for _, row in scored[:limit]]
 
-        entities = [self._build_entity(row, row["id"]) for row in top_rows]
+        entities = [self._build_entity(row, row["id"], compact=compact) for row in top_rows]
         entity_ids = [row["id"] for row in top_rows]
 
         if project is not None:
@@ -498,7 +499,7 @@ class DatabaseManager:
         return {"entities": entities, "relations": relations}
 
     def read_graph(
-        self, project: str, status: EntityStatus | None = None
+        self, project: str, status: EntityStatus | None = None, compact: bool = False
     ) -> dict[str, list[Entity] | list[Relation]]:
         """Return the 10 most recently created entities and their relations."""
         project_id = self._get_or_create_project_id(project)
@@ -519,7 +520,7 @@ class DatabaseManager:
 
         rows = self._db.execute(sql, params).fetchall()
 
-        entities = [self._build_entity(row, row["id"]) for row in rows]
+        entities = [self._build_entity(row, row["id"], compact=compact) for row in rows]
         entity_ids = [row["id"] for row in rows]
         relations = self._get_relations_for_entities(project_id, entity_ids)
 

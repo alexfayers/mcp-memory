@@ -46,11 +46,13 @@ SEARCH_NODES_DESC = (
     "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency "
     "(newer entities rank higher). "
     "Optionally filter by entityType, status, and/or date range "
-    "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates)."
+    "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
+    "Use compact=true to omit observations for a lightweight summary."
 )
 READ_GRAPH_DESC = (
     "Get the most recent entities and their relations for a project. "
-    "Returns up to 10 recent entities ordered by creation time."
+    "Returns up to 10 recent entities ordered by creation time. "
+    "Use compact=true to omit observations for a lightweight summary."
 )
 CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
@@ -87,7 +89,8 @@ SEARCH_ALL_PROJECTS_DESC = (
     "Returns results grouped by project name. "
     "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency. "
     "Optionally filter by entityType, status, and/or date range "
-    "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates)."
+    "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
+    "Use compact=true to omit observations for a lightweight summary."
 )
 
 _db: DatabaseManager | None = None
@@ -213,6 +216,7 @@ def search_nodes(
     status: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    compact: bool = False,
 ) -> dict[str, object]:
     """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
     try:
@@ -225,6 +229,7 @@ def search_nodes(
             status=status,  # type: ignore[arg-type]
             start_date=start_date,
             end_date=end_date,
+            compact=compact,
         )
     except Exception as e:
         return {"error": str(e)}
@@ -234,11 +239,12 @@ def search_nodes(
 def read_graph(
     project: str,
     status: str | None = None,
+    compact: bool = False,
 ) -> dict[str, object]:
     """Return the most recent entities and their relations for a project."""
     try:
         db = _get_db()
-        return db.read_graph(project, status=status)  # type: ignore[arg-type,return-value]
+        return db.read_graph(project, status=status, compact=compact)  # type: ignore[arg-type,return-value]
     except Exception as e:
         return {"error": str(e)}
 
@@ -261,6 +267,7 @@ def search_all_projects(
     status: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    compact: bool = False,
 ) -> dict[str, object]:
     """Search entities across all projects, returning results grouped by project."""
     try:
@@ -273,6 +280,7 @@ def search_all_projects(
             status=status,  # type: ignore[arg-type]
             start_date=start_date,
             end_date=end_date,
+            compact=compact,
         )
 
         grouped: dict[str, dict[str, list[object]]] = {}

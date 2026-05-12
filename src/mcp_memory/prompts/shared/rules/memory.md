@@ -51,7 +51,7 @@ For ANY and EVERY task, you **MUST** follow ALL of these steps - no exceptions, 
 
 **CRITICAL: Do NOT respond to the user until ALL steps below are complete.** Skipping steps 3-5 defeats the purpose of having memory. `read_graph` alone is not enough - it only returns recent entities and misses deeper context.
 
-**NOTE:** For the cross-project task summary at session start, the `session-start` skill's `search_all_projects` calls are authoritative - not the steps below. The steps below are for finding context relevant to the user's specific request.
+**NOTE:** The session-start skill handles the cross-project task summary using `compact=true` calls. The steps below are for finding context relevant to the user's **specific request** once you know what they need - they are deeper, targeted lookups that happen after the lightweight session scan.
 
 1. **ALWAYS** use `read_graph(project="global")` first - this surfaces recent global entities. Never skip this step.
 2. **ALWAYS** use `read_graph(project="<repo-name>")` second - this surfaces recent project entities.
