@@ -142,6 +142,8 @@ Do NOT add observations that:
 
 When an entity exceeds ~30 observations, it's a signal to extract domain-specific knowledge into focused `pattern/` entities that are independently searchable.
 
+**CRITICAL: Never dump observations onto an unrelated entity for convenience.** Every observation must belong to the entity it describes. If no appropriate entity exists, create one. Misplaced observations destroy discoverability - the whole point of the graph.
+
 ## While working
 
 - **Update memory frequently** - after each meaningful step, not just at the end. Triggers include:
