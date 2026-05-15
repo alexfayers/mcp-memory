@@ -137,6 +137,7 @@ Use entity type to distinguish current facts from past actions:
   - Making a decision or trade-off
   - Receiving feedback or correction from the user
   - Learning new factual information from any source
+  - **User confirms an external state change** (e.g. "PR merged", "deployed", "ticket closed") - update the relevant entity IMMEDIATELY in the same response
 - **CRITICAL: Hook reminders appear as `<hook_context>` blocks in the environment details. When you see one, you MUST act on it in your NEXT tool call - before doing anything else. Do NOT defer, skip, or queue it for later.**
 - As you discover important facts (architecture decisions, API contracts, subtle bugs, performance findings, etc.), update memory with observations worth persisting.
 - Prefer small, precise observations over long narrative text.
