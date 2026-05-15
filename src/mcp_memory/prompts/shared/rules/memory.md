@@ -129,6 +129,19 @@ Use entity type to distinguish current facts from past actions:
 - Do not include rationale in the same observation as the fact - add a separate observation for "why"
 - **Never include dates or timestamps in observations** - entities already have automatic `created_at`/`updated_at` timestamps that track when observations were added
 
+### Observation hygiene - what NOT to store
+
+Do NOT add observations that:
+- **Duplicate steering rules or skill files** - these are always loaded into context; duplicating them in memory is pure waste
+- **Record session logs** ("Session 2026-05-13: did X then Y") - memory is for current-state facts, not changelogs
+- **Contain file paths in global scope** - paths belong on project entities in their own project scope
+- **Are ephemeral status** ("wthaz working on X as of today") - these rot immediately
+- **Describe implementation steps for resolved tasks** - once done, only the outcome matters (1-3 obs max)
+- **Reference specific commit SHAs** - git history is authoritative for this
+- **Describe tool-specific workarounds for tools no longer in use** - delete when obsolete
+
+When an entity exceeds ~30 observations, it's a signal to extract domain-specific knowledge into focused `pattern/` entities that are independently searchable.
+
 ## While working
 
 - **Update memory frequently** - after each meaningful step, not just at the end. Triggers include:
