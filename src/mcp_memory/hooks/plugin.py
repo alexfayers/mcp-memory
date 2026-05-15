@@ -76,11 +76,18 @@ class _ReminderChance:
         self.chance = 0.0
 
 
+def _extract_mcp_suffix(tool_name: str) -> str:
+    """Extract the bare tool name from a prefixed MCP tool call."""
+    if "__" in tool_name:
+        return tool_name.rsplit("__", 1)[-1]
+    return tool_name
+
+
 def _is_memory_write(tool_name: str, parameters: dict[str, object]) -> bool:
     """Check if a tool call is a memory write operation."""
     if tool_name == "use_mcp_tool":
         return str(parameters.get("tool_name", "")) in _MEMORY_WRITE_TOOL_NAMES
-    return tool_name in _MEMORY_WRITE_TOOL_NAMES
+    return _extract_mcp_suffix(tool_name) in _MEMORY_WRITE_TOOL_NAMES
 
 
 def _find_project_from_path(file_path: str) -> str | None:
