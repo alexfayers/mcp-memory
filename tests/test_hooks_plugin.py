@@ -10,8 +10,18 @@ import pytest
 from mcp_memory.hooks.plugin import (
     MemoryPlugin,
     _find_project_from_path,
+    _is_memory_read,
     _parse_mcp_arguments,
 )
+
+_READ_TOOL_NAMES = [
+    "search_nodes",
+    "read_graph",
+    "list_projects",
+    "search_all_projects",
+    "get_entity_with_relations",
+    "search_related_nodes",
+]
 
 
 class TestFindProjectFromPath:
@@ -448,3 +458,106 @@ class TestDerivesScopeFromWorkspaceRoots:
             workspace_roots=[str(repo_b)],
         )
         assert plugin._project_scope == "repo-a"
+
+
+class TestIsMemoryRead:
+    @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
+    def test_bare_name_is_read(self, name: str) -> None:
+        assert _is_memory_read(name, {})
+
+    @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
+    def test_prefixed_claude_code_name_is_read(self, name: str) -> None:
+        assert _is_memory_read(f"mcp__memory__{name}", {})
+
+    @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
+    def test_use_mcp_tool_form_is_read(self, name: str) -> None:
+        assert _is_memory_read("use_mcp_tool", {"tool_name": name})
+
+    def test_write_tool_is_not_read(self) -> None:
+        assert not _is_memory_read("mcp__memory__create_entities", {})
+        assert not _is_memory_read("use_mcp_tool", {"tool_name": "add_observations"})
+
+    def test_non_memory_tool_is_not_read(self) -> None:
+        assert not _is_memory_read("read_file", {})
+
+
+class TestMemoryReadsNotGated:
+    @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
+    def test_pre_tool_use_read_not_blocked(self, plugin: MemoryPlugin, name: str) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name=f"mcp__memory__{name}",
+                parameters={},
+            )
+        assert result is None
+
+    @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
+    def test_pre_tool_use_read_via_use_mcp_tool_not_blocked(
+        self, plugin: MemoryPlugin, name: str
+    ) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="use_mcp_tool",
+                parameters={"tool_name": name},
+            )
+        assert result is None
+
+    @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
+    def test_pre_mcp_tool_use_read_not_blocked(self, plugin: MemoryPlugin, name: str) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreMcpToolUse",
+                task_id="t1",
+                mcp_tool_name=name,
+            )
+        assert result is None
+
+    def test_non_memory_tool_still_blocked(self, plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+            )
+        assert result is not None
+        assert result.block is not None
+
+
+class TestMemoryReadsDoNotIncrement:
+    @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
+    def test_post_tool_use_read_does_not_increment(self, name: str) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset"),
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            plugin = MemoryPlugin()
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name=f"mcp__memory__{name}",
+                parameters={},
+                is_state_write=False,
+            )
+        mock_increment.assert_not_called()
+
+    def test_post_tool_use_non_memory_tool_increments(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset"),
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            plugin = MemoryPlugin()
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+                is_state_write=False,
+            )
+        mock_increment.assert_called_once_with("t1")

@@ -30,6 +30,17 @@ _MEMORY_WRITE_TOOL_NAMES = frozenset(
     }
 )
 
+_MEMORY_READ_TOOL_NAMES = frozenset(
+    {
+        "search_nodes",
+        "read_graph",
+        "list_projects",
+        "search_all_projects",
+        "get_entity_with_relations",
+        "search_related_nodes",
+    }
+)
+
 _MEMORY_REMINDER_TOOLS = frozenset(
     {
         "replace_in_file",
@@ -88,6 +99,13 @@ def _is_memory_write(tool_name: str, parameters: dict[str, object]) -> bool:
     if tool_name == "use_mcp_tool":
         return str(parameters.get("tool_name", "")) in _MEMORY_WRITE_TOOL_NAMES
     return _extract_mcp_suffix(tool_name) in _MEMORY_WRITE_TOOL_NAMES
+
+
+def _is_memory_read(tool_name: str, parameters: dict[str, object]) -> bool:
+    """Check if a tool call is a read-only memory operation."""
+    if tool_name == "use_mcp_tool":
+        return str(parameters.get("tool_name", "")) in _MEMORY_READ_TOOL_NAMES
+    return _extract_mcp_suffix(tool_name) in _MEMORY_READ_TOOL_NAMES
 
 
 def _find_project_from_path(file_path: str) -> str | None:
@@ -238,6 +256,8 @@ class MemoryPlugin(HooksPlugin):
         self._derive_scope_from_workspace_roots(kwargs)
         if _is_memory_write(tool_name, parameters):
             return self._check_memory_scope(task_id, tool_name, parameters)
+        if _is_memory_read(tool_name, parameters):
+            return None
         return _check_block(task_id, self._project_scope)
 
     def _on_pre_mcp_tool_use(self, **kwargs: object) -> HookResult | None:
@@ -250,6 +270,8 @@ class MemoryPlugin(HooksPlugin):
                 "arguments": mcp_arguments,
             }
             return self._check_memory_scope(task_id, "use_mcp_tool", params)
+        if mcp_tool_name in _MEMORY_READ_TOOL_NAMES:
+            return None
         return _check_block(task_id, self._project_scope)
 
     def _check_memory_scope(
@@ -281,6 +303,9 @@ class MemoryPlugin(HooksPlugin):
         if is_state_write:
             reset(task_id)
             self._reminder.reset()
+            return None
+
+        if _is_memory_read(tool_name, parameters):
             return None
 
         increment(task_id)
