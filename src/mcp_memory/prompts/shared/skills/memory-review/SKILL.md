@@ -7,7 +7,11 @@ description: Audit and clean up the memory graph - fix orphans, consolidate dupl
 
 Work through this checklist to audit and clean up the memory graph. Use the `/visualise` endpoint or `/api/graph` to inspect the graph visually.
 
-**Approach:** Use subagents aggressively. Each checklist step can be parallelised - fan out one agent per entity or per concern. Delete operations are independent and safe to run concurrently. After each round, re-read the graph and look for more issues until nothing remains.
+**Approach:** Use subagents for READ-ONLY auditing only - fan out one agent per scope or per concern to enumerate issues and propose fixes. Each returns a structured list of proposed ops; the MAIN THREAD executes all mutations (deletes, migrates, status changes) serially.
+
+**Do NOT let subagents mutate memory.** Subagent memory writes cause two failures seen in practice: (1) they create entities without the paired `create_relations`, producing orphans; (2) any write to satisfy the per-call memory gate lands as scratch in whatever scope is active, polluting the graph under review. Keep mutation in one place (the main thread) where each op is verified against a fresh live read first.
+
+**Verify before every destructive op.** `delete_observations` requires an EXACT string match - re-read the live entity and copy the exact text; paraphrased/truncated strings silently no-op. For `delete_entity`, confirm the entity is genuinely empty/scratch or that its content is preserved elsewhere before deleting. There is no delete-project/scope primitive, so empty "ghost" scopes cannot be removed - leave them.
 
 ## 1. Find orphans and naming violations
 
