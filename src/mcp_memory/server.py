@@ -84,6 +84,21 @@ SEARCH_RELATED_NODES_DESC = (
 )
 LIST_PROJECTS_DESC = "List all project names in the knowledge graph."
 
+SET_PROJECT_PATHS_DESC = (
+    "Register filesystem paths for a project. When the working directory falls under a "
+    "registered path, that project becomes the active memory scope. Replaces any paths "
+    "previously registered to the project. A path can belong to only one project."
+)
+GET_PROJECT_FOR_PATH_DESC = (
+    "Return the project whose registered path contains the given filesystem path, "
+    "or null if none match. The longest matching registered path wins."
+)
+LIST_PROJECT_PATHS_DESC = "List all registered (project, path) mappings in the knowledge graph."
+DELETE_PROJECT_DESC = (
+    "Delete an empty project and its registered paths. Refuses to delete the 'global' "
+    "project or any project that still has entities - delete those entities first."
+)
+
 SEARCH_ALL_PROJECTS_DESC = (
     "Search entities and relations across ALL projects in a single call. "
     "Returns results grouped by project name. "
@@ -255,6 +270,52 @@ def list_projects() -> dict[str, object]:
     try:
         db = _get_db()
         return {"projects": db.list_projects()}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=SET_PROJECT_PATHS_DESC)
+def set_project_paths(
+    project: str,
+    paths: list[str],
+) -> dict[str, object]:
+    """Register filesystem paths for a project, replacing any existing ones."""
+    try:
+        db = _get_db()
+        _ensure_project_root(db, project)
+        db.set_project_paths(project, paths)
+        return {"project": project, "paths": [path for _, path in db.list_project_paths(project)]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=GET_PROJECT_FOR_PATH_DESC)
+def get_project_for_path(path: str) -> dict[str, object]:
+    """Return the project associated with a filesystem path, or null."""
+    try:
+        db = _get_db()
+        return {"project": db.get_project_for_path(path)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=LIST_PROJECT_PATHS_DESC)
+def list_project_paths() -> dict[str, object]:
+    """List all registered project-path mappings."""
+    try:
+        db = _get_db()
+        return {"mappings": [{"project": n, "path": p} for n, p in db.list_project_paths()]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=DELETE_PROJECT_DESC)
+def delete_project(project: str) -> dict[str, str]:
+    """Delete an empty project and its registered paths."""
+    try:
+        db = _get_db()
+        db.delete_project(project)
+        return {"message": f"Deleted project '{project}'."}
     except Exception as e:
         return {"error": str(e)}
 

@@ -11,6 +11,7 @@ from typing import cast
 
 from .migrations.runner import run_migrations
 from .models import VALID_STATUSES, Entity, EntityStatus, Relation
+from .path_resolver import match_project_for_path, normalize_path
 
 _RECENCY_HALF_LIFE_DAYS = 30.0
 _RECENCY_FLOOR = 0.1
@@ -51,6 +52,64 @@ class DatabaseManager:
         """Return all project names from the database."""
         rows = self._db.execute("SELECT name FROM projects ORDER BY name").fetchall()
         return [row["name"] for row in rows]
+
+    def set_project_paths(self, project: str, paths: list[str]) -> None:
+        """Replace the filesystem paths registered to a project with the given list."""
+        if not project or not isinstance(project, str):
+            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
+        if not isinstance(paths, list):
+            raise TypeError(f"Paths must be a list, got: {paths!r}")
+
+        with self._db:
+            project_id = self._get_or_create_project_id(project)
+            self._db.execute("DELETE FROM project_paths WHERE project_id = ?", (project_id,))
+            for path in paths:
+                normalized = normalize_path(path)
+                try:
+                    self._db.execute(
+                        "INSERT INTO project_paths (project_id, path) VALUES (?, ?)",
+                        (project_id, normalized),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise ValueError(
+                        f"Path '{normalized}' is already registered to another project"
+                    ) from exc
+
+    def list_project_paths(self, project: str | None = None) -> list[tuple[str, str]]:
+        """Return (project_name, registered_path) mappings, optionally for one project."""
+        sql = "SELECT p.name, pp.path FROM project_paths pp JOIN projects p ON pp.project_id = p.id"
+        params: list[str] = []
+        if project is not None:
+            sql += " WHERE p.name = ?"
+            params.append(project)
+        rows = self._db.execute(sql, params).fetchall()
+        return [(row["name"], row["path"]) for row in rows]
+
+    def get_project_for_path(self, path: str) -> str | None:
+        """Return the project owning the longest registered path containing the given path."""
+        return match_project_for_path(path, self.list_project_paths())
+
+    def delete_project(self, project: str) -> None:
+        """Delete an empty project and its paths. Refuses global or non-empty projects."""
+        if project == "global":
+            raise ValueError("Cannot delete the 'global' project")
+        row = self._db.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
+        if row is None:
+            raise ValueError(f"Project '{project}' not found")
+        project_id = row["id"]
+
+        entity_count = self._db.execute(
+            "SELECT COUNT(*) AS n FROM entities WHERE project_id = ?", (project_id,)
+        ).fetchone()["n"]
+        if entity_count:
+            raise ValueError(
+                f"Cannot delete project '{project}': it has {entity_count} entit"
+                f"{'y' if entity_count == 1 else 'ies'}. Delete them first."
+            )
+
+        with self._db:
+            self._db.execute("DELETE FROM project_paths WHERE project_id = ?", (project_id,))
+            self._db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
     def _get_or_create_project_id(self, project: str) -> int:
         self._db.execute("INSERT OR IGNORE INTO projects (name) VALUES (?)", (project,))

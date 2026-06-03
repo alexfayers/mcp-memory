@@ -561,4 +561,18 @@ MIGRATIONS: list[Migration] = [
             END""",
         ],
     ),
+    Migration(
+        version=18,
+        statements=[
+            """CREATE TABLE IF NOT EXISTS project_paths (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                path TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(path),
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_project_paths_project_id ON project_paths(project_id)",
+        ],
+    ),
 ]

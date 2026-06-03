@@ -8,6 +8,7 @@ import pytest
 
 from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Entity, Relation
+from mcp_memory.path_resolver import normalize_path
 
 
 @pytest.fixture
@@ -58,6 +59,34 @@ class TestCreateEntities:
             )
 
 
+class TestDeleteProject:
+    def test_deletes_empty_project(self, db: DatabaseManager) -> None:
+        db.set_project_paths("doomed", [])
+        assert "doomed" in db.list_projects()
+        db.delete_project("doomed")
+        assert "doomed" not in db.list_projects()
+
+    def test_deletes_project_paths(self, db: DatabaseManager, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        db.set_project_paths("doomed", [str(repo)])
+        db.delete_project("doomed")
+        assert db.get_project_for_path(str(repo)) is None
+
+    def test_missing_project_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.delete_project("never-existed")
+
+    def test_non_empty_project_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("busy", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        with pytest.raises(ValueError, match="entit"):
+            db.delete_project("busy")
+
+    def test_refuses_global(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="global"):
+            db.delete_project("global")
+
+
 class TestProjectCaseInsensitivity:
     def test_project_names_are_case_insensitive(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -70,6 +99,70 @@ class TestProjectCaseInsensitivity:
         db.create_entities("Proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["b"]}])
         assert db.get_entity("PROJ", "e1").observations == ["b"]
+
+
+class TestMigrations:
+    def test_reopening_db_is_idempotent(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        first = DatabaseManager(db_path)
+        first.set_project_paths("platform", [str(repo)])
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        assert reopened.get_project_for_path(str(repo)) == "platform"
+        reopened.close()
+
+
+class TestProjectPaths:
+    def test_set_and_get_round_trip(self, db: DatabaseManager, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        db.set_project_paths("platform", [str(repo)])
+        assert db.get_project_for_path(str(repo / "src" / "x.py")) == "platform"
+
+    def test_set_normalises_stored_paths(self, db: DatabaseManager, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        db.set_project_paths("platform", [str(tmp_path / "repo" / "." / "")])
+        assert db.list_project_paths() == [("platform", normalize_path(str(repo)))]
+
+    def test_set_replaces_existing_paths(self, db: DatabaseManager, tmp_path: Path) -> None:
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        first.mkdir()
+        second.mkdir()
+        db.set_project_paths("platform", [str(first)])
+        db.set_project_paths("platform", [str(second)])
+        assert db.get_project_for_path(str(first)) is None
+        assert db.get_project_for_path(str(second)) == "platform"
+
+    def test_set_creates_project_row(self, db: DatabaseManager, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        db.set_project_paths("brand-new", [str(repo)])
+        assert "brand-new" in db.list_projects()
+
+    def test_path_owned_by_another_project_raises(
+        self, db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        db.set_project_paths("platform", [str(repo)])
+        with pytest.raises(ValueError, match="already registered"):
+            db.set_project_paths("other", [str(repo)])
+
+    def test_get_returns_none_when_unmatched(self, db: DatabaseManager, tmp_path: Path) -> None:
+        assert db.get_project_for_path(str(tmp_path / "nowhere")) is None
+
+    def test_empty_project_raises(self, db: DatabaseManager, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            db.set_project_paths("", [str(tmp_path)])
+
+    def test_non_list_paths_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(TypeError, match="list"):
+            db.set_project_paths("platform", "not-a-list")  # type: ignore[arg-type]
 
 
 class TestObservations:

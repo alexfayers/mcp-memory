@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from mcp_memory import server
 from mcp_memory.database import DatabaseManager
+from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _GLOBAL_PROJECT, _ensure_project_root, _validate_and_extract_relations
 
 
@@ -14,6 +16,16 @@ from mcp_memory.server import _GLOBAL_PROJECT, _ensure_project_root, _validate_a
 def db(tmp_path: Path) -> DatabaseManager:
     """Create a fresh database for each test."""
     return DatabaseManager(tmp_path / "test.db")
+
+
+@pytest.fixture
+def server_db(tmp_path: Path) -> DatabaseManager:
+    """Point the server's module-level db singleton at a fresh database."""
+    manager = DatabaseManager(tmp_path / "server.db")
+    original = server._db
+    server._db = manager
+    yield manager
+    server._db = original
 
 
 class TestEnsureProjectRoot:
@@ -174,3 +186,65 @@ class TestListProjects:
 
     def test_empty_database(self, db: DatabaseManager) -> None:
         assert db.list_projects() == []
+
+
+class TestProjectPathTools:
+    def test_set_project_paths_registers_and_creates_root(
+        self, server_db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        result = server.set_project_paths("platform", [str(repo)])
+        assert result["paths"]
+        assert server_db.get_entity("platform", "project/platform").entity_type == "project"
+
+    def test_set_project_paths_returns_only_own_paths(
+        self, server_db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo_a = tmp_path / "a"
+        repo_b = tmp_path / "b"
+        repo_a.mkdir()
+        repo_b.mkdir()
+        server.set_project_paths("first", [str(repo_a)])
+        result = server.set_project_paths("second", [str(repo_b)])
+        assert result["paths"] == [normalize_path(str(repo_b))]
+
+    def test_get_project_for_path_hit_and_miss(
+        self, server_db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        server.set_project_paths("platform", [str(repo)])
+        assert server.get_project_for_path(str(repo / "x.py")) == {"project": "platform"}
+        assert server.get_project_for_path(str(tmp_path / "other")) == {"project": None}
+
+    def test_list_project_paths_returns_mappings(
+        self, server_db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        server.set_project_paths("platform", [str(repo)])
+        mappings = server.list_project_paths()["mappings"]
+        assert mappings == [{"project": "platform", "path": normalize_path(str(repo))}]
+
+    def test_duplicate_path_returns_error(self, server_db: DatabaseManager, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        server.set_project_paths("platform", [str(repo)])
+        result = server.set_project_paths("other", [str(repo)])
+        assert "error" in result
+
+    def test_delete_project_removes_empty_scope(
+        self, server_db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        server.set_project_paths("doomed", [str(repo)])
+        server_db.delete_entity("doomed", "project/doomed")
+        assert server.delete_project("doomed") == {"message": "Deleted project 'doomed'."}
+        assert "doomed" not in server_db.list_projects()
+
+    def test_delete_project_non_empty_returns_error(self, server_db: DatabaseManager) -> None:
+        server.set_project_paths("busy", [])
+        result = server.delete_project("busy")
+        assert "error" in result

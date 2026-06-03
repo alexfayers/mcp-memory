@@ -17,6 +17,7 @@ from mcp_memory.hooks.tracker import (
     reset,
     should_block,
 )
+from mcp_memory.path_resolver import resolve_project_for_path
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(
     {
@@ -120,6 +121,11 @@ def _find_project_from_path(file_path: str) -> str | None:
     return None
 
 
+def _resolve_project(path: str) -> str | None:
+    """Resolve a path to a project, preferring registered paths over .git detection."""
+    return resolve_project_for_path(path) or _find_project_from_path(path)
+
+
 _SCOPE_MISMATCH_WARNING = (
     "WRONG SCOPE: You are writing to `{target}` but the current"
     ' workspace project is `{detected}`. Use `project="{detected}"`'
@@ -156,10 +162,16 @@ def _parse_mcp_arguments(
 
 def _workspace_entity_note(workspace_roots: list[str]) -> str | None:
     """Return the project memory entity note for the first workspace root."""
-    workspace_name = Path(workspace_roots[0]).name if workspace_roots else None
-    if workspace_name:
-        return f"The project memory entity for this workspace is `project/{workspace_name}`."
-    return None
+    if not workspace_roots:
+        return None
+    root = workspace_roots[0]
+    basename = Path(root).name
+    resolved = _resolve_project(root)
+    name = resolved or basename
+    note = f"The project memory entity for this workspace is `project/{name}`."
+    if resolved and resolved != basename:
+        note += f" (resolved from a registered path; folder is `{basename}`)"
+    return note
 
 
 def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
@@ -237,7 +249,7 @@ class MemoryPlugin(HooksPlugin):
         self._reminder.reset()
         if workspace_roots:
             self._project_scope = (
-                _find_project_from_path(workspace_roots[0]) or Path(workspace_roots[0]).name
+                _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
             )
         return HookResult(notes=_build_task_start_context(workspace_roots))
 
@@ -327,7 +339,7 @@ class MemoryPlugin(HooksPlugin):
         if self._project_scope != "unknown":
             return
         for root in _str_list(kwargs.get("workspace_roots", [])):
-            detected = _find_project_from_path(root)
+            detected = _resolve_project(root)
             if detected:
                 self._project_scope = detected
                 return
@@ -337,10 +349,12 @@ class MemoryPlugin(HooksPlugin):
         path_str = ""
         if tool_name in {"replace_in_file", "write_to_file", "read_file"}:
             path_str = str(parameters.get("path", ""))
+        elif tool_name in {"Edit", "Write", "Read", "NotebookEdit"}:
+            path_str = str(parameters.get("file_path", "") or parameters.get("notebook_path", ""))
         elif tool_name in {"execute_command", "execute_bash"}:
             path_str = str(parameters.get("working_dir", "") or parameters.get("cwd", ""))
 
         if path_str:
-            detected = _find_project_from_path(path_str)
+            detected = _resolve_project(path_str)
             if detected:
                 self._project_scope = detected

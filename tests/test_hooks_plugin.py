@@ -12,6 +12,7 @@ from mcp_memory.hooks.plugin import (
     _find_project_from_path,
     _is_memory_read,
     _parse_mcp_arguments,
+    _workspace_entity_note,
 )
 
 _READ_TOOL_NAMES = [
@@ -75,6 +76,7 @@ def plugin() -> MemoryPlugin:
         patch("mcp_memory.hooks.plugin.reset"),
         patch("mcp_memory.hooks.plugin.has_scope_blocked", side_effect=_has_blocked),
         patch("mcp_memory.hooks.plugin.mark_scope_blocked", side_effect=_mark_blocked),
+        patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value=None),
     ):
         yield MemoryPlugin()
 
@@ -113,6 +115,24 @@ class TestMemoryPluginScopeTracking:
             task_id="t1",
             tool_name="write_to_file",
             parameters={"path": str(repo_b / "src" / "file.py")},
+            is_state_write=False,
+        )
+        assert plugin._project_scope == "repo-b"
+
+    def test_post_tool_use_updates_scope_from_claude_code_file_path(
+        self, plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        repo_a = tmp_path / "repo-a"
+        repo_b = tmp_path / "repo-b"
+        (repo_a / ".git").mkdir(parents=True)
+        (repo_b / ".git").mkdir(parents=True)
+
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
+        plugin.on_hook(
+            "PostToolUse",
+            task_id="t1",
+            tool_name="Edit",
+            parameters={"file_path": str(repo_b / "src" / "file.py")},
             is_state_write=False,
         )
         assert plugin._project_scope == "repo-b"
@@ -188,6 +208,48 @@ class TestMemoryPluginMessages:
         assert result is not None
         assert len(result.notes) == 1
         assert "`cool-project`" in result.notes[0]
+
+
+class TestRegisteredPathResolution:
+    def test_task_start_prefers_registered_project(
+        self, plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "acme-service-infra"
+        (repo / ".git").mkdir(parents=True)
+        with patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value="platform"):
+            plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+        assert plugin._project_scope == "platform"
+
+    def test_update_from_parameters_uses_resolver(
+        self, plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "acme-service-infra"
+        (repo / ".git").mkdir(parents=True)
+        with patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value="platform"):
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="write_to_file",
+                parameters={"path": str(repo / "lib" / "x.ts")},
+                is_state_write=False,
+            )
+        assert plugin._project_scope == "platform"
+
+    def test_entity_note_signals_override_when_resolved_differs(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme-service-infra"
+        repo.mkdir()
+        with patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value="platform"):
+            note = _workspace_entity_note([str(repo)])
+        assert note is not None
+        assert "`project/platform`" in note
+        assert "acme-service-infra" in note
+
+    def test_entity_note_no_override_when_resolved_matches_basename(self, tmp_path: Path) -> None:
+        repo = tmp_path / "myrepo"
+        repo.mkdir()
+        with patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value="myrepo"):
+            note = _workspace_entity_note([str(repo)])
+        assert note == "The project memory entity for this workspace is `project/myrepo`."
 
 
 class TestParseMcpArguments:
