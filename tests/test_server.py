@@ -248,3 +248,27 @@ class TestProjectPathTools:
         server.set_project_paths("busy", [])
         result = server.delete_project("busy")
         assert "error" in result
+
+    def test_move_project_entities(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "src", [{"name": "e1", "entityType": "task", "observations": ["a"]}]
+        )
+        server_db.create_entities(
+            "dst", [{"name": "d0", "entityType": "task", "observations": ["x"]}]
+        )
+        assert server.move_project_entities("src", "dst") == {
+            "message": "Moved 1 entities from 'src' to 'dst'.",
+            "moved": 1,
+        }
+        assert server_db.get_entity("dst", "e1").observations == ["a"]
+
+    def test_move_project_entities_collision_returns_error(
+        self, server_db: DatabaseManager
+    ) -> None:
+        server_db.create_entities(
+            "src", [{"name": "dup", "entityType": "task", "observations": ["a"]}]
+        )
+        server_db.create_entities(
+            "dst", [{"name": "dup", "entityType": "task", "observations": ["b"]}]
+        )
+        assert "error" in server.move_project_entities("src", "dst")

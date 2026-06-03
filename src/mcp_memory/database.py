@@ -111,6 +111,68 @@ class DatabaseManager:
             self._db.execute("DELETE FROM project_paths WHERE project_id = ?", (project_id,))
             self._db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
+    def move_project_entities(self, source: str, target: str) -> int:
+        """Move all entities from one project scope into another, preserving relations.
+
+        Returns the number of entities moved. Raises if either project is missing or if
+        any entity name exists in both scopes.
+        """
+        source_row = self._db.execute(
+            "SELECT id FROM projects WHERE name = ?", (source,)
+        ).fetchone()
+        if source_row is None:
+            raise ValueError(f"Source project '{source}' not found")
+        source_id = source_row["id"]
+        target_id = self._get_or_create_project_id(target)
+
+        collisions = self._db.execute(
+            "SELECT s.name FROM entities s JOIN entities t "
+            "ON s.name = t.name AND t.project_id = ? WHERE s.project_id = ?",
+            (target_id, source_id),
+        ).fetchall()
+        if collisions:
+            names = ", ".join(row["name"] for row in collisions)
+            raise ValueError(f"Cannot move: name collision in target '{target}' for: {names}")
+
+        ids = [
+            row["id"]
+            for row in self._db.execute(
+                "SELECT id FROM entities WHERE project_id = ?", (source_id,)
+            ).fetchall()
+        ]
+        with self._db:
+            for entity_id in ids:
+                self._refresh_fts_for_entity(entity_id, delete=True)
+            self._db.execute(
+                "UPDATE entities SET project_id = ? WHERE project_id = ?", (target_id, source_id)
+            )
+            for entity_id in ids:
+                self._refresh_fts_for_entity(entity_id, delete=False)
+        return len(ids)
+
+    def _refresh_fts_for_entity(self, entity_id: int, delete: bool) -> None:
+        """Sync the FTS row for an entity after a project change (delete old, insert new)."""
+        if delete:
+            self._db.execute(
+                "INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, "
+                "project) SELECT 'delete', e.id, e.name, t.name, "
+                "COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE "
+                "entity_id = e.id), ''), p.name FROM entities e "
+                "JOIN entity_types t ON t.id = e.entity_type_id "
+                "JOIN projects p ON p.id = e.project_id WHERE e.id = ?",
+                (entity_id,),
+            )
+        else:
+            self._db.execute(
+                "INSERT INTO entities_fts(rowid, name, entity_type, observations, project) "
+                "SELECT e.id, e.name, t.name, "
+                "COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE "
+                "entity_id = e.id), ''), p.name FROM entities e "
+                "JOIN entity_types t ON t.id = e.entity_type_id "
+                "JOIN projects p ON p.id = e.project_id WHERE e.id = ?",
+                (entity_id,),
+            )
+
     def _get_or_create_project_id(self, project: str) -> int:
         self._db.execute("INSERT OR IGNORE INTO projects (name) VALUES (?)", (project,))
         row = self._db.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()

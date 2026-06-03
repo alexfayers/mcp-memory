@@ -98,6 +98,11 @@ DELETE_PROJECT_DESC = (
     "Delete an empty project and its registered paths. Refuses to delete the 'global' "
     "project or any project that still has entities - delete those entities first."
 )
+MOVE_PROJECT_ENTITIES_DESC = (
+    "Move all entities (with their observations and relations) from one project scope into "
+    "another. Useful for consolidating a mis-scoped folder-name project into its real project. "
+    "Fails if any entity name exists in both scopes."
+)
 
 SEARCH_ALL_PROJECTS_DESC = (
     "Search entities and relations across ALL projects in a single call. "
@@ -305,6 +310,17 @@ def list_project_paths() -> dict[str, object]:
     try:
         db = _get_db()
         return {"mappings": [{"project": n, "path": p} for n, p in db.list_project_paths()]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=MOVE_PROJECT_ENTITIES_DESC)
+def move_project_entities(source: str, target: str) -> dict[str, object]:
+    """Move all entities from one project scope into another."""
+    try:
+        db = _get_db()
+        moved = db.move_project_entities(source, target)
+        return {"message": f"Moved {moved} entities from '{source}' to '{target}'.", "moved": moved}
     except Exception as e:
         return {"error": str(e)}
 

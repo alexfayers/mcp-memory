@@ -59,6 +59,55 @@ class TestCreateEntities:
             )
 
 
+class TestMoveProjectEntities:
+    def test_moves_entities_to_target(self, db: DatabaseManager) -> None:
+        db.create_entities("src", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        db.create_entities("dst", [{"name": "d0", "entityType": "task", "observations": ["x"]}])
+        moved = db.move_project_entities("src", "dst")
+        assert moved == 1
+        assert db.get_entity("dst", "e1").observations == ["a"]
+
+    def test_preserves_relations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "src",
+            [
+                {"name": "a", "entityType": "task", "observations": ["a"]},
+                {"name": "b", "entityType": "feature", "observations": ["b"]},
+            ],
+        )
+        db.create_relations("src", [Relation(source="a", target="b", relation_type="implements")])
+        db.create_entities("dst", [{"name": "d0", "entityType": "task", "observations": ["x"]}])
+        db.move_project_entities("src", "dst")
+        result = db.get_entity_with_relations("dst", "a")
+        assert any(r.target == "b" for r in result["relations"])
+
+    def test_source_scope_emptied(self, db: DatabaseManager) -> None:
+        db.create_entities("src", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        db.create_entities("dst", [{"name": "d0", "entityType": "task", "observations": ["x"]}])
+        db.move_project_entities("src", "dst")
+        assert db.read_graph("src")["entities"] == []
+
+    def test_name_collision_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("src", [{"name": "dup", "entityType": "task", "observations": ["a"]}])
+        db.create_entities("dst", [{"name": "dup", "entityType": "task", "observations": ["b"]}])
+        with pytest.raises(ValueError, match="collision"):
+            db.move_project_entities("src", "dst")
+
+    def test_missing_source_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("dst", [{"name": "d0", "entityType": "task", "observations": ["x"]}])
+        with pytest.raises(ValueError, match="not found"):
+            db.move_project_entities("nope", "dst")
+
+    def test_moved_entities_are_searchable_in_target(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "src", [{"name": "findme", "entityType": "task", "observations": ["needle"]}]
+        )
+        db.create_entities("dst", [{"name": "d0", "entityType": "task", "observations": ["x"]}])
+        db.move_project_entities("src", "dst")
+        hits = db.search_nodes("dst", "needle")["entities"]
+        assert any(e.name == "findme" for e in hits)
+
+
 class TestDeleteProject:
     def test_deletes_empty_project(self, db: DatabaseManager) -> None:
         db.set_project_paths("doomed", [])
