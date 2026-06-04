@@ -68,11 +68,25 @@ mcp-memory uses HTTP transport, so it needs to run as a persistent background se
 # Install with defaults (port 8000, DB at ~/.local/share/mcp-memory/memory.db)
 mcp-memory setup-service
 
-# Custom port and DB path
-mcp-memory setup-service --port 3000 --db-path ~/.memory/memory.db
+# Custom port (DB stays at the default unless --db-path is given)
+mcp-memory setup-service --port 3000
 ```
 
 The command auto-detects the platform and generates the appropriate service config.
+
+#### Migrating an existing database to the default location
+
+The hook plugin and the server are separate processes, and the plugin does not inherit
+`MCP_MEMORY_DB_PATH`. If a service was set up with a custom `--db-path`, the two read different
+databases. To consolidate onto the default location and repoint the service:
+
+```bash
+mcp-memory migrate-db
+```
+
+It auto-detects the current path from the installed service, stops the service, moves the
+database (refusing to overwrite a non-empty target), and regenerates the service config at the
+default path. Pass `--source <path>` to override detection.
 
 #### macOS (launchd)
 

@@ -8,6 +8,11 @@ from pathlib import Path
 _DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
 
 
+def get_default_db_path() -> Path:
+    """Return the built-in default database path, ignoring any env override."""
+    return Path(_DEFAULT_DB_PATH).expanduser()
+
+
 def get_db_path() -> Path:
     """Return the resolved database file path."""
     return Path(os.environ.get("MCP_MEMORY_DB_PATH", _DEFAULT_DB_PATH)).expanduser()

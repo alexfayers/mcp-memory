@@ -12,25 +12,27 @@ import sys
 import textwrap
 from pathlib import Path
 
-from .config import get_db_path
+from .config import get_db_path, get_default_db_path
+from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
 
 _DEFAULT_PORT = "8000"
+_LAUNCHD_LABEL = "com.mcp-memory"
+_LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{_LAUNCHD_LABEL}.plist"
+_SYSTEMD_UNIT = Path("/etc/systemd/system/mcp-memory.service")
 
 
 def _detect_service_port() -> str:
     """Read the port from an installed service config, falling back to default."""
-    plist = Path.home() / "Library" / "LaunchAgents" / "com.mcp-memory.plist"
-    if plist.exists():
+    if _LAUNCHD_PLIST.exists():
         import re
 
-        content = plist.read_text(encoding="utf-8")
+        content = _LAUNCHD_PLIST.read_text(encoding="utf-8")
         match = re.search(r"<key>MCP_MEMORY_PORT</key>\s*<string>(\d+)</string>", content)
         if match:
             return match.group(1)
 
-    unit = Path("/etc/systemd/system/mcp-memory.service")
-    if unit.exists():
-        for line in unit.read_text(encoding="utf-8").splitlines():
+    if _SYSTEMD_UNIT.exists():
+        for line in _SYSTEMD_UNIT.read_text(encoding="utf-8").splitlines():
             if line.startswith("Environment=MCP_MEMORY_PORT="):
                 return line.split("=", 2)[2]
 
@@ -48,8 +50,8 @@ def _find_binary() -> str:
 
 def _setup_launchd(binary: str, port: str, db_path: Path) -> None:
     """Generate and install a macOS launchd plist."""
-    label = "com.mcp-memory"
-    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+    label = _LAUNCHD_LABEL
+    plist_path = _LAUNCHD_PLIST
     log_path = db_path.parent / "mcp-memory.log"
 
     plist_path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,6 +169,63 @@ def _cmd_setup_service(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     print(f"Server running on http://localhost:{port}/mcp")
+
+
+def _detect_service_db_path() -> str | None:
+    """Read the configured DB path from an installed service config, if any."""
+    if _LAUNCHD_PLIST.exists():
+        return parse_db_path_from_plist(_LAUNCHD_PLIST.read_text(encoding="utf-8"))
+    if _SYSTEMD_UNIT.exists():
+        return parse_db_path_from_systemd(_SYSTEMD_UNIT.read_text(encoding="utf-8"))
+    return None
+
+
+def _stop_service() -> bool:
+    """Stop the running service if installed. Returns True if a service was found."""
+    system = platform.system()
+    if system == "Darwin" and _LAUNCHD_PLIST.exists():
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{os.getuid()}", str(_LAUNCHD_PLIST)],
+            capture_output=True,
+            check=False,
+        )
+        return True
+    if system == "Linux" and _SYSTEMD_UNIT.exists():
+        subprocess.run(["sudo", "systemctl", "stop", "mcp-memory.service"], check=False)
+        return True
+    return False
+
+
+def _cmd_migrate_db(args: argparse.Namespace) -> None:
+    """Move the database to the default location and repoint the service at it."""
+    target = get_default_db_path()
+    source = Path(args.source).expanduser() if args.source else None
+    if source is None:
+        detected = _detect_service_db_path()
+        source = Path(detected).expanduser() if detected else get_db_path()
+
+    source = source.resolve()
+    if source == target.resolve():
+        print(f"Database already at the default location: {target}")
+        return
+    if not source.exists():
+        print(f"Error: source database not found: {source}", file=sys.stderr)
+        sys.exit(1)
+
+    had_service = _stop_service()
+    try:
+        moved = relocate_db(source, target)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Moved {moved} entities: {source} -> {target}")
+
+    if had_service:
+        port = _detect_service_port()
+        _cmd_setup_service(argparse.Namespace(port=port, db_path=str(target)))
+        print("Service repointed at the default database location.")
+    else:
+        print("No installed service found; start the server to use the migrated database.")
 
 
 def _cmd_install_kiro(args: argparse.Namespace) -> None:
@@ -287,6 +346,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Database path (default: ~/.local/share/mcp-memory/memory.db, or MCP_MEMORY_DB_PATH)",
     )
 
+    migrate = sub.add_parser(
+        "migrate-db",
+        help="Move the database to the default location and repoint the service",
+    )
+    migrate.add_argument(
+        "--source",
+        default=None,
+        help="Source database path (default: auto-detected from the installed service)",
+    )
+
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument("target", choices=["kiro", "claude-code"], help="Agent to install for.")
     install.add_argument(
@@ -310,6 +379,8 @@ def main() -> None:
 
     if args.command == "setup-service":
         _cmd_setup_service(args)
+    elif args.command == "migrate-db":
+        _cmd_migrate_db(args)
     elif args.command == "install":
         if args.target == "claude-code":
             _cmd_install_claude_code()
