@@ -53,11 +53,30 @@ class TestValidateEntityTypes:
                 [{"name": "x", "entityType": "changelog", "observations": []}]
             )
 
-    def test_accepts_valid_type(self) -> None:
+    def test_accepts_user_preferences_without_relation(self) -> None:
         result = _validate_and_extract_relations(
-            [{"name": "x", "entityType": "pattern", "observations": []}]
+            [{"name": "x", "entityType": "user-preferences", "observations": []}]
         )
         assert result == []
+
+    def test_pattern_requires_relation(self) -> None:
+        with pytest.raises(ValueError, match="requires at least one relation"):
+            _validate_and_extract_relations(
+                [{"name": "x", "entityType": "pattern", "observations": []}]
+            )
+
+    def test_pattern_with_relation_accepted(self) -> None:
+        result = _validate_and_extract_relations(
+            [
+                {
+                    "name": "pattern/x",
+                    "entityType": "pattern",
+                    "observations": [],
+                    "relations": [{"target": "project/foo", "type": "used-in"}],
+                }
+            ]
+        )
+        assert len(result) == 1
 
 
 class TestScopeUniqueness:

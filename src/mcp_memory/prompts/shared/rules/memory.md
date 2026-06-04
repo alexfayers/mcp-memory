@@ -109,14 +109,15 @@ Memory is a graph database - use `get_entity_with_relations` to traverse linked 
 
 **CRITICAL: You MUST call `create_relations` whenever you call `create_entities`.** Relations are the core of the graph model - entities without relations are nearly useless. Always link new entities to existing ones.
 
-Every entity MUST have at least one relation, except `user-preferences` and `pattern` entities which are global singletons not tied to a specific project.
+Every entity MUST have at least one relation, except `user-preferences` (a global singleton) and `project` root entities. This includes `pattern` entities: a pattern MUST link to what it applies to. The server now rejects any non-exempt entity created without a relation, so always create the relation in the same `create_entities` call (inline `relations`) or immediately after.
 
 Use relations to link related entities, e.g.:
 - task `implements` feature (every task should link to the feature(s) it modifies)
 - task `depends-on` task
 - task `relates-to` task
 - feature `belongs-to` project
-- pattern `used-in` project
+- pattern `used-in` project (project-specific pattern)
+- pattern `used-by` user-preferences/<alias>-workflow (cross-project/global pattern)
 
 Prefer specific relation types (`implements`, `depends-on`) over generic ones (`relates-to`). A rich graph with meaningful edges is far more useful than a star graph where everything just points at the project root.
 
