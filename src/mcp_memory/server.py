@@ -46,6 +46,8 @@ SEARCH_NODES_DESC = (
     "Search entities and relations by text query within a project. "
     "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency "
     "(newer entities rank higher). "
+    "A multi-word query matches entities containing ANY of the terms by default, with "
+    "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "
     "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
     "Use compact=true to omit observations for a lightweight summary."
@@ -95,6 +97,17 @@ GET_PROJECT_FOR_PATH_DESC = (
     "or null if none match. The longest matching registered path wins."
 )
 LIST_PROJECT_PATHS_DESC = "List all registered (project, path) mappings in the knowledge graph."
+GET_PATHS_FOR_PROJECT_DESC = (
+    "Return the filesystem path(s) registered to a project, or an empty list if the project "
+    "is unknown or has no registered paths. Read-only: does not create the project."
+)
+GET_PATHS_FOR_ENTITY_DESC = (
+    "Find which project(s) contain an entity with the given name and return their registered "
+    "filesystem paths, grouped by project. Entity names are unique only within a project, so "
+    "the same name may appear in several projects. A matching project with no registered path "
+    "is still listed (with an empty paths list). Returns an empty matches list if no entity "
+    "has that name."
+)
 DELETE_PROJECT_DESC = (
     "Delete an empty project and its registered paths. Refuses to delete the 'global' "
     "project or any project that still has entities - delete those entities first."
@@ -109,6 +122,8 @@ SEARCH_ALL_PROJECTS_DESC = (
     "Search entities and relations across ALL projects in a single call. "
     "Returns results grouped by project name. "
     "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency. "
+    "A multi-word query matches entities containing ANY of the terms by default, with "
+    "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "
     "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
     "Use compact=true to omit observations for a lightweight summary."
@@ -238,6 +253,7 @@ def search_nodes(
     start_date: str | None = None,
     end_date: str | None = None,
     compact: bool = False,
+    match_all: bool = False,
 ) -> dict[str, object]:
     """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
     try:
@@ -251,6 +267,7 @@ def search_nodes(
             start_date=start_date,
             end_date=end_date,
             compact=compact,
+            match_all=match_all,
         )
     except Exception as e:
         return {"error": str(e)}
@@ -290,7 +307,7 @@ def set_project_paths(
         db = _get_db()
         _ensure_project_root(db, project)
         db.set_project_paths(project, paths)
-        return {"project": project, "paths": [path for _, path in db.list_project_paths(project)]}
+        return {"project": project, "paths": db.get_paths_for_project(project)}
     except Exception as e:
         return {"error": str(e)}
 
@@ -311,6 +328,31 @@ def list_project_paths() -> dict[str, object]:
     try:
         db = _get_db()
         return {"mappings": [{"project": n, "path": p} for n, p in db.list_project_paths()]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=GET_PATHS_FOR_PROJECT_DESC)
+def get_paths_for_project(project: str) -> dict[str, object]:
+    """Return the registered filesystem path(s) for a project."""
+    try:
+        db = _get_db()
+        return {"paths": db.get_paths_for_project(project)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=GET_PATHS_FOR_ENTITY_DESC)
+def get_paths_for_entity(name: str) -> dict[str, object]:
+    """Return the project(s) and registered path(s) for an entity name."""
+    try:
+        db = _get_db()
+        return {
+            "matches": [
+                {"project": project, "paths": paths}
+                for project, paths in db.paths_for_entity_name(name)
+            ]
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -346,6 +388,7 @@ def search_all_projects(
     start_date: str | None = None,
     end_date: str | None = None,
     compact: bool = False,
+    match_all: bool = False,
 ) -> dict[str, object]:
     """Search entities across all projects, returning results grouped by project."""
     try:
@@ -359,6 +402,7 @@ def search_all_projects(
             start_date=start_date,
             end_date=end_date,
             compact=compact,
+            match_all=match_all,
         )
 
         grouped: dict[str, dict[str, list[object]]] = {}

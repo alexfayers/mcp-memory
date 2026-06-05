@@ -89,6 +89,33 @@ class DatabaseManager:
         """Return the project owning the longest registered path containing the given path."""
         return match_project_for_path(path, self.list_project_paths())
 
+    def get_paths_for_project(self, project: str) -> list[str]:
+        """Return the filesystem paths registered to a project, empty if none or unknown."""
+        return [path for _, path in self.list_project_paths(project)]
+
+    def paths_for_entity_name(self, name: str) -> list[tuple[str, list[str]]]:
+        """Return (project, registered_paths) for every project containing the entity name.
+
+        Entity names are unique only within a project, so the same name may appear in
+        several projects. A matching project with no registered path is included with an
+        empty path list, so an empty result unambiguously means no such entity exists.
+        """
+        rows = self._db.execute(
+            "SELECT p.name AS project_name, pp.path AS path "
+            "FROM entities e "
+            "JOIN projects p ON e.project_id = p.id "
+            "LEFT JOIN project_paths pp ON pp.project_id = p.id "
+            "WHERE e.name = ? "
+            "ORDER BY p.name, pp.path",
+            (name,),
+        ).fetchall()
+        grouped: dict[str, list[str]] = {}
+        for row in rows:
+            paths = grouped.setdefault(row["project_name"], [])
+            if row["path"] is not None:
+                paths.append(row["path"])
+        return list(grouped.items())
+
     def delete_project(self, project: str) -> None:
         """Delete an empty project and its paths. Refuses global or non-empty projects."""
         if project == "global":
@@ -239,12 +266,21 @@ class DatabaseManager:
             ),
         )
 
-    def _sanitize_fts_query(self, query: str) -> str:
-        """Escape and quote tokens for FTS5 MATCH."""
-        tokens = query.split()
-        return " ".join(
-            f'"{token.replace(chr(34), chr(34) + chr(34))}"' for token in tokens if token
-        )
+    def _sanitize_fts_query(self, query: str, match_all: bool = False) -> str:
+        """Escape and quote tokens for an FTS5 MATCH expression.
+
+        Args:
+            query: Raw query string, split into whitespace-separated tokens.
+            match_all: Join tokens with implicit AND when True, otherwise OR.
+
+        Returns:
+            A quoted FTS5 MATCH string, or an empty string when no tokens remain.
+        """
+        tokens = [
+            f'"{token.replace(chr(34), chr(34) + chr(34))}"' for token in query.split() if token
+        ]
+        separator = " " if match_all else " OR "
+        return separator.join(tokens)
 
     def _get_relations_for_entities(self, project_id: int, entity_ids: list[int]) -> list[Relation]:
         if not entity_ids:
@@ -559,9 +595,13 @@ class DatabaseManager:
         start_date: str | None = None,
         end_date: str | None = None,
         compact: bool = False,
+        match_all: bool = False,
     ) -> dict[str, list[Entity] | list[Relation]]:
-        """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
-        sanitized = self._sanitize_fts_query(query)
+        """Search entities using FTS5 full-text search with recency-weighted BM25 ranking.
+
+        Multi-term queries match any term by default; pass match_all to require all terms.
+        """
+        sanitized = self._sanitize_fts_query(query, match_all=match_all)
         if not sanitized:
             return {"entities": [], "relations": []}
 

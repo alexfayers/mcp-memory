@@ -143,7 +143,7 @@ Delete specific observations from an existing entity by exact content match. Ret
 
 ### search_nodes
 
-FTS5 full-text search with recency-weighted BM25 ranking. Optional `entity_type`, `status`, and time-range (`start_date`/`end_date`) filters. Date params support relative formats (`7d`, `2w`, `3m`) and ISO dates.
+FTS5 full-text search with recency-weighted BM25 ranking. Multi-word queries match entities containing *any* of the terms by default (entities matching more terms rank first); pass `match_all=true` to require *all* terms. Optional `entity_type`, `status`, and time-range (`start_date`/`end_date`) filters. Date params support relative formats (`7d`, `2w`, `3m`) and ISO dates.
 
 ### read_graph
 
@@ -179,7 +179,15 @@ List all project names in the knowledge graph. Takes no parameters.
 
 ### search_all_projects
 
-Search entities across all projects in a single call. Returns results grouped by project name. Same FTS5 search and filters as `search_nodes` but without the `project` parameter.
+Search entities across all projects in a single call. Returns results grouped by project name. Same FTS5 search and filters as `search_nodes` (including `match_all`) but without the `project` parameter.
+
+### get_paths_for_project
+
+Return the filesystem path(s) registered to a project, or an empty list if the project is unknown or has no registered paths. Read-only - does not create the project.
+
+### get_paths_for_entity
+
+Find which project(s) contain an entity with the given name and return their registered filesystem paths, grouped by project. Entity names are unique only within a project, so the same name may appear in several projects; a matching project with no registered path is still listed with an empty paths list. Returns an empty `matches` list if no entity has that name.
 
 ## Development
 

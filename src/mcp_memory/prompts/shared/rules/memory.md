@@ -72,6 +72,8 @@ For ANY and EVERY task, you **MUST** follow ALL of these steps - no exceptions, 
     - Briefly summarize what is already known before making a plan.
     - Highlight prior decisions, constraints, and pitfalls.
 
+**Searching effectively.** `search_nodes` and `search_all_projects` match **any** of a multi-word query's terms by default (OR), ranking entities that match more terms first - so a multi-keyword query is fine and returns the best matches at the top. Pass `match_all=true` only when you need *every* term present (strict AND). Hyphenated terms (e.g. `auth-service`) are treated as a single adjacent-token phrase and will not match compound words like `authservice`, so prefer the bare keywords (`auth service`). If a search returns nothing, retry with fewer/shorter or differently-spelled keywords before concluding the memory does not exist.
+
 ## Entity and observation standards
 
 Use consistent naming and entity types to maximize discoverability:

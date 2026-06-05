@@ -291,3 +291,59 @@ class TestProjectPathTools:
             "dst", [{"name": "dup", "entityType": "task", "observations": ["b"]}]
         )
         assert "error" in server.move_project_entities("src", "dst")
+
+    def test_get_paths_for_project_hit_and_miss(
+        self, server_db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        server.set_project_paths("platform", [str(repo)])
+        assert server.get_paths_for_project("platform") == {"paths": [normalize_path(str(repo))]}
+        assert server.get_paths_for_project("ghost") == {"paths": []}
+
+    def test_get_paths_for_entity_groups_by_project(
+        self, server_db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        server_db.create_entities(
+            "platform", [{"name": "shared", "entityType": "task", "observations": ["o"]}]
+        )
+        server.set_project_paths("platform", [str(repo)])
+        assert server.get_paths_for_entity("shared") == {
+            "matches": [{"project": "platform", "paths": [normalize_path(str(repo))]}]
+        }
+
+    def test_get_paths_for_entity_missing_returns_empty_matches(
+        self, server_db: DatabaseManager
+    ) -> None:
+        assert server.get_paths_for_entity("nope") == {"matches": []}
+
+
+class TestSearchTools:
+    def test_search_nodes_match_all_narrows_results(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["alpha only"]},
+                {"name": "both", "entityType": "task", "observations": ["alpha beta"]},
+            ],
+        )
+        default = server.search_nodes("proj", "alpha beta")
+        strict = server.search_nodes("proj", "alpha beta", match_all=True)
+        assert {e.name for e in default["entities"]} == {"a", "both"}
+        assert {e.name for e in strict["entities"]} == {"both"}
+
+    def test_search_all_projects_match_all_narrows_results(
+        self, server_db: DatabaseManager
+    ) -> None:
+        server_db.create_entities(
+            "p1", [{"name": "a", "entityType": "task", "observations": ["alpha only"]}]
+        )
+        server_db.create_entities(
+            "p2", [{"name": "both", "entityType": "task", "observations": ["alpha beta"]}]
+        )
+        default = server.search_all_projects("alpha beta")["results"]
+        strict = server.search_all_projects("alpha beta", match_all=True)["results"]
+        assert set(default) == {"p1", "p2"}
+        assert set(strict) == {"p2"}

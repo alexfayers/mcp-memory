@@ -213,6 +213,65 @@ class TestProjectPaths:
         with pytest.raises(TypeError, match="list"):
             db.set_project_paths("platform", "not-a-list")  # type: ignore[arg-type]
 
+    def test_get_paths_for_project_returns_registered_paths(
+        self, db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        first.mkdir()
+        second.mkdir()
+        db.set_project_paths("platform", [str(first), str(second)])
+        assert db.get_paths_for_project("platform") == [
+            normalize_path(str(first)),
+            normalize_path(str(second)),
+        ]
+
+    def test_get_paths_for_unknown_project_returns_empty_without_creating(
+        self, db: DatabaseManager
+    ) -> None:
+        assert db.get_paths_for_project("ghost") == []
+        assert "ghost" not in db.list_projects()
+
+    def test_paths_for_entity_name_single_project(
+        self, db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        db.create_entities(
+            "platform", [{"name": "task/x", "entityType": "task", "observations": ["o"]}]
+        )
+        db.set_project_paths("platform", [str(repo)])
+        assert db.paths_for_entity_name("task/x") == [("platform", [normalize_path(str(repo))])]
+
+    def test_paths_for_entity_name_groups_by_project(
+        self, db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        first.mkdir()
+        second.mkdir()
+        db.create_entities(
+            "alpha", [{"name": "shared", "entityType": "task", "observations": ["o"]}]
+        )
+        db.create_entities(
+            "beta", [{"name": "shared", "entityType": "task", "observations": ["o"]}]
+        )
+        db.set_project_paths("alpha", [str(first)])
+        db.set_project_paths("beta", [str(second)])
+        assert db.paths_for_entity_name("shared") == [
+            ("alpha", [normalize_path(str(first))]),
+            ("beta", [normalize_path(str(second))]),
+        ]
+
+    def test_paths_for_entity_name_includes_pathless_project(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "platform", [{"name": "task/x", "entityType": "task", "observations": ["o"]}]
+        )
+        assert db.paths_for_entity_name("task/x") == [("platform", [])]
+
+    def test_paths_for_entity_name_missing_entity_returns_empty(self, db: DatabaseManager) -> None:
+        assert db.paths_for_entity_name("nope") == []
+
 
 class TestObservations:
     def test_add_observations(self, db: DatabaseManager) -> None:
@@ -474,6 +533,50 @@ class TestSearchNodes:
         )
         result = db.search_nodes("proj", "myrepo")
         assert len(result["entities"]) == 1
+
+    def test_multi_term_query_matches_any_term_by_default(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["alpha only"]},
+                {"name": "b", "entityType": "task", "observations": ["beta only"]},
+                {"name": "c", "entityType": "task", "observations": ["unrelated"]},
+            ],
+        )
+        result = db.search_nodes("proj", "alpha beta")
+        assert {e.name for e in result["entities"]} == {"a", "b"}
+
+    def test_match_all_requires_every_term(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["alpha only"]},
+                {"name": "both", "entityType": "task", "observations": ["alpha and beta"]},
+            ],
+        )
+        result = db.search_nodes("proj", "alpha beta", match_all=True)
+        assert {e.name for e in result["entities"]} == {"both"}
+
+    def test_or_query_ranks_all_term_matches_first(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "partial", "entityType": "task", "observations": ["alpha only"]},
+                {"name": "full", "entityType": "task", "observations": ["alpha beta"]},
+            ],
+        )
+        result = db.search_nodes("proj", "alpha beta")
+        assert [e.name for e in result["entities"]] == ["full", "partial"]
+
+    def test_single_term_query_unaffected_by_match_all(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "a", "entityType": "task", "observations": ["keyword"]}],
+        )
+        default = db.search_nodes("proj", "keyword")
+        strict = db.search_nodes("proj", "keyword", match_all=True)
+        assert [e.name for e in default["entities"]] == ["a"]
+        assert [e.name for e in strict["entities"]] == ["a"]
 
     def test_fts_search_with_entity_type_filter(self, db: DatabaseManager) -> None:
         db.create_entities(
