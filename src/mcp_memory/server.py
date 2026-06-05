@@ -2,15 +2,41 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
 import os
-from typing import cast
+from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
 
 from mcp.server.fastmcp import FastMCP
 
+from .activity import record_tool
 from .config import get_db_path
 from .database import DatabaseManager
 from .models import Entity, Relation
 from .visualise import register_visualise_routes
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _track(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Record each tool call's activity without altering its behaviour or schema."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        result = fn(*args, **kwargs)
+        try:
+            bound = inspect.signature(fn).bind_partial(*args, **kwargs)
+            record_tool(fn.__name__, dict(bound.arguments), result)
+        except Exception:  # noqa: S110 - instrumentation must never break a tool call
+            pass
+        return result
+
+    return wrapper
+
 
 mcp = FastMCP(
     "mcp-memory",
@@ -208,6 +234,7 @@ def _validate_and_extract_relations(
 
 
 @mcp.tool(description=CREATE_ENTITIES_DESC)
+@_track
 def create_entities(
     project: str,
     entities: list[dict[str, str | list[str] | list[dict[str, str]] | None]],
@@ -244,6 +271,7 @@ def create_entities(
 
 
 @mcp.tool(description=SEARCH_NODES_DESC)
+@_track
 def search_nodes(
     project: str,
     query: str,
@@ -274,6 +302,7 @@ def search_nodes(
 
 
 @mcp.tool(description=READ_GRAPH_DESC)
+@_track
 def read_graph(
     project: str,
     status: str | None = None,
@@ -288,6 +317,7 @@ def read_graph(
 
 
 @mcp.tool(description=LIST_PROJECTS_DESC)
+@_track
 def list_projects() -> dict[str, object]:
     """List all project names in the knowledge graph."""
     try:
@@ -298,6 +328,7 @@ def list_projects() -> dict[str, object]:
 
 
 @mcp.tool(description=SET_PROJECT_PATHS_DESC)
+@_track
 def set_project_paths(
     project: str,
     paths: list[str],
@@ -313,6 +344,7 @@ def set_project_paths(
 
 
 @mcp.tool(description=GET_PROJECT_FOR_PATH_DESC)
+@_track
 def get_project_for_path(path: str) -> dict[str, object]:
     """Return the project associated with a filesystem path, or null."""
     try:
@@ -323,6 +355,7 @@ def get_project_for_path(path: str) -> dict[str, object]:
 
 
 @mcp.tool(description=LIST_PROJECT_PATHS_DESC)
+@_track
 def list_project_paths() -> dict[str, object]:
     """List all registered project-path mappings."""
     try:
@@ -333,6 +366,7 @@ def list_project_paths() -> dict[str, object]:
 
 
 @mcp.tool(description=GET_PATHS_FOR_PROJECT_DESC)
+@_track
 def get_paths_for_project(project: str) -> dict[str, object]:
     """Return the registered filesystem path(s) for a project."""
     try:
@@ -343,6 +377,7 @@ def get_paths_for_project(project: str) -> dict[str, object]:
 
 
 @mcp.tool(description=GET_PATHS_FOR_ENTITY_DESC)
+@_track
 def get_paths_for_entity(name: str) -> dict[str, object]:
     """Return the project(s) and registered path(s) for an entity name."""
     try:
@@ -358,6 +393,7 @@ def get_paths_for_entity(name: str) -> dict[str, object]:
 
 
 @mcp.tool(description=MOVE_PROJECT_ENTITIES_DESC)
+@_track
 def move_project_entities(source: str, target: str) -> dict[str, object]:
     """Move all entities from one project scope into another."""
     try:
@@ -369,6 +405,7 @@ def move_project_entities(source: str, target: str) -> dict[str, object]:
 
 
 @mcp.tool(description=DELETE_PROJECT_DESC)
+@_track
 def delete_project(project: str) -> dict[str, str]:
     """Delete an empty project and its registered paths."""
     try:
@@ -380,6 +417,7 @@ def delete_project(project: str) -> dict[str, str]:
 
 
 @mcp.tool(description=SEARCH_ALL_PROJECTS_DESC)
+@_track
 def search_all_projects(
     query: str,
     limit: int = 50,
@@ -427,6 +465,7 @@ def search_all_projects(
 
 
 @mcp.tool(description=CREATE_RELATIONS_DESC)
+@_track
 def create_relations(
     project: str,
     relations: list[dict[str, str]],
@@ -449,6 +488,7 @@ def create_relations(
 
 
 @mcp.tool(description=DELETE_ENTITY_DESC)
+@_track
 def delete_entity(
     project: str,
     name: str,
@@ -463,6 +503,7 @@ def delete_entity(
 
 
 @mcp.tool(description=DELETE_RELATION_DESC)
+@_track
 def delete_relation(
     project: str,
     source: str,
@@ -483,6 +524,7 @@ def delete_relation(
 
 
 @mcp.tool(description=GET_ENTITY_WITH_RELATIONS_DESC)
+@_track
 def get_entity_with_relations(
     project: str,
     name: str,
@@ -496,6 +538,7 @@ def get_entity_with_relations(
 
 
 @mcp.tool(description=ADD_OBSERVATIONS_DESC)
+@_track
 def add_observations(
     project: str,
     entityName: str,
@@ -511,6 +554,7 @@ def add_observations(
 
 
 @mcp.tool(description=DELETE_OBSERVATIONS_DESC)
+@_track
 def delete_observations(
     project: str,
     entityName: str,
@@ -526,6 +570,7 @@ def delete_observations(
 
 
 @mcp.tool(description=SET_ENTITY_STATUS_DESC)
+@_track
 def set_entity_status(
     project: str,
     name: str,
@@ -541,6 +586,7 @@ def set_entity_status(
 
 
 @mcp.tool(description=SEARCH_RELATED_NODES_DESC)
+@_track
 def search_related_nodes(
     project: str,
     name: str,
