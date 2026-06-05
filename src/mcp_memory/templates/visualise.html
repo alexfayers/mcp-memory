@@ -30,6 +30,29 @@ svg { width: 100vw; height: 100vh; }
 #legend .row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
 #legend .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 #legend .section { margin-top: 8px; }
+@keyframes glowpulse {
+  0%   { filter: drop-shadow(0 0 1px var(--glow)); }
+  30%  { filter: drop-shadow(0 0 11px var(--glow)) drop-shadow(0 0 5px var(--glow)); }
+  100% { filter: drop-shadow(0 0 0 transparent); }
+}
+@keyframes feedin { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+.node.activity circle { animation: glowpulse 1.5s ease-out; }
+.ripple { fill: none; pointer-events: none; }
+#activity { position: fixed; top: 54px; left: 12px; z-index: 10; width: 320px; max-width: 40vw;
+  background: rgba(22,27,34,0.82); border: 1px solid #30363d; border-radius: 6px;
+  backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
+#activity-head { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
+#activity-head .pulse { width: 7px; height: 7px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 6px #3fb950; flex-shrink: 0; animation: glowpulse 1.6s ease-in-out infinite; --glow: #3fb950; }
+#activity-head .tally { display: flex; gap: 9px; margin-left: auto; }
+#activity-head .tally span { display: flex; align-items: center; gap: 3px; color: #8b949e; font-variant-numeric: tabular-nums; }
+#activity-head .tally i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+#feed { max-height: 34vh; overflow-y: auto; }
+#feed:empty::after { content: "waiting for memory activity..."; display: block; padding: 8px 12px; color: #484f58; font-style: italic; }
+#feed .ev { display: flex; gap: 6px; align-items: baseline; padding: 4px 12px; border-left: 3px solid var(--c); animation: feedin 0.3s ease-out; }
+#feed .ev .t { color: #484f58; font-variant-numeric: tabular-nums; }
+#feed .ev .k { text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px; color: var(--c); flex-shrink: 0; }
+#feed .ev .n { color: #c9d1d9; word-break: break-all; flex: 1; }
+#feed .ev .tool { color: #484f58; }
 </style>
 </head>
 <body>
@@ -39,12 +62,23 @@ svg { width: 100vw; height: 100vh; }
   <label style="font-size:12px;color:#484f58"><input type="checkbox" id="auto" checked> Auto (2s)</label>
 </div>
 <div id="status"></div>
+<div id="activity">
+  <div id="activity-head">
+    <span class="pulse"></span><span>live activity</span>
+    <div class="tally" id="activity-tally"></div>
+  </div>
+  <div id="feed"></div>
+</div>
 <div id="legend">
   <h4>Entity type</h4>
   <div id="legend-types"></div>
   <div class="section">
     <h4>Status (border)</h4>
     <div id="legend-statuses"></div>
+  </div>
+  <div class="section">
+    <h4>Activity</h4>
+    <div id="legend-activity"></div>
   </div>
 </div>
 <div id="panel">
@@ -68,6 +102,7 @@ const statusColours = {
   planned: "#484f58", "in-progress": "#d29922",
   blocked: "#f85149", resolved: "#3fb950", archived: "#484f58"
 };
+const KIND_COLOURS = { read: "#58a6ff", create: "#3fb950", update: "#d29922", delete: "#f85149" };
 
 const svg = d3.select("svg");
 const width = () => window.innerWidth;
@@ -104,6 +139,10 @@ function buildLegend() {
     statuses.innerHTML += `<div class="row"><span class="dot" style="border:2px solid ${colour};background:transparent"></span>${name}</div>`;
   }
   statuses.innerHTML += `<div class="row"><span class="dot" style="border:2px dashed #f85149;background:transparent"></span>orphan (no relations)</div>`;
+  const acts = document.getElementById("legend-activity");
+  for (const [name, colour] of Object.entries(KIND_COLOURS)) {
+    acts.innerHTML += `<div class="row"><span class="dot" style="background:${colour};box-shadow:0 0 5px ${colour}"></span>${name}</div>`;
+  }
 }
 buildLegend();
 
@@ -234,6 +273,75 @@ document.getElementById("auto").onchange = function() {
   clearInterval(timer);
   if (this.checked) timer = setInterval(fetchGraph, 2000);
 };
+
+const tally = { read: 0, create: 0, update: 0, delete: 0 };
+function renderTally() {
+  document.getElementById("activity-tally").innerHTML = Object.entries(tally)
+    .map(([k, n]) => `<span><i style="background:${KIND_COLOURS[k]}"></i>${n}</span>`).join("");
+}
+renderTally();
+
+function eventMatchesNode(d, ev, name) {
+  if (d.id !== name) return false;
+  if (ev.project && d.project) return d.project === ev.project;
+  return true;
+}
+
+function pulseNode(name, ev) {
+  const colour = KIND_COLOURS[ev.kind] || fallbackColour;
+  if (!nodeSel) return;
+  nodeSel.filter(d => eventMatchesNode(d, ev, name)).each(function(d) {
+    const grp = d3.select(this);
+    grp.style("--glow", colour).classed("activity", false);
+    this.getBoundingClientRect();
+    grp.classed("activity", true);
+    setTimeout(() => grp.classed("activity", false), 1500);
+    grp.append("circle").attr("class", "ripple")
+      .attr("r", nodeRadius(d)).attr("stroke", colour).attr("stroke-width", 2).attr("stroke-opacity", 0.7)
+      .transition().duration(1500).ease(d3.easeCubicOut)
+      .attr("r", nodeRadius(d) + 55).attr("stroke-opacity", 0).attr("stroke-width", 0.5)
+      .remove();
+  });
+}
+
+const feed = document.getElementById("feed");
+function addToFeed(ev) {
+  const colour = KIND_COLOURS[ev.kind] || fallbackColour;
+  const time = new Date(ev.ts * 1000).toLocaleTimeString();
+  const label = ev.entities.length ? ev.entities.join(", ") : (ev.project || "-");
+  const row = document.createElement("div");
+  row.className = "ev";
+  row.style.setProperty("--c", colour);
+  row.innerHTML = `<span class="t">${time}</span><span class="k">${ev.kind}</span>`
+    + `<span class="n">${label.replace(/</g, "&lt;")} <span class="tool">${ev.tool}</span></span>`;
+  feed.prepend(row);
+  while (feed.childElementCount > 40) feed.lastElementChild.remove();
+}
+
+let lastSeq = 0;
+async function fetchActivity() {
+  try {
+    const res = await fetch(`/api/activity?since=${lastSeq}`);
+    const data = await res.json();
+    if (data.seq === lastSeq) return;
+    lastSeq = data.seq;
+    for (const ev of data.events) {
+      tally[ev.kind] = (tally[ev.kind] || 0) + 1;
+      ev.entities.forEach(name => pulseNode(name, ev));
+      addToFeed(ev);
+    }
+    renderTally();
+  } catch (e) { /* transient poll failure; retry next tick */ }
+}
+
+async function primeActivity() {
+  try {
+    const res = await fetch("/api/activity?since=0");
+    lastSeq = (await res.json()).seq;
+  } catch (e) { /* leave lastSeq at 0; first poll will catch up */ }
+  setInterval(fetchActivity, 800);
+}
+primeActivity();
 
 loadProjects();
 </script>
