@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
+from . import activity
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -37,9 +39,11 @@ def get_all_graph_data(
         params = ()
 
     entity_rows = db._db.execute(
-        "SELECT e.id, e.name, et.name AS entity_type, e.status, e.project_id, e.created_at, e.updated_at "
+        "SELECT e.id, e.name, et.name AS entity_type, e.status, e.project_id, p.name AS project, "
+        "e.created_at, e.updated_at "
         "FROM entities e "
-        "JOIN entity_types et ON e.entity_type_id = et.id " + where_clause,
+        "JOIN entity_types et ON e.entity_type_id = et.id "
+        "JOIN projects p ON e.project_id = p.id " + where_clause,
         params,
     ).fetchall()
 
@@ -51,6 +55,7 @@ def get_all_graph_data(
             {
                 "name": row["name"],
                 "entity_type": row["entity_type"],
+                "project": row["project"],
                 "status": row["status"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
@@ -81,6 +86,15 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
     async def api_graph(request: Request) -> JSONResponse:
         project = request.query_params.get("project") or None
         return JSONResponse(get_all_graph_data(get_db(), project))
+
+    @mcp.custom_route("/api/activity", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_activity(request: Request) -> JSONResponse:
+        raw = request.query_params.get("since")
+        try:
+            since = int(raw) if raw is not None else 0
+        except ValueError:
+            since = 0
+        return JSONResponse({"events": activity.recent(since), "seq": activity.latest_seq()})
 
     @mcp.custom_route("/visualise", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def visualise_page(request: Request) -> HTMLResponse:

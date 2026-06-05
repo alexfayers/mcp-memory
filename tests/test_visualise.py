@@ -8,9 +8,16 @@ import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
 
+from mcp_memory import activity
 from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
 from mcp_memory.visualise import get_all_graph_data, get_projects, register_visualise_routes
+
+
+@pytest.fixture(autouse=True)
+def _clear_activity() -> None:
+    """Reset the process-global activity buffer before each test."""
+    activity.clear()
 
 
 @pytest.fixture
@@ -138,3 +145,45 @@ class TestApiGraph:
         data = resp.json()
         assert len(data["entities"]) == 1
         assert data["entities"][0]["name"] == "e1"
+
+    def test_entities_carry_their_project(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        result = get_all_graph_data(db, "proj")
+        assert result["entities"][0]["project"] == "proj"
+
+
+class TestApiActivity:
+    @pytest.mark.anyio
+    async def test_empty_when_nothing_recorded(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/api/activity")
+        assert resp.status_code == 200
+        assert resp.json() == {"events": [], "seq": 0}
+
+    @pytest.mark.anyio
+    async def test_returns_recorded_event(self, client: httpx.AsyncClient) -> None:
+        activity.record_tool(
+            "create_entities",
+            {"project": "p", "entities": [{"name": "e1"}]},
+            {"message": "ok"},
+        )
+        resp = await client.get("/api/activity")
+        data = resp.json()
+        assert data["seq"] == 1
+        assert len(data["events"]) == 1
+        assert data["events"][0]["entities"] == ["e1"]
+        assert data["events"][0]["kind"] == "create"
+
+    @pytest.mark.anyio
+    async def test_since_filters_seen_events(self, client: httpx.AsyncClient) -> None:
+        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_projects", {}, {"projects": []})
+        resp = await client.get("/api/activity", params={"since": 1})
+        data = resp.json()
+        assert [e["id"] for e in data["events"]] == [2]
+        assert data["seq"] == 2
+
+    @pytest.mark.anyio
+    async def test_invalid_since_is_treated_as_zero(self, client: httpx.AsyncClient) -> None:
+        activity.record_tool("list_projects", {}, {"projects": []})
+        resp = await client.get("/api/activity", params={"since": "abc"})
+        assert len(resp.json()["events"]) == 1
