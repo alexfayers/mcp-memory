@@ -92,6 +92,8 @@ Entity names must be unique across all entity types. Always prefix the name with
 
 When first interacting with a workspace, verify the `project/` entity name in memory matches the actual package/repo name. If no entity exists, create one. If the name is wrong (e.g. from a rename), create a new entity with the correct name, migrate observations, and delete the old one.
 
+**CRITICAL: the `project` entity type is reserved for the single repo-root entity, named `project/<repo-name>`.** There is exactly one per project scope. NEVER create a second `project`-type entity for an investigation, incident, feature, or piece of work - that is what `task`, `feature`, and `pattern` are for. Because `project` (and `user-preferences`) are the only types exempt from the relation requirement, using `entityType: project` for a work item is the one way to sneak an orphan past the server's relation check - so a free-floating `project` entity (other than the repo root) is always a mistake. An incident or ticket investigation is a `task/<TICKET-ID>-<slug>`; name it for the ticket, not the symptom (e.g. `task/ABC-123-auth-timeout`, never a symptom-named `project` entity like `auth_timeout_investigation`).
+
 ### Task entity discipline
 
 **CRITICAL: In-progress work MUST be tracked as a separate `task/` entity - never as observations on a `project/` entity.** This includes external tickets under investigation - each ticket gets its own `task/` entity with a `belongs-to` relation to the relevant knowledge or project entity. Do not store ticket-specific details as observations on a parent knowledge entity.
@@ -111,7 +113,7 @@ Memory is a graph database - use `get_entity_with_relations` to traverse linked 
 
 **CRITICAL: You MUST call `create_relations` whenever you call `create_entities`.** Relations are the core of the graph model - entities without relations are nearly useless. Always link new entities to existing ones.
 
-Every entity MUST have at least one relation, except `user-preferences` (a global singleton) and `project` root entities. This includes `pattern` entities: a pattern MUST link to what it applies to. The server now rejects any non-exempt entity created without a relation, so always create the relation in the same `create_entities` call (inline `relations`) or immediately after.
+Every entity MUST have at least one relation, except `user-preferences` (a global singleton) and the single `project/<repo-name>` root entity. This includes `pattern` entities: a pattern MUST link to what it applies to. The server now rejects any non-exempt entity created without a relation, so always create the relation in the same `create_entities` call (inline `relations`) or immediately after. The exemption exists ONLY so the repo-root can anchor the graph - it is NOT licence to model a work item as a `project` entity to skip the relation. If you catch yourself reaching for `entityType: project` to avoid adding a relation, the type is wrong: it's a `task`, `feature`, or `pattern`, and it needs a relation.
 
 Use relations to link related entities, e.g.:
 - task `implements` feature (every task should link to the feature(s) it modifies)
