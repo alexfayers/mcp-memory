@@ -17,11 +17,12 @@ Work through this checklist to audit and clean up the memory graph. Use the `/vi
 
 For each project scope, identify:
 - **Orphan entities** - nodes with zero relations (these float disconnected in the graph)
+- **Misused `project` type** - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` and `user-preferences` are the only types exempt from the relation requirement, so a work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. These are always a mistake: the content belongs in a `task/`, `feature/`, or `pattern/` entity (with a relation), or should be deleted if superseded.
 - **Unprefixed entities** - names not starting with a standard prefix (`project/`, `feature/`, `task/`, `user-preferences/`, `pattern/`, `knowledge/`, `tool/`)
 - **Duplicate entities** - same concept stored with and without prefix (e.g. `MyProject` and `project/MyProject`)
 - **Ghost project scopes** - scopes that exist but contain zero entities (from auto-generated sessions, old renames)
 
-Fix: rename with proper prefix (delete + recreate with relations), link orphans, or delete if stale.
+Fix: rename with proper prefix (delete + recreate with relations), link orphans, or delete if stale. For a misused `project` entity, migrate its content to the correct entity type with a relation (or delete if a `task/`/`feature/` already covers it), then delete the rogue `project` entity.
 
 ## 2. Consolidate duplicates
 
