@@ -53,6 +53,10 @@ svg { width: 100vw; height: 100vh; }
 #feed .ev .k { text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px; color: var(--c); flex-shrink: 0; }
 #feed .ev .n { color: #c9d1d9; word-break: break-all; flex: 1; }
 #feed .ev .tool { color: #484f58; }
+#controls-path { font-size: 11px; color: #6e7681; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 50vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#p-paths { margin-bottom: 12px; }
+#p-paths h4 { font-size: 11px; color: #484f58; margin-bottom: 4px; }
+#p-paths .path { font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; padding: 2px 0; }
 </style>
 </head>
 <body>
@@ -60,6 +64,7 @@ svg { width: 100vw; height: 100vh; }
   <select id="project"><option value="">All projects</option></select>
   <button id="refresh">Refresh</button>
   <label style="font-size:12px;color:#484f58"><input type="checkbox" id="auto" checked> Auto (2s)</label>
+  <span id="controls-path"></span>
 </div>
 <div id="status"></div>
 <div id="activity">
@@ -87,6 +92,7 @@ svg { width: 100vw; height: 100vh; }
   <h3 id="p-type"></h3>
   <div id="p-status"></div>
   <div id="p-created" style="font-size:11px;color:#484f58;margin-bottom:12px"></div>
+  <div id="p-paths"></div>
   <div id="p-obs"></div>
 </div>
 <svg></svg>
@@ -120,11 +126,25 @@ let nodes = [], links = [], relCount = new Map();
 const panel = document.getElementById("panel");
 document.getElementById("panel-close").onclick = () => { panel.classList.remove("open"); selectedNode = null; updateSelection(); };
 
+let pathsByProject = {};
+async function loadProjectPaths() {
+  try { pathsByProject = await (await fetch("/api/project-paths")).json(); }
+  catch (e) { pathsByProject = {}; }
+  updateControlsPath();
+}
+
+function updateControlsPath() {
+  const project = document.getElementById("project").value;
+  const paths = project ? (pathsByProject[project] || []) : [];
+  document.getElementById("controls-path").textContent = paths.join("  -  ");
+}
+
 async function loadProjects() {
   const res = await fetch("/api/projects");
   const projects = await res.json();
   const sel = document.getElementById("project");
   sel.innerHTML = '<option value="">All projects</option>' + projects.map(p => `<option value="${p}">${p}</option>`).join("");
+  loadProjectPaths();
   fetchGraph();
 }
 
@@ -257,6 +277,10 @@ function showPanel(d) {
   const sb = document.getElementById("p-status");
   sb.innerHTML = d.status ? `<span class="status-badge" style="color:${statusColours[d.status] || '#c9d1d9'}">${d.status}</span>` : "";
   document.getElementById("p-created").textContent = d.created_at ? `Created: ${new Date(d.created_at + "Z").toLocaleString()}` + (d.updated_at && d.updated_at !== d.created_at ? ` | Updated: ${new Date(d.updated_at + "Z").toLocaleString()}` : "") : "";
+  const paths = pathsByProject[d.project] || [];
+  document.getElementById("p-paths").innerHTML = paths.length
+    ? `<h4>On disk (${d.project})</h4>` + paths.map(p => `<div class="path">${p.replace(/</g,"&lt;")}</div>`).join("")
+    : "";
   document.getElementById("p-obs").innerHTML = d.observations.map(o => `<div class="obs">${o.replace(/</g,"&lt;")}</div>`).join("");
   panel.classList.add("open");
 }
@@ -265,7 +289,7 @@ function updateSelection() {
   if (nodeSel) nodeSel.attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""));
 }
 
-document.getElementById("project").onchange = () => { currentData = null; if (simulation) { simulation.stop(); simulation = null; } fetchGraph(); };
+document.getElementById("project").onchange = () => { currentData = null; if (simulation) { simulation.stop(); simulation = null; } updateControlsPath(); fetchGraph(); };
 document.getElementById("refresh").onclick = fetchGraph;
 
 let timer = setInterval(fetchGraph, 2000);

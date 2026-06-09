@@ -11,7 +11,12 @@ from mcp.server.fastmcp import FastMCP
 from mcp_memory import activity
 from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
-from mcp_memory.visualise import get_all_graph_data, get_projects, register_visualise_routes
+from mcp_memory.visualise import (
+    get_all_graph_data,
+    get_project_paths,
+    get_projects,
+    register_visualise_routes,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -187,3 +192,23 @@ class TestApiActivity:
         activity.record_tool("list_projects", {}, {"projects": []})
         resp = await client.get("/api/activity", params={"since": "abc"})
         assert len(resp.json()["events"]) == 1
+
+
+class TestGetProjectPaths:
+    def test_empty_when_none_registered(self, db: DatabaseManager) -> None:
+        assert get_project_paths(db) == {}
+
+    def test_groups_paths_by_project(self, db: DatabaseManager) -> None:
+        db.create_entities("alpha", [{"name": "e", "entityType": "pattern", "observations": ["o"]}])
+        db.set_project_paths("alpha", ["/work/one", "/work/two"])
+        assert get_project_paths(db) == {"alpha": ["/work/one", "/work/two"]}
+
+
+class TestApiProjectPaths:
+    @pytest.mark.anyio
+    async def test_returns_mapping(self, client: httpx.AsyncClient, db: DatabaseManager) -> None:
+        db.create_entities("alpha", [{"name": "e", "entityType": "pattern", "observations": ["o"]}])
+        db.set_project_paths("alpha", ["/work/one"])
+        resp = await client.get("/api/project-paths")
+        assert resp.status_code == 200
+        assert resp.json() == {"alpha": ["/work/one"]}

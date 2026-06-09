@@ -27,6 +27,14 @@ def get_projects(db: DatabaseManager) -> list[str]:
     return db.list_projects()
 
 
+def get_project_paths(db: DatabaseManager) -> dict[str, list[str]]:
+    """Return registered on-disk paths grouped by project name."""
+    grouped: dict[str, list[str]] = {}
+    for project, path in db.list_project_paths():
+        grouped.setdefault(project, []).append(path)
+    return grouped
+
+
 def get_all_graph_data(
     db: DatabaseManager, project: str | None = None
 ) -> dict[str, list[dict[str, object]]]:
@@ -81,6 +89,10 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
     @mcp.custom_route("/api/projects", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_projects(request: Request) -> JSONResponse:
         return JSONResponse(get_projects(get_db()))
+
+    @mcp.custom_route("/api/project-paths", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_project_paths(request: Request) -> JSONResponse:
+        return JSONResponse(get_project_paths(get_db()))
 
     @mcp.custom_route("/api/graph", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_graph(request: Request) -> JSONResponse:
