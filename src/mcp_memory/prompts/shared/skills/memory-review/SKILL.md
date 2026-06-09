@@ -5,7 +5,9 @@ description: Audit and clean up the memory graph - fix orphans, consolidate dupl
 
 # memory-review
 
-Work through this checklist to audit and clean up the memory graph. Use the `/visualise` endpoint or `/api/graph` to inspect the graph visually.
+Work through this checklist to audit and clean up the memory graph. The `/visualise` endpoint gives a visual overview, but auditors MUST read the graph data via the **read-only memory MCP tools** (`read_graph`, `search_nodes`, `get_entity_with_relations`, `search_related_nodes`), NOT via `curl`/`Read` of `/api/graph`.
+
+**CRITICAL - do not read via curl/Bash inside subagents.** The cline-hooks "MEMORY UPDATE REQUIRED" PreToolUse gate hard-blocks `Bash`/`Read` after a few calls without an intervening memory write. A read-only auditor cannot satisfy that gate (it must not write), so curl-based auditors deadlock and get only a truncated preview. The read-only memory MCP tools are EXEMPT from the gate, so they always work for read-only auditing. Tell each auditor to call `read_graph(project=<scope>)` and `get_entity_with_relations` rather than curl. (Reading via curl is fine on the MAIN thread, where you can write to satisfy the gate.)
 
 **Approach:** Use subagents for READ-ONLY auditing only - fan out one agent per scope or per concern to enumerate issues and propose fixes. Each returns a structured list of proposed ops; the MAIN THREAD executes all mutations (deletes, migrates, status changes) serially.
 
