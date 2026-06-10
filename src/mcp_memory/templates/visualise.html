@@ -57,14 +57,16 @@ svg { width: 100vw; height: 100vh; }
 #p-paths { margin-bottom: 12px; }
 #p-paths h4 { font-size: 11px; color: #484f58; margin-bottom: 4px; }
 #p-paths .path { font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; padding: 2px 0; }
-#search { width: 200px; }
-#results { position: fixed; left: 12px; bottom: 64px; z-index: 10; width: 320px; max-width: 40vw;
-  background: rgba(22,27,34,0.82); border: 1px solid #30363d; border-radius: 6px;
+#search { width: 200px; background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; font-size: 13px; }
+#search::placeholder { color: #484f58; }
+#search:focus { outline: none; border-color: #58a6ff; }
+#results { position: fixed; top: 44px; right: 12px; z-index: 11; width: 320px; max-width: 40vw;
+  background: rgba(22,27,34,0.92); border: 1px solid #30363d; border-radius: 6px;
   backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; display: none; }
 #results.open { display: block; }
 #results-head { display: flex; align-items: baseline; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; color: #8b949e; }
-#results-head .what { margin-left: auto; color: #484f58; font-style: italic; }
-#results-list { max-height: 40vh; overflow-y: auto; }
+#results-head .count { margin-left: auto; color: #484f58; font-variant-numeric: tabular-nums; }
+#results-list { max-height: 70vh; overflow-y: auto; }
 #results-list:empty::after { content: "no matches"; display: block; padding: 8px 12px; color: #484f58; font-style: italic; }
 #results-list .hit { display: flex; gap: 8px; align-items: baseline; padding: 5px 12px; border-bottom: 1px solid #21262d; cursor: pointer; }
 #results-list .hit:hover { background: rgba(88,166,255,0.08); }
@@ -83,12 +85,12 @@ svg { width: 100vw; height: 100vh; }
   <select id="project"><option value="">All projects</option></select>
   <button id="refresh">Refresh</button>
   <label style="font-size:12px;color:#484f58"><input type="checkbox" id="auto" checked> Auto (2s)</label>
-  <input id="search" type="text" placeholder="Search like the LLM...">
+  <input id="search" type="text" placeholder="Search memory...">
   <label style="font-size:12px;color:#484f58"><input type="checkbox" id="search-all"> all terms</label>
   <span id="controls-path"></span>
 </div>
 <div id="results">
-  <div id="results-head"><span>search results</span><span class="what">what the LLM sees</span></div>
+  <div id="results-head"><span>search results</span><span class="count" id="results-count"></span></div>
   <div id="results-list"></div>
 </div>
 <div id="status"></div>
@@ -309,6 +311,7 @@ function showPanel(d) {
     ? `<h4>On disk (${d.project})</h4>` + paths.map(p => `<div class="path">${p.replace(/</g,"&lt;")}</div>`).join("")
     : "";
   document.getElementById("p-obs").innerHTML = d.observations.map(o => `<div class="obs">${o.replace(/</g,"&lt;")}</div>`).join("");
+  document.getElementById("results").classList.remove("open");
   panel.classList.add("open");
 }
 
@@ -417,6 +420,7 @@ function applySearchRings() {
 function renderResults(hits) {
   searchHits = hits;
   searchRankByName = new Map(hits.map(h => [h.name, h.rank]));
+  document.getElementById("results-count").textContent = hits.length + (hits.length === 1 ? " match" : " matches");
   document.getElementById("results-list").innerHTML = hits.map(h => {
     const snip = (h.observations[0] || "").replace(/</g, "&lt;");
     const sub = [h.entity_type, h.project, h.status].filter(Boolean).join(" · ");
@@ -448,6 +452,7 @@ document.getElementById("results-list").onclick = (e) => {
   const node = nodes.find(n => n.id === row.dataset.name);
   if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
   else { showPanel(searchHits.find(h => h.name === row.dataset.name)); }
+  document.getElementById("results").classList.remove("open");
 };
 
 loadProjects();
