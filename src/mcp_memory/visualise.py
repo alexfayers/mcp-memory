@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib.resources
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
     from .database import DatabaseManager
+    from .models import Entity, Relation
 
 _VISUALISE_HTML = (
     importlib.resources.files("mcp_memory").joinpath("templates/visualise.html").read_text()
@@ -83,6 +84,43 @@ def get_all_graph_data(
     return {"entities": entities, "relations": all_relations}
 
 
+def search_graph(
+    db: DatabaseManager,
+    query: str,
+    project: str | None = None,
+    match_all: bool = False,
+    limit: int | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    """Run the same recency-weighted BM25 search the LLM tools use, as serialisable dicts.
+
+    Faithful to the MCP search tools: calls db.search_nodes directly with the tool default
+    limit for the chosen scope (10 when project-scoped, 50 for all projects). Each entity
+    carries a 1-based rank matching its position in the ranked list.
+    """
+    effective_limit = limit if limit is not None else (10 if project else 50)
+    result = db.search_nodes(project, query, limit=effective_limit, match_all=match_all)
+
+    entities: list[dict[str, object]] = [
+        {
+            "rank": position,
+            "name": entity.name,
+            "entity_type": entity.entity_type,
+            "project": entity.project_name,
+            "status": entity.status,
+            "created_at": entity.created_at,
+            "updated_at": entity.updated_at,
+            "observations": entity.observations,
+        }
+        for position, entity in enumerate(cast("list[Entity]", result["entities"]), start=1)
+    ]
+    relations: list[dict[str, object]] = [
+        {"source": r.source, "target": r.target, "relation_type": r.relation_type}
+        for r in cast("list[Relation]", result["relations"])
+    ]
+
+    return {"entities": entities, "relations": relations}
+
+
 def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager]) -> None:
     """Register the /visualise and /api/* custom routes on the FastMCP server."""
 
@@ -98,6 +136,13 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
     async def api_graph(request: Request) -> JSONResponse:
         project = request.query_params.get("project") or None
         return JSONResponse(get_all_graph_data(get_db(), project))
+
+    @mcp.custom_route("/api/search", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_search(request: Request) -> JSONResponse:
+        query = request.query_params.get("q") or ""
+        project = request.query_params.get("project") or None
+        match_all = request.query_params.get("match_all", "").lower() in ("1", "true", "yes")
+        return JSONResponse(search_graph(get_db(), query, project, match_all=match_all))
 
     @mcp.custom_route("/api/activity", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_activity(request: Request) -> JSONResponse:

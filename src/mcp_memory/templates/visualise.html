@@ -57,6 +57,25 @@ svg { width: 100vw; height: 100vh; }
 #p-paths { margin-bottom: 12px; }
 #p-paths h4 { font-size: 11px; color: #484f58; margin-bottom: 4px; }
 #p-paths .path { font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; padding: 2px 0; }
+#search { width: 200px; }
+#results { position: fixed; left: 12px; bottom: 64px; z-index: 10; width: 320px; max-width: 40vw;
+  background: rgba(22,27,34,0.82); border: 1px solid #30363d; border-radius: 6px;
+  backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; display: none; }
+#results.open { display: block; }
+#results-head { display: flex; align-items: baseline; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; color: #8b949e; }
+#results-head .what { margin-left: auto; color: #484f58; font-style: italic; }
+#results-list { max-height: 40vh; overflow-y: auto; }
+#results-list:empty::after { content: "no matches"; display: block; padding: 8px 12px; color: #484f58; font-style: italic; }
+#results-list .hit { display: flex; gap: 8px; align-items: baseline; padding: 5px 12px; border-bottom: 1px solid #21262d; cursor: pointer; }
+#results-list .hit:hover { background: rgba(88,166,255,0.08); }
+#results-list .hit .rank { color: #58a6ff; font-variant-numeric: tabular-nums; flex-shrink: 0; width: 1.4em; text-align: right; }
+#results-list .hit .meta { flex: 1; min-width: 0; }
+#results-list .hit .nm { color: #c9d1d9; word-break: break-all; }
+#results-list .hit .sub { color: #484f58; }
+#results-list .hit .snip { color: #8b949e; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node.search-hit circle:first-of-type { stroke: #58a6ff !important; stroke-width: 3; }
+.search-ring { fill: none; stroke: #58a6ff; stroke-opacity: 0.9; pointer-events: none; }
+.search-badge { fill: #58a6ff; font-size: 9px; font-weight: 700; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -64,7 +83,13 @@ svg { width: 100vw; height: 100vh; }
   <select id="project"><option value="">All projects</option></select>
   <button id="refresh">Refresh</button>
   <label style="font-size:12px;color:#484f58"><input type="checkbox" id="auto" checked> Auto (2s)</label>
+  <input id="search" type="text" placeholder="Search like the LLM...">
+  <label style="font-size:12px;color:#484f58"><input type="checkbox" id="search-all"> all terms</label>
   <span id="controls-path"></span>
+</div>
+<div id="results">
+  <div id="results-head"><span>search results</span><span class="what">what the LLM sees</span></div>
+  <div id="results-list"></div>
 </div>
 <div id="status"></div>
 <div id="activity">
@@ -258,6 +283,8 @@ function render(data) {
     simulation.force("collision").radius(d => 5 + nodeRadius(d));
     simulation.alpha(0.05).restart();
   }
+
+  applySearchRings();  // nodeSel was just rebuilt; reapply persistent search rings
 }
 
 function ticked() {
@@ -289,7 +316,7 @@ function updateSelection() {
   if (nodeSel) nodeSel.attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""));
 }
 
-document.getElementById("project").onchange = () => { currentData = null; if (simulation) { simulation.stop(); simulation = null; } updateControlsPath(); fetchGraph(); };
+document.getElementById("project").onchange = () => { currentData = null; if (simulation) { simulation.stop(); simulation = null; } updateControlsPath(); fetchGraph(); runSearch(); };
 document.getElementById("refresh").onclick = fetchGraph;
 
 let timer = setInterval(fetchGraph, 2000);
@@ -366,6 +393,62 @@ async function primeActivity() {
   setInterval(fetchActivity, 800);
 }
 primeActivity();
+
+let searchHits = [];
+let searchRankByName = new Map();
+
+function clearSearchRings() {
+  if (nodeSel) nodeSel.classed("search-hit", false);
+  nodeLayer.selectAll(".search-ring, .search-badge").remove();
+}
+
+function applySearchRings() {
+  clearSearchRings();
+  if (!nodeSel || !searchRankByName.size) return;
+  nodeSel.filter(d => searchRankByName.has(d.id)).each(function(d) {
+    const grp = d3.select(this), r = nodeRadius(d);
+    grp.classed("search-hit", true);
+    grp.append("circle").attr("class", "search-ring").attr("r", r + 6).attr("stroke-width", 1.5);
+    grp.append("text").attr("class", "search-badge").attr("dx", -(r + 14)).attr("dy", -(r + 6))
+      .text(searchRankByName.get(d.id));
+  });
+}
+
+function renderResults(hits) {
+  searchHits = hits;
+  searchRankByName = new Map(hits.map(h => [h.name, h.rank]));
+  document.getElementById("results-list").innerHTML = hits.map(h => {
+    const snip = (h.observations[0] || "").replace(/</g, "&lt;");
+    const sub = [h.entity_type, h.project, h.status].filter(Boolean).join(" · ");
+    return `<div class="hit" data-name="${h.name.replace(/"/g, "&quot;")}">`
+      + `<span class="rank">${h.rank}</span>`
+      + `<span class="meta"><span class="nm">${h.name.replace(/</g, "&lt;")}</span>`
+      + `<span class="sub"> ${sub}</span><span class="snip">${snip}</span></span></div>`;
+  }).join("");
+  document.getElementById("results").classList.add("open");
+  applySearchRings();
+}
+
+async function runSearch() {
+  const q = document.getElementById("search").value.trim();
+  if (!q) { document.getElementById("results").classList.remove("open"); searchRankByName = new Map(); clearSearchRings(); return; }
+  const project = document.getElementById("project").value;
+  const params = new URLSearchParams({ q });
+  if (project) params.set("project", project);
+  if (document.getElementById("search-all").checked) params.set("match_all", "true");
+  try { renderResults((await (await fetch("/api/search?" + params)).json()).entities); }
+  catch (e) { /* transient; keep previous results */ }
+}
+
+document.getElementById("search").onkeydown = (e) => { if (e.key === "Enter") runSearch(); };
+document.getElementById("search-all").onchange = runSearch;
+document.getElementById("results-list").onclick = (e) => {
+  const row = e.target.closest(".hit");
+  if (!row) return;
+  const node = nodes.find(n => n.id === row.dataset.name);
+  if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
+  else { showPanel(searchHits.find(h => h.name === row.dataset.name)); }
+};
 
 loadProjects();
 </script>
