@@ -417,8 +417,13 @@ async function fetchActivity() {
 
 async function primeActivity() {
   try {
-    const res = await fetch("/api/activity?since=0");
-    lastSeq = (await res.json()).seq;
+    const data = await (await fetch("/api/activity?since=0")).json();
+    lastSeq = data.seq;
+    for (const ev of data.events.slice(-40)) {  // replay recent history into the feed, newest on top
+      tally[ev.kind] = (tally[ev.kind] || 0) + 1;
+      addToFeed(ev);
+    }
+    renderTally();
   } catch (e) { /* leave lastSeq at 0; first poll will catch up */ }
   setInterval(fetchActivity, 800);
 }
