@@ -85,6 +85,7 @@ svg { width: 100vw; height: 100vh; }
   <select id="project"><option value="">All projects</option></select>
   <button id="refresh">Refresh</button>
   <label style="font-size:12px;color:#484f58"><input type="checkbox" id="auto" checked> Auto (2s)</label>
+  <label style="font-size:12px;color:#484f58"><input type="checkbox" id="follow" checked> Follow activity</label>
   <input id="search" type="text" placeholder="Search memory...">
   <label style="font-size:12px;color:#484f58"><input type="checkbox" id="search-all"> all terms</label>
   <span id="controls-path"></span>
@@ -145,7 +146,13 @@ const linkLayer = g.append("g");
 const labelLayer = g.append("g");
 const nodeLayer = g.append("g");
 
-svg.call(d3.zoom().on("zoom", e => g.attr("transform", e.transform)));
+let lastUserInteract = 0;
+const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, ZOOM_MIN = 0.2, ZOOM_MAX = 4;
+const zoom = d3.zoom().scaleExtent([ZOOM_MIN, ZOOM_MAX]).on("zoom", e => {
+  g.attr("transform", e.transform);
+  if (e.sourceEvent) lastUserInteract = Date.now();
+});
+svg.call(zoom);
 
 let simulation = null, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, orphans = new Set();
 let nodes = [], links = [], relCount = new Map();
@@ -358,6 +365,25 @@ function pulseNode(name, ev) {
   });
 }
 
+function focusOn(events) {
+  if (!document.getElementById("follow").checked) return;
+  if (Date.now() - lastUserInteract < FOLLOW_COOLDOWN) return;
+  const hits = nodes.filter(d => Number.isFinite(d.x) && Number.isFinite(d.y)
+    && events.some(ev => ev.entities.some(name => eventMatchesNode(d, ev, name))));
+  if (!hits.length) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  hits.forEach(d => {
+    const r = nodeRadius(d) + 30;
+    minX = Math.min(minX, d.x - r); maxX = Math.max(maxX, d.x + r);
+    minY = Math.min(minY, d.y - r); maxY = Math.max(maxY, d.y + r);
+  });
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const fit = Math.min(width() / Math.max(maxX - minX, 1), height() / Math.max(maxY - minY, 1));
+  const k = Math.max(ZOOM_MIN, Math.min(FOLLOW_SCALE, fit));
+  const t = d3.zoomIdentity.translate(width() / 2, height() / 2).scale(k).translate(-cx, -cy);
+  svg.transition().duration(600).ease(d3.easeCubicOut).call(zoom.transform, t);
+}
+
 const feed = document.getElementById("feed");
 function addToFeed(ev) {
   const colour = KIND_COLOURS[ev.kind] || fallbackColour;
@@ -384,6 +410,7 @@ async function fetchActivity() {
       ev.entities.forEach(name => pulseNode(name, ev));
       addToFeed(ev);
     }
+    focusOn(data.events);
     renderTally();
   } catch (e) { /* transient poll failure; retry next tick */ }
 }
