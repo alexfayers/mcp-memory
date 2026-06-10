@@ -63,6 +63,8 @@ CREATE_ENTITIES_DESC = (
     "All data is scoped to the given project. "
     "create_entities OVERWRITES all observations; use add_observations to append safely. "
     "Valid entity types: project, feature, task, user-preferences, pattern, knowledge. "
+    "Each entity name MUST start with its type prefix (e.g. task/<id>, feature/<area>); "
+    "a 'project' entity MUST be named exactly 'project/<project>' (one root per scope). "
     "Non-exempt entity types (everything except user-preferences and project) MUST include at "
     "least one relation. "
     "Each entity dict must have keys: name (str), entityType (str), observations (list[str]). "
@@ -197,21 +199,43 @@ def _extract_relation_type(rel: dict[str, str]) -> str:
     raise KeyError("Relation must have a 'type' or 'relation_type' key.")
 
 
+def _validate_entity_type_and_name(project: str, entity_type: object, name: str) -> None:
+    """Enforce entity-type validity and the type-prefix naming convention.
+
+    Names must start with their type prefix (e.g. ``task/``), and a ``project`` entity
+    must be named exactly ``project/<project>`` so each scope keeps a single root.
+    """
+    if not isinstance(entity_type, str) or not entity_type:
+        raise ValueError(f"Entity type must be a non-empty string, got: {entity_type!r}")
+    if entity_type not in VALID_ENTITY_TYPES:
+        raise ValueError(
+            f"Invalid entity type '{entity_type}'. Valid types: {sorted(VALID_ENTITY_TYPES)}"
+        )
+    if not name.startswith(f"{entity_type}/"):
+        raise ValueError(
+            f"Entity name '{name}' must start with '{entity_type}/' "
+            f"(convention: <entityType>/<identifier>)."
+        )
+    if entity_type == "project" and name != f"project/{project}":
+        raise ValueError(
+            f"A 'project' entity must be named 'project/{project}' for scope '{project}', "
+            f"got '{name}'. Use task/, feature/, etc. for work items."
+        )
+
+
 def _validate_and_extract_relations(
+    project: str,
     entities: list[dict[str, str | list[str] | list[dict[str, str]] | None]],
 ) -> list[Relation]:
-    """Validate entity types and extract inline relations."""
+    """Validate entity types and names, and extract inline relations."""
     all_relations: list[Relation] = []
     for entity_data in entities:
         entity_type = entity_data.get("entityType", "")
+        name = str(entity_data.get("name", ""))
         relations_raw = entity_data.get("relations")
 
-        if not isinstance(entity_type, str) or not entity_type:
-            raise ValueError(f"Entity type must be a non-empty string, got: {entity_type!r}")
-        if entity_type not in VALID_ENTITY_TYPES:
-            raise ValueError(
-                f"Invalid entity type '{entity_type}'. Valid types: {sorted(VALID_ENTITY_TYPES)}"
-            )
+        _validate_entity_type_and_name(project, entity_type, name)
+
         if entity_type not in RELATION_EXEMPT_TYPES:
             if not relations_raw or not isinstance(relations_raw, list):
                 raise ValueError(
@@ -220,12 +244,11 @@ def _validate_and_extract_relations(
                 )
 
         if isinstance(relations_raw, list):
-            entity_name = str(entity_data.get("name", ""))
             for rel in relations_raw:
                 if isinstance(rel, dict):
                     all_relations.append(
                         Relation(
-                            source=str(rel.get("source", entity_name)),
+                            source=str(rel.get("source", name)),
                             target=str(rel["target"]),
                             relation_type=_extract_relation_type(rel),
                         )
@@ -243,7 +266,7 @@ def create_entities(
     try:
         db = _get_db()
         _ensure_project_root(db, project)
-        all_relations = _validate_and_extract_relations(entities)
+        all_relations = _validate_and_extract_relations(project, entities)
 
         for entity_data in entities:
             name = str(entity_data.get("name", ""))

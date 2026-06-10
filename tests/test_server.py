@@ -50,23 +50,25 @@ class TestValidateEntityTypes:
     def test_rejects_invalid_type(self) -> None:
         with pytest.raises(ValueError, match="Invalid entity type"):
             _validate_and_extract_relations(
-                [{"name": "x", "entityType": "changelog", "observations": []}]
+                "proj", [{"name": "x", "entityType": "changelog", "observations": []}]
             )
 
     def test_accepts_user_preferences_without_relation(self) -> None:
         result = _validate_and_extract_relations(
-            [{"name": "x", "entityType": "user-preferences", "observations": []}]
+            "proj",
+            [{"name": "user-preferences/x", "entityType": "user-preferences", "observations": []}],
         )
         assert result == []
 
     def test_pattern_requires_relation(self) -> None:
         with pytest.raises(ValueError, match="requires at least one relation"):
             _validate_and_extract_relations(
-                [{"name": "x", "entityType": "pattern", "observations": []}]
+                "proj", [{"name": "pattern/x", "entityType": "pattern", "observations": []}]
             )
 
     def test_pattern_with_relation_accepted(self) -> None:
         result = _validate_and_extract_relations(
+            "proj",
             [
                 {
                     "name": "pattern/x",
@@ -74,9 +76,92 @@ class TestValidateEntityTypes:
                     "observations": [],
                     "relations": [{"target": "project/foo", "type": "used-in"}],
                 }
-            ]
+            ],
         )
         assert len(result) == 1
+
+    def test_rejects_name_without_type_prefix(self) -> None:
+        with pytest.raises(ValueError, match="must start with"):
+            _validate_and_extract_relations(
+                "proj",
+                [
+                    {
+                        "name": "my-task",
+                        "entityType": "task",
+                        "observations": ["o"],
+                        "relations": [{"target": "project/proj", "type": "belongs-to"}],
+                    }
+                ],
+            )
+
+    def test_rejects_wrong_type_prefix(self) -> None:
+        with pytest.raises(ValueError, match="must start with"):
+            _validate_and_extract_relations(
+                "proj",
+                [
+                    {
+                        "name": "feature/x",
+                        "entityType": "task",
+                        "observations": ["o"],
+                        "relations": [{"target": "project/proj", "type": "belongs-to"}],
+                    }
+                ],
+            )
+
+    def test_accepts_correct_prefix(self) -> None:
+        result = _validate_and_extract_relations(
+            "proj",
+            [
+                {
+                    "name": "task/x",
+                    "entityType": "task",
+                    "observations": ["o"],
+                    "relations": [{"target": "project/proj", "type": "belongs-to"}],
+                }
+            ],
+        )
+        assert len(result) == 1
+
+    def test_rejects_empty_name(self) -> None:
+        with pytest.raises(ValueError, match="must start with"):
+            _validate_and_extract_relations(
+                "proj",
+                [
+                    {
+                        "name": "",
+                        "entityType": "task",
+                        "observations": ["o"],
+                        "relations": [{"target": "project/proj", "type": "belongs-to"}],
+                    }
+                ],
+            )
+
+    def test_bare_prefix_accepted(self) -> None:
+        result = _validate_and_extract_relations(
+            "proj",
+            [
+                {
+                    "name": "task/",
+                    "entityType": "task",
+                    "observations": ["o"],
+                    "relations": [{"target": "project/proj", "type": "belongs-to"}],
+                }
+            ],
+        )
+        assert len(result) == 1
+
+    def test_rejects_misnamed_project_entity(self) -> None:
+        """A second/mis-named project entity is rejected: closes the entityType=project loophole."""
+        with pytest.raises(ValueError, match="project/proj"):
+            _validate_and_extract_relations(
+                "proj", [{"name": "project/wrong", "entityType": "project", "observations": ["o"]}]
+            )
+
+    def test_accepts_matching_project_root(self) -> None:
+        result = _validate_and_extract_relations(
+            "proj", [{"name": "project/proj", "entityType": "project", "observations": ["o"]}]
+        )
+        assert result == []
 
 
 class TestScopeUniqueness:
@@ -100,6 +185,7 @@ class TestScopeUniqueness:
 class TestInlineRelations:
     def test_auto_fills_source_from_entity_name(self) -> None:
         result = _validate_and_extract_relations(
+            "proj",
             [
                 {
                     "name": "task/my-task",
@@ -107,7 +193,7 @@ class TestInlineRelations:
                     "observations": ["obs"],
                     "relations": [{"target": "project/foo", "type": "belongs-to"}],
                 }
-            ]
+            ],
         )
         assert len(result) == 1
         assert result[0].source == "task/my-task"
@@ -116,6 +202,7 @@ class TestInlineRelations:
 
     def test_explicit_source_preserved(self) -> None:
         result = _validate_and_extract_relations(
+            "proj",
             [
                 {
                     "name": "task/my-task",
@@ -125,12 +212,13 @@ class TestInlineRelations:
                         {"source": "other/entity", "target": "project/foo", "type": "belongs-to"}
                     ],
                 }
-            ]
+            ],
         )
         assert result[0].source == "other/entity"
 
     def test_multiple_relations(self) -> None:
         result = _validate_and_extract_relations(
+            "proj",
             [
                 {
                     "name": "task/t",
@@ -141,13 +229,14 @@ class TestInlineRelations:
                         {"target": "feature/b", "type": "implements"},
                     ],
                 }
-            ]
+            ],
         )
         assert len(result) == 2
         assert all(r.source == "task/t" for r in result)
 
     def test_accepts_relation_type_key(self) -> None:
         result = _validate_and_extract_relations(
+            "proj",
             [
                 {
                     "name": "task/t",
@@ -157,13 +246,14 @@ class TestInlineRelations:
                         {"target": "project/a", "relation_type": "belongs-to"},
                     ],
                 }
-            ]
+            ],
         )
         assert len(result) == 1
         assert result[0].relation_type == "belongs-to"
 
     def test_type_key_takes_precedence_over_relation_type(self) -> None:
         result = _validate_and_extract_relations(
+            "proj",
             [
                 {
                     "name": "task/t",
@@ -177,13 +267,14 @@ class TestInlineRelations:
                         },
                     ],
                 }
-            ]
+            ],
         )
         assert result[0].relation_type == "implements"
 
     def test_missing_both_type_keys_raises(self) -> None:
         with pytest.raises(KeyError, match=r"type.*relation_type"):
             _validate_and_extract_relations(
+                "proj",
                 [
                     {
                         "name": "task/t",
@@ -191,7 +282,7 @@ class TestInlineRelations:
                         "observations": ["obs"],
                         "relations": [{"target": "project/a"}],
                     }
-                ]
+                ],
             )
 
 
