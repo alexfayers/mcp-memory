@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from collections.abc import Callable
 from pathlib import Path
@@ -82,6 +83,21 @@ _MEMORY_REVIEW_NUDGE = (
     "Run the `memory-review` skill via a subagent to audit and clean the graph "
     "(orphans, duplicates, naming, bloat). This fires periodically by design."
 )
+
+_DEFAULT_READ_ONLY_AGENT_TYPES = frozenset({"Explore", "Plan"})
+_READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
+
+
+def _read_only_agent_types() -> frozenset[str]:
+    """Return the agent types exempt from the memory gate, including env overrides."""
+    raw = os.environ.get(_READ_ONLY_AGENTS_ENV, "")
+    extra = {name.strip() for name in raw.split(",") if name.strip()}
+    return _DEFAULT_READ_ONLY_AGENT_TYPES | extra
+
+
+def _is_exempt_agent(agent_type: str) -> bool:
+    """Return True if a read-only subagent type is exempt from the memory gate."""
+    return bool(agent_type) and agent_type in _read_only_agent_types()
 
 
 class _ReminderChance:
@@ -282,6 +298,8 @@ class MemoryPlugin(HooksPlugin):
         return None
 
     def _on_pre_tool_use(self, **kwargs: object) -> HookResult | None:
+        if _is_exempt_agent(str(kwargs.get("agent_type", ""))):
+            return None
         task_id = str(kwargs.get("task_id", ""))
         tool_name = str(kwargs.get("tool_name", ""))
         parameters = _str_dict(kwargs.get("parameters", {}))
@@ -293,6 +311,8 @@ class MemoryPlugin(HooksPlugin):
         return _check_block(task_id, self._project_scope)
 
     def _on_pre_mcp_tool_use(self, **kwargs: object) -> HookResult | None:
+        if _is_exempt_agent(str(kwargs.get("agent_type", ""))):
+            return None
         task_id = str(kwargs.get("task_id", ""))
         mcp_tool_name = str(kwargs.get("mcp_tool_name", ""))
         if mcp_tool_name in _MEMORY_WRITE_TOOL_NAMES:
@@ -326,6 +346,8 @@ class MemoryPlugin(HooksPlugin):
         return None
 
     def _on_post_tool_use(self, **kwargs: object) -> HookResult | None:
+        if _is_exempt_agent(str(kwargs.get("agent_type", ""))):
+            return None
         task_id = str(kwargs.get("task_id", ""))
         tool_name = str(kwargs.get("tool_name", ""))
         parameters = _str_dict(kwargs.get("parameters", {}))

@@ -590,6 +590,96 @@ class TestMemoryReadsNotGated:
         assert result.block is not None
 
 
+class TestReadOnlyAgentExemption:
+    def test_explore_subagent_not_blocked(self, plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+                agent_type="Explore",
+            )
+        assert result is None
+
+    def test_plan_subagent_not_blocked(self, plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+                agent_type="Plan",
+            )
+        assert result is None
+
+    def test_main_thread_still_blocked(self, plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+                agent_type="",
+            )
+        assert result is not None
+        assert result.block is not None
+
+    def test_non_allowlisted_subagent_still_blocked(self, plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+                agent_type="general-purpose",
+            )
+        assert result is not None
+        assert result.block is not None
+
+    def test_pre_mcp_tool_use_exempt_for_explore(self, plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreMcpToolUse",
+                task_id="t1",
+                mcp_tool_name="read_file",
+                agent_type="Explore",
+            )
+        assert result is None
+
+    def test_post_tool_use_does_not_increment_for_explore(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset"),
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            plugin = MemoryPlugin()
+            result = plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+                is_state_write=False,
+                agent_type="Explore",
+            )
+        mock_increment.assert_not_called()
+        assert result is None
+
+    def test_env_var_extends_allowlist(
+        self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_READONLY_AGENTS", "code-reviewer, security-reviewer")
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+                agent_type="security-reviewer",
+            )
+        assert result is None
+
+
 class TestMemoryReviewNudge:
     def test_state_write_records_review_write(self) -> None:
         with (
