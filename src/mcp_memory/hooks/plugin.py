@@ -9,6 +9,13 @@ from pathlib import Path
 
 from cline_hooks.core.plugin import HookResult, HooksPlugin
 
+from mcp_memory.hooks.review_tracker import (
+    record_write,
+    should_nudge,
+)
+from mcp_memory.hooks.review_tracker import (
+    reset as reset_review,
+)
 from mcp_memory.hooks.tracker import (
     clear,
     has_scope_blocked,
@@ -69,6 +76,11 @@ _MEMORY_COMPLETION_REMINDER = (
 )
 _MEMORY_COMPACT_WARNING = (
     "Save any important context, decisions, or progress to memory NOW before it's lost."
+)
+_MEMORY_REVIEW_NUDGE = (
+    "MEMORY REVIEW DUE: many memory writes have accumulated since the last review. "
+    "Run the `memory-review` skill via a subagent to audit and clean the graph "
+    "(orphans, duplicates, naming, bloat). This fires periodically by design."
 )
 
 
@@ -227,6 +239,7 @@ class MemoryPlugin(HooksPlugin):
             "PreToolUse": self._on_pre_tool_use,
             "PreMcpToolUse": self._on_pre_mcp_tool_use,
             "PostToolUse": self._on_post_tool_use,
+            "UserPromptSubmit": self._on_user_prompt_submit,
             "AttemptCompletion": lambda **_: HookResult(notes=[_MEMORY_COMPLETION_REMINDER]),
             "PreCompact": lambda **_: HookResult(notes=[_MEMORY_COMPACT_WARNING]),
         }
@@ -260,6 +273,13 @@ class MemoryPlugin(HooksPlugin):
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
         note = _workspace_entity_note(workspace_roots)
         return HookResult(notes=[note]) if note else None
+
+    def _on_user_prompt_submit(self, **_kwargs: object) -> HookResult | None:
+        """Nudge a memory-review once enough cumulative writes have accumulated."""
+        if should_nudge():
+            reset_review()
+            return HookResult(notes=[_MEMORY_REVIEW_NUDGE])
+        return None
 
     def _on_pre_tool_use(self, **kwargs: object) -> HookResult | None:
         task_id = str(kwargs.get("task_id", ""))
@@ -315,6 +335,7 @@ class MemoryPlugin(HooksPlugin):
         if is_state_write:
             reset(task_id)
             self._reminder.reset()
+            record_write()
             return None
 
         if _is_memory_read(tool_name, parameters):

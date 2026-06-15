@@ -590,6 +590,48 @@ class TestMemoryReadsNotGated:
         assert result.block is not None
 
 
+class TestMemoryReviewNudge:
+    def test_state_write_records_review_write(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset"),
+            patch("mcp_memory.hooks.plugin.record_write") as mock_record,
+        ):
+            plugin = MemoryPlugin()
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="mcp__memory__add_observations",
+                parameters={},
+                is_state_write=True,
+            )
+        mock_record.assert_called_once_with()
+
+    def test_user_prompt_emits_nudge_and_resets_when_due(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_nudge", return_value=True),
+            patch("mcp_memory.hooks.plugin.reset_review") as mock_reset,
+        ):
+            plugin = MemoryPlugin()
+            result = plugin.on_hook("UserPromptSubmit", task_id="t1")
+        assert result is not None
+        assert len(result.notes) == 1
+        note = result.notes[0]
+        assert "memory-review" in note
+        assert "subagent" in note.lower()
+        mock_reset.assert_called_once_with()
+
+    def test_user_prompt_no_nudge_when_not_due(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_nudge", return_value=False),
+            patch("mcp_memory.hooks.plugin.reset_review") as mock_reset,
+        ):
+            plugin = MemoryPlugin()
+            result = plugin.on_hook("UserPromptSubmit", task_id="t1")
+        assert result is None
+        mock_reset.assert_not_called()
+
+
 class TestMemoryReadsDoNotIncrement:
     @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
     def test_post_tool_use_read_does_not_increment(self, name: str) -> None:
