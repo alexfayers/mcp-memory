@@ -151,7 +151,7 @@ Returns the 10 most recent entities and their relations.
 
 ### create_relations
 
-Create relationships between entities. Duplicates are ignored.
+Create relationships between entities. Duplicates are ignored. Relation types are normalized (camelCase/underscore to hyphen, lowercased) and must resolve to the canonical vocabulary: `implements`, `depends-on`, `blocks`, `relates-to`, `belongs-to`, `part-of`, `used-by`, `used-in`. Common variants and synonyms are mapped automatically (e.g. `related-to` and `extends` become `relates-to` and `implements`); anything that does not resolve to a canonical type is rejected.
 
 ### get_entity_with_relations
 
