@@ -2,12 +2,61 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
 EntityStatus = Literal["planned", "in-progress", "blocked", "resolved", "archived"]
 
 VALID_STATUSES = ("planned", "in-progress", "blocked", "resolved", "archived")
+
+VALID_RELATION_TYPES = (
+    "implements",
+    "depends-on",
+    "blocks",
+    "relates-to",
+    "belongs-to",
+    "part-of",
+    "used-by",
+    "used-in",
+)
+
+RELATION_TYPE_ALIASES = {
+    "related-to": "relates-to",
+    "extends": "implements",
+    "uses": "implements",
+    "tests": "implements",
+    "blocked-by": "depends-on",
+    "follows": "depends-on",
+    "subproject-of": "part-of",
+    "has-feature": "part-of",
+    "overlay-for": "used-in",
+    "has-overlay": "used-by",
+    "informs": "relates-to",
+    "constrains": "relates-to",
+    "applies-to": "relates-to",
+    "supports": "relates-to",
+    "participates-in": "relates-to",
+    "explores": "relates-to",
+    "examines": "relates-to",
+    "enables": "relates-to",
+    "finding-in": "relates-to",
+}
+
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def normalize_relation_type(relation_type: str) -> str:
+    """Canonicalize a relation type to its preferred form.
+
+    Trims whitespace, splits camelCase, converts underscores to hyphens,
+    lowercases, then applies the synonym alias map.
+    """
+    canonical = _CAMEL_BOUNDARY_RE.sub("-", relation_type.strip())
+    canonical = re.sub(r"[_-]+", "-", canonical).strip("-").lower()
+    if not canonical:
+        raise ValueError(f"Relation type must be a non-empty string, got: {relation_type!r}")
+    return RELATION_TYPE_ALIASES.get(canonical, canonical)
 
 
 @dataclass
