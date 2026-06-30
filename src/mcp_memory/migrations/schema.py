@@ -38,6 +38,20 @@ _RELATION_TYPE_BACKFILL = {
     "examines": "relates-to",
     "enables": "relates-to",
     "finding-in": "relates-to",
+    "assigned-to": "belongs-to",
+    "owned-by": "belongs-to",
+    "changes": "implements",
+    "modifies": "implements",
+    "modified": "implements",
+    "verifies": "implements",
+    "continues": "depends-on",
+    "replaces": "relates-to",
+    "discovered-by": "relates-to",
+    "research-for": "relates-to",
+    "context-for": "relates-to",
+    "has-architecture": "part-of",
+    "has-todos": "relates-to",
+    "self": "relates-to",
 }
 
 
