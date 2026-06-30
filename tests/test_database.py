@@ -164,6 +164,106 @@ class TestMigrations:
         reopened.close()
 
 
+class TestRelationTypeBackfill:
+    def _seed_variant_relation(
+        self, db: DatabaseManager, source: str, target: str, variant: str
+    ) -> None:
+        """Insert a relation using a raw (unvalidated) relation type, bypassing the server layer."""
+        db._db.execute("INSERT OR IGNORE INTO relation_types (name) VALUES (?)", (variant,))
+        src_id = db._db.execute("SELECT id FROM entities WHERE name = ?", (source,)).fetchone()[0]
+        tgt_id = db._db.execute("SELECT id FROM entities WHERE name = ?", (target,)).fetchone()[0]
+        type_id = db._db.execute(
+            "SELECT id FROM relation_types WHERE name = ?", (variant,)
+        ).fetchone()[0]
+        db._db.execute(
+            "INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) "
+            "VALUES (?, ?, ?)",
+            (src_id, tgt_id, type_id),
+        )
+        db._db.commit()
+
+    def _rerun_backfill(self, db: DatabaseManager, db_path: Path) -> DatabaseManager:
+        """Roll schema_version back past v19 and reopen so the idempotent backfill re-runs."""
+        db._db.execute("DELETE FROM schema_version WHERE version >= 19")
+        db._db.commit()
+        db.close()
+        return DatabaseManager(db_path)
+
+    def test_variant_merged_into_canonical(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        db = DatabaseManager(db_path)
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        self._seed_variant_relation(db, "a", "b", "related-to")
+
+        db = self._rerun_backfill(db, db_path)
+
+        result = db.get_entity_with_relations("proj", "a")
+        assert [r.relation_type for r in result["relations"]] == ["relates-to"]
+        orphan = db._db.execute("SELECT 1 FROM relation_types WHERE name = 'related-to'").fetchone()
+        assert orphan is None
+
+    def test_long_tail_collapsed(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        db = DatabaseManager(db_path)
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "c", "entityType": "feature", "observations": ["z"]},
+            ],
+        )
+        self._seed_variant_relation(db, "a", "c", "extends")
+
+        db = self._rerun_backfill(db, db_path)
+
+        result = db.get_entity_with_relations("proj", "a")
+        assert [r.relation_type for r in result["relations"]] == ["implements"]
+
+    def test_underscore_and_camel_variants_merged(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        db = DatabaseManager(db_path)
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+                {"name": "c", "entityType": "feature", "observations": ["z"]},
+            ],
+        )
+        self._seed_variant_relation(db, "a", "b", "related_to")
+        self._seed_variant_relation(db, "a", "c", "blockedBy")
+
+        db = self._rerun_backfill(db, db_path)
+
+        result = db.get_entity_with_relations("proj", "a")
+        types = sorted(r.relation_type for r in result["relations"])
+        assert types == ["depends-on", "relates-to"]
+
+    def test_collision_drops_duplicate(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        db = DatabaseManager(db_path)
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        db.create_relations("proj", [Relation(source="a", target="b", relation_type="relates-to")])
+        self._seed_variant_relation(db, "a", "b", "related-to")
+
+        db = self._rerun_backfill(db, db_path)
+
+        result = db.get_entity_with_relations("proj", "a")
+        assert [r.relation_type for r in result["relations"]] == ["relates-to"]
+
+
 class TestProjectPaths:
     def test_set_and_get_round_trip(self, db: DatabaseManager, tmp_path: Path) -> None:
         repo = tmp_path / "repo"

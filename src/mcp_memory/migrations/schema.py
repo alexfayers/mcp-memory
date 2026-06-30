@@ -16,6 +16,85 @@ class Migration:
     statements: list[str]
 
 
+# Frozen snapshot of the variant -> canonical relation-type map at migration authoring time.
+# Kept local to the migration so later edits to the runtime alias map never rewrite history.
+_RELATION_TYPE_BACKFILL = {
+    "related-to": "relates-to",
+    "extends": "implements",
+    "uses": "implements",
+    "tests": "implements",
+    "blocked-by": "depends-on",
+    "follows": "depends-on",
+    "subproject-of": "part-of",
+    "has-feature": "part-of",
+    "overlay-for": "used-in",
+    "has-overlay": "used-by",
+    "informs": "relates-to",
+    "constrains": "relates-to",
+    "applies-to": "relates-to",
+    "supports": "relates-to",
+    "participates-in": "relates-to",
+    "explores": "relates-to",
+    "examines": "relates-to",
+    "enables": "relates-to",
+    "finding-in": "relates-to",
+}
+
+
+# Canonical relation-type vocabulary at migration authoring time. Frozen here so
+# later edits to the runtime vocabulary never rewrite migration history.
+_CANONICAL_RELATION_TYPES = (
+    "implements",
+    "depends-on",
+    "blocks",
+    "relates-to",
+    "belongs-to",
+    "part-of",
+    "used-by",
+    "used-in",
+)
+
+
+def _squash(name: str) -> str:
+    """Separator- and case-insensitive key: lowercased with '-' and '_' removed."""
+    return name.replace("-", "").replace("_", "").lower()
+
+
+def _relation_type_backfill_statements() -> list[str]:
+    """Build SQL that merges legacy relation types into their canonical form.
+
+    Matching is separator- and case-insensitive (so ``related_to``, ``related-to``
+    and ``relatedTo`` all collapse), covering both spelling variants of canonical
+    types and the semantic synonyms in the backfill map. For each canonical target:
+    ensure it exists, repoint matching relations (skipping rows that would collide
+    with an existing canonical edge), drop the collided leftovers, then remove the
+    now-unreferenced legacy types.
+    """
+    squash_to_canonical: dict[str, str] = {}
+    for canonical in _CANONICAL_RELATION_TYPES:
+        squash_to_canonical[_squash(canonical)] = canonical
+    for variant, canonical in _RELATION_TYPE_BACKFILL.items():
+        squash_to_canonical[_squash(variant)] = canonical
+
+    sql_squash = "LOWER(REPLACE(REPLACE(name, '_', ''), '-', ''))"
+    statements: list[str] = []
+    for squash_key, canonical in squash_to_canonical.items():
+        match = f"{sql_squash} = '{squash_key}' AND name != '{canonical}'"
+        statements.extend(
+            [
+                f"INSERT OR IGNORE INTO relation_types (name) VALUES ('{canonical}')",
+                f"""UPDATE OR IGNORE relations SET relation_type_id =
+                    (SELECT id FROM relation_types WHERE name = '{canonical}')
+                    WHERE relation_type_id IN
+                    (SELECT id FROM relation_types WHERE {match})""",
+                f"""DELETE FROM relations WHERE relation_type_id IN
+                    (SELECT id FROM relation_types WHERE {match})""",
+                f"DELETE FROM relation_types WHERE {match}",
+            ]
+        )
+    return statements
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -574,5 +653,9 @@ MIGRATIONS: list[Migration] = [
             )""",
             "CREATE INDEX IF NOT EXISTS idx_project_paths_project_id ON project_paths(project_id)",
         ],
+    ),
+    Migration(
+        version=19,
+        statements=_relation_type_backfill_statements(),
     ),
 ]
