@@ -100,6 +100,17 @@ def _is_exempt_agent(agent_type: str) -> bool:
     return bool(agent_type) and agent_type in _read_only_agent_types()
 
 
+def _is_subagent(agent_type: str) -> bool:
+    """Return True if running inside a spawned subagent (any non-empty agent type).
+
+    Memory-persistence discipline is a main-thread concern: a subagent's findings
+    return to its parent, which persists them. Hard-blocking a subagent only
+    deadlocks it (or drives junk gate-satisfying writes), so the block is never
+    applied to subagents - only the main agent loop, which has no agent type.
+    """
+    return bool(agent_type)
+
+
 class _ReminderChance:
     """Tracks the probability of triggering a memory reminder."""
 
@@ -298,7 +309,8 @@ class MemoryPlugin(HooksPlugin):
         return None
 
     def _on_pre_tool_use(self, **kwargs: object) -> HookResult | None:
-        if _is_exempt_agent(str(kwargs.get("agent_type", ""))):
+        agent_type = str(kwargs.get("agent_type", ""))
+        if _is_exempt_agent(agent_type):
             return None
         task_id = str(kwargs.get("task_id", ""))
         tool_name = str(kwargs.get("tool_name", ""))
@@ -308,10 +320,13 @@ class MemoryPlugin(HooksPlugin):
             return self._check_memory_scope(task_id, tool_name, parameters)
         if _is_memory_read(tool_name, parameters):
             return None
+        if _is_subagent(agent_type):
+            return None
         return _check_block(task_id, self._project_scope)
 
     def _on_pre_mcp_tool_use(self, **kwargs: object) -> HookResult | None:
-        if _is_exempt_agent(str(kwargs.get("agent_type", ""))):
+        agent_type = str(kwargs.get("agent_type", ""))
+        if _is_exempt_agent(agent_type):
             return None
         task_id = str(kwargs.get("task_id", ""))
         mcp_tool_name = str(kwargs.get("mcp_tool_name", ""))
@@ -323,6 +338,8 @@ class MemoryPlugin(HooksPlugin):
             }
             return self._check_memory_scope(task_id, "use_mcp_tool", params)
         if mcp_tool_name in _MEMORY_READ_TOOL_NAMES:
+            return None
+        if _is_subagent(agent_type):
             return None
         return _check_block(task_id, self._project_scope)
 
@@ -346,7 +363,8 @@ class MemoryPlugin(HooksPlugin):
         return None
 
     def _on_post_tool_use(self, **kwargs: object) -> HookResult | None:
-        if _is_exempt_agent(str(kwargs.get("agent_type", ""))):
+        agent_type = str(kwargs.get("agent_type", ""))
+        if _is_exempt_agent(agent_type) or _is_subagent(agent_type):
             return None
         task_id = str(kwargs.get("task_id", ""))
         tool_name = str(kwargs.get("tool_name", ""))

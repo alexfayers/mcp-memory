@@ -625,7 +625,10 @@ class TestReadOnlyAgentExemption:
         assert result is not None
         assert result.block is not None
 
-    def test_non_allowlisted_subagent_still_blocked(self, plugin: MemoryPlugin) -> None:
+    def test_non_allowlisted_subagent_not_blocked(self, plugin: MemoryPlugin) -> None:
+        # Any subagent (non-empty agent_type) is never hard-blocked: persistence is a
+        # main-thread concern and blocking a subagent only deadlocks it. The block applies
+        # to the main loop only.
         with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
             result = plugin.on_hook(
                 "PreToolUse",
@@ -634,8 +637,55 @@ class TestReadOnlyAgentExemption:
                 parameters={},
                 agent_type="general-purpose",
             )
+        assert result is None
+
+    def test_non_allowlisted_subagent_write_still_scope_checked(
+        self, plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        # Subagents skip the hard block but still get scope-mismatch protection on writes.
+        repo = tmp_path / "my-repo"
+        (repo / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="mcp__memory__add_observations",
+            parameters={"project": "wrong-project"},
+            agent_type="general-purpose",
+        )
         assert result is not None
         assert result.block is not None
+        assert "`wrong-project`" in result.block
+
+    def test_pre_mcp_tool_use_non_allowlisted_subagent_not_blocked(
+        self, plugin: MemoryPlugin
+    ) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreMcpToolUse",
+                task_id="t1",
+                mcp_tool_name="read_file",
+                agent_type="general-purpose",
+            )
+        assert result is None
+
+    def test_post_tool_use_does_not_increment_for_non_allowlisted_subagent(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset"),
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            plugin = MemoryPlugin()
+            result = plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+                is_state_write=False,
+                agent_type="general-purpose",
+            )
+        mock_increment.assert_not_called()
+        assert result is None
 
     def test_pre_mcp_tool_use_exempt_for_explore(self, plugin: MemoryPlugin) -> None:
         with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
