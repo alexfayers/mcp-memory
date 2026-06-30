@@ -182,6 +182,50 @@ class TestScopeUniqueness:
         assert not db.entity_exists_in_project("task/abc", _GLOBAL_PROJECT)
 
 
+class TestRelationTypeValidation:
+    def test_normalizes_variant_relation_type(self) -> None:
+        result = _validate_and_extract_relations(
+            "proj",
+            [
+                {
+                    "name": "task/t",
+                    "entityType": "task",
+                    "observations": ["obs"],
+                    "relations": [{"target": "project/foo", "type": "related_to"}],
+                }
+            ],
+        )
+        assert result[0].relation_type == "relates-to"
+
+    def test_collapses_long_tail_relation_type(self) -> None:
+        result = _validate_and_extract_relations(
+            "proj",
+            [
+                {
+                    "name": "task/t",
+                    "entityType": "task",
+                    "observations": ["obs"],
+                    "relations": [{"target": "project/foo", "type": "extends"}],
+                }
+            ],
+        )
+        assert result[0].relation_type == "implements"
+
+    def test_rejects_unknown_relation_type(self) -> None:
+        with pytest.raises(ValueError, match="Invalid relation type"):
+            _validate_and_extract_relations(
+                "proj",
+                [
+                    {
+                        "name": "task/t",
+                        "entityType": "task",
+                        "observations": ["obs"],
+                        "relations": [{"target": "project/foo", "type": "frobnicates"}],
+                    }
+                ],
+            )
+
+
 class TestInlineRelations:
     def test_auto_fills_source_from_entity_name(self) -> None:
         result = _validate_and_extract_relations(

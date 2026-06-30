@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 from .activity import record_tool
 from .config import get_db_path
 from .database import DatabaseManager
-from .models import Entity, Relation
+from .models import VALID_RELATION_TYPES, Entity, Relation, normalize_relation_type
 from .visualise import register_visualise_routes
 
 if TYPE_CHECKING:
@@ -190,12 +190,23 @@ def _ensure_project_root(db: DatabaseManager, project: str) -> None:
 register_visualise_routes(mcp, _get_db)
 
 
+def _validate_relation_type(raw: str) -> str:
+    """Normalize a relation type and enforce the canonical vocabulary."""
+    relation_type = normalize_relation_type(raw)
+    if relation_type not in VALID_RELATION_TYPES:
+        raise ValueError(
+            f"Invalid relation type '{raw}' (normalized to '{relation_type}'). "
+            f"Valid types: {sorted(VALID_RELATION_TYPES)}"
+        )
+    return relation_type
+
+
 def _extract_relation_type(rel: dict[str, str]) -> str:
-    """Extract relation type from a dict, accepting both 'type' and 'relation_type' keys."""
+    """Extract and canonicalize a relation type, accepting 'type' or 'relation_type' keys."""
     if "type" in rel:
-        return str(rel["type"])
+        return _validate_relation_type(str(rel["type"]))
     if "relation_type" in rel:
-        return str(rel["relation_type"])
+        return _validate_relation_type(str(rel["relation_type"]))
     raise KeyError("Relation must have a 'type' or 'relation_type' key.")
 
 
