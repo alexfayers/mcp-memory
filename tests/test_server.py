@@ -8,6 +8,7 @@ import pytest
 
 from mcp_memory import server
 from mcp_memory.database import DatabaseManager
+from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _GLOBAL_PROJECT, _ensure_project_root, _validate_and_extract_relations
 
@@ -224,6 +225,47 @@ class TestRelationTypeValidation:
                     }
                 ],
             )
+
+
+class TestRelationTypeWarnings:
+    def _seed_nonconforming(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        db._db.execute("INSERT OR IGNORE INTO relation_types (name) VALUES ('legacy_thing')")
+        src = db._db.execute("SELECT id FROM entities WHERE name = 'a'").fetchone()[0]
+        tgt = db._db.execute("SELECT id FROM entities WHERE name = 'b'").fetchone()[0]
+        type_id = db._db.execute(
+            "SELECT id FROM relation_types WHERE name = 'legacy_thing'"
+        ).fetchone()[0]
+        db._db.execute(
+            "INSERT INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
+            (src, tgt, type_id),
+        )
+        db._db.commit()
+
+    def test_warning_present_for_nonconforming(self, server_db: DatabaseManager) -> None:
+        self._seed_nonconforming(server_db)
+        result = server.get_entity_with_relations("proj", "a")
+        assert "legacy_thing" in result["relationTypeWarnings"]
+
+    def test_no_warning_for_clean_data(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        server_db.create_relations(
+            "proj", [Relation(source="a", target="b", relation_type="belongs-to")]
+        )
+        result = server.get_entity_with_relations("proj", "a")
+        assert "relationTypeWarnings" not in result
 
 
 class TestInlineRelations:
