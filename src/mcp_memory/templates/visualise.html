@@ -120,6 +120,7 @@ svg { width: 100vw; height: 100vh; }
   <h3 id="p-type"></h3>
   <div id="p-status"></div>
   <div id="p-created" style="font-size:11px;color:#484f58;margin-bottom:12px"></div>
+  <div id="p-votes" style="font-size:11px;margin-bottom:12px"></div>
   <div id="p-paths"></div>
   <div id="p-obs"></div>
 </div>
@@ -244,7 +245,7 @@ function render(data) {
   const oldMap = new Map(nodes.map(n => [n.id, n]));
   nodes = incoming.map(n => {
     const old = oldMap.get(n.id);
-    if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, observations: n.observations }); return old; }
+    if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, observations: n.observations, vote_score: n.vote_score }); return old; }
     return n;
   });
   links = newLinks;
@@ -313,6 +314,10 @@ function showPanel(d) {
   const sb = document.getElementById("p-status");
   sb.innerHTML = d.status ? `<span class="status-badge" style="color:${statusColours[d.status] || '#c9d1d9'}">${d.status}</span>` : "";
   document.getElementById("p-created").textContent = d.created_at ? `Created: ${new Date(d.created_at + "Z").toLocaleString()}` + (d.updated_at && d.updated_at !== d.created_at ? ` | Updated: ${new Date(d.updated_at + "Z").toLocaleString()}` : "") : "";
+  const votes = d.vote_score || 0;
+  document.getElementById("p-votes").innerHTML = votes
+    ? `Votes: <span style="color:${votes > 0 ? '#3fb950' : '#f85149'}">${votes > 0 ? "+" : ""}${votes}</span>`
+    : "";
   const paths = pathsByProject[d.project] || [];
   document.getElementById("p-paths").innerHTML = paths.length
     ? `<h4>On disk (${d.project})</h4>` + paths.map(p => `<div class="path">${p.replace(/</g,"&lt;")}</div>`).join("")
@@ -455,7 +460,8 @@ function renderResults(hits) {
   document.getElementById("results-count").textContent = hits.length + (hits.length === 1 ? " match" : " matches");
   document.getElementById("results-list").innerHTML = hits.map(h => {
     const snip = (h.observations[0] || "").replace(/</g, "&lt;");
-    const sub = [h.entity_type, h.project, h.status].filter(Boolean).join(" · ");
+    const votes = h.vote_score ? `${h.vote_score > 0 ? "+" : ""}${h.vote_score} votes` : null;
+    const sub = [h.entity_type, h.project, h.status, votes].filter(Boolean).join(" · ");
     return `<div class="hit" data-name="${h.name.replace(/"/g, "&quot;")}">`
       + `<span class="rank">${h.rank}</span>`
       + `<span class="meta"><span class="nm">${h.name.replace(/</g, "&lt;")}</span>`

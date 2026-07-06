@@ -166,6 +166,7 @@ When an entity exceeds ~30 observations, it's a signal to extract domain-specifi
 - **IMPORTANT: `create_entities` OVERWRITES all existing observations for an entity.** To append new observations without risk of data loss, use `add_observations` instead. Only use `create_entities` when you need to replace all observations or create a new entity. If you must use `create_entities` on an existing entity, always call `get_entity_with_relations` first to read existing observations and include ALL of them.
 - Use `add_observations` to safely append new facts to an existing entity - it deduplicates automatically and throws if the entity doesn't exist.
 - Use `delete_observations` to remove specific observations by exact content match - it returns the count deleted and throws if the entity doesn't exist.
+- **Vote on memories as you retrieve them.** When a search or recall surfaces an entity that genuinely helped, `vote_entity(project, name, 1)`; when one is stale, misleading, or noise, `vote_entity(project, name, -1)`. Votes tune future ranking (useful memories rise, unhelpful ones sink but remain findable) and do not alter content or `updated_at`. Prefer a downvote over `delete_entity` when a memory is unhelpful but not wrong enough to remove.
 
 ## After completing a task or reaching a milestone
 

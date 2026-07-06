@@ -72,8 +72,9 @@ CREATE_ENTITIES_DESC = (
 )
 SEARCH_NODES_DESC = (
     "Search entities and relations by text query within a project. "
-    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency "
-    "(newer entities rank higher). "
+    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by type-aware recency "
+    "(durable types like pattern/knowledge decay slower than task) and by usefulness votes "
+    "(see vote_entity: upvoted entities rank higher, downvoted ones sink but stay findable). "
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "
@@ -156,7 +157,8 @@ MOVE_PROJECT_ENTITIES_DESC = (
 SEARCH_ALL_PROJECTS_DESC = (
     "Search entities and relations across ALL projects in a single call. "
     "Returns results grouped by project name. "
-    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency. "
+    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by type-aware recency "
+    "and usefulness votes (see vote_entity). "
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "

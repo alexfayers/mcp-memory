@@ -71,6 +71,7 @@ Each pattern entity should be independently searchable - someone searching for "
 - Archive or delete resolved tasks that are no longer useful context
 - Delete old ticket/CR entities that were one-off investigations
 - Archive superseded project entities (e.g. old TS project replaced by Python rewrite)
+- Treat a strongly negative `vote_score` as a rot signal - prioritise these entities for review, and trim or delete them if the downvotes reflect stale or misleading content
 - Remove observations with:
   - Dates/timestamps (entities have automatic created_at/updated_at)
   - File paths in global scope (belong on project entities in project scope)
