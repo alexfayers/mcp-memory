@@ -109,6 +109,13 @@ SET_ENTITY_STATUS_DESC = (
     "Set or clear the status of an entity. "
     "Valid statuses: planned, in-progress, blocked, resolved, archived. Use null to clear."
 )
+VOTE_ENTITY_DESC = (
+    "Record a +1 or -1 usefulness vote on an entity as you retrieve it: +1 for a memory that "
+    "proved useful, -1 for one that was stale or unhelpful. Votes nudge search ranking "
+    "(useful memories surface higher, unhelpful ones sink but remain findable) and do not "
+    "change the entity's content or updated_at. A light alternative to delete_entity when a "
+    "memory is not wrong enough to remove. vote must be 1 or -1; returns the new net vote_score."
+)
 SEARCH_RELATED_NODES_DESC = (
     "Get an entity along with all its directly related entities within a project. "
     "Optionally filter by entityType and/or relationType."
@@ -641,6 +648,17 @@ def set_entity_status(
         db = _get_db()
         db.set_entity_status(project, name, status)  # type: ignore[arg-type]
         return {"message": f"Status of '{name}' set to {status!r}."}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=VOTE_ENTITY_DESC)
+@_track
+def vote_entity(project: str, name: str, vote: int) -> dict[str, object]:
+    """Apply a +1/-1 usefulness vote to an entity, returning its new net vote_score."""
+    try:
+        db = _get_db()
+        return {"name": name, "project": project, "vote_score": db.vote_entity(project, name, vote)}
     except Exception as e:
         return {"error": str(e)}
 

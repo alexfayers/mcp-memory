@@ -384,6 +384,28 @@ class TestListProjects:
         assert db.list_projects() == []
 
 
+class TestVoteEntityTool:
+    def test_valid_vote_returns_new_score(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        server.vote_entity("proj", "e1", 1)
+        assert server.vote_entity("proj", "e1", 1) == {
+            "name": "e1",
+            "project": "proj",
+            "vote_score": 2,
+        }
+
+    def test_invalid_vote_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        assert "error" in server.vote_entity("proj", "e1", 5)
+
+    def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
+        assert "error" in server.vote_entity("proj", "nope", 1)
+
+
 class TestProjectPathTools:
     def test_set_project_paths_registers_and_creates_root(
         self, server_db: DatabaseManager, tmp_path: Path

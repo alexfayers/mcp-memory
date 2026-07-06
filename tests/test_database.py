@@ -950,6 +950,43 @@ class TestUpdatedAt:
         assert db.get_entity("proj", "e1").updated_at != before
 
 
+class TestVoteEntity:
+    def test_upvote_increments_score(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        assert db.vote_entity("proj", "e1", 1) == 1
+
+    def test_downvote_decrements_score(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        assert db.vote_entity("proj", "e1", -1) == -1
+
+    def test_votes_accumulate(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.vote_entity("proj", "e1", 1)
+        db.vote_entity("proj", "e1", 1)
+        db.vote_entity("proj", "e1", -1)
+        assert db.get_entity("proj", "e1").vote_score == 1
+
+    @pytest.mark.parametrize("vote", [0, 2, -3])
+    def test_invalid_vote_raises(self, db: DatabaseManager, vote: int) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        with pytest.raises(ValueError, match="Invalid vote"):
+            db.vote_entity("proj", "e1", vote)
+
+    def test_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.vote_entity("proj", "nope", 1)
+
+    def test_vote_does_not_change_updated_at(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-1 day') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        before = db.get_entity("proj", "e1").updated_at
+        db.vote_entity("proj", "e1", 1)
+        assert db.get_entity("proj", "e1").updated_at == before
+
+
 class TestCompactMode:
     def test_read_graph_compact_omits_observations(self, db: DatabaseManager) -> None:
         db.create_entities(

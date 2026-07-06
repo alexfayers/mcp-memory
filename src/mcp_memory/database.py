@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from .migrations.runner import run_migrations
-from .models import VALID_STATUSES, Entity, EntityStatus, Relation
+from .models import VALID_STATUSES, VALID_VOTES, Entity, EntityStatus, Relation
 from .path_resolver import match_project_for_path, normalize_path
 
 _RECENCY_HALF_LIFE_DAYS = 30.0
@@ -433,6 +433,29 @@ class DatabaseManager:
 
         self._db.execute("UPDATE entities SET status = ? WHERE id = ?", (status, entity_id))
         self._db.commit()
+
+    def vote_entity(self, project: str, name: str, vote: int) -> int:
+        """Apply a +1/-1 usefulness vote to an entity and return its new net score.
+
+        Deliberately updates only vote_score, leaving updated_at untouched, so a vote
+        (a relevance signal) is not mistaken for a content change by recency ranking.
+        """
+        if vote not in VALID_VOTES:
+            raise ValueError(f"Invalid vote '{vote}'. Must be one of: {VALID_VOTES}")
+
+        project_id = self._get_or_create_project_id(project)
+        entity_id = self._get_entity_id(name, project_id)
+        if entity_id is None:
+            raise ValueError(f"Entity '{name}' not found in project '{project}'")
+
+        self._db.execute(
+            "UPDATE entities SET vote_score = vote_score + ? WHERE id = ?", (vote, entity_id)
+        )
+        self._db.commit()
+        row = self._db.execute(
+            "SELECT vote_score FROM entities WHERE id = ?", (entity_id,)
+        ).fetchone()
+        return int(row["vote_score"])
 
     def create_relations(self, project: str, relations: list[Relation]) -> None:
         """Create relations between entities, ignoring duplicates."""
