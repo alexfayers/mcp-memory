@@ -155,6 +155,31 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
             since = 0
         return JSONResponse({"events": activity.recent(since), "seq": activity.latest_seq()})
 
+    @mcp.custom_route("/api/vote", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_vote(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        project = body.get("project")
+        name = body.get("name")
+        vote = body.get("vote")
+        if not isinstance(project, str) or not isinstance(name, str):
+            return JSONResponse({"error": "project and name are required"}, status_code=400)
+        if not isinstance(vote, int) or isinstance(vote, bool) or vote not in (1, -1):
+            return JSONResponse({"error": "vote must be 1 or -1"}, status_code=400)
+        try:
+            new_score = get_db().vote_entity(project, name, vote)
+        except ValueError:
+            return JSONResponse({"error": "entity not found"}, status_code=404)
+        result = {"name": name, "project": project, "vote_score": new_score}
+        activity.record_tool(
+            "vote_entity", {"project": project, "name": name, "vote": vote}, result
+        )
+        return JSONResponse(result)
+
     @mcp.custom_route("/visualise", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def visualise_page(request: Request) -> HTMLResponse:
         return HTMLResponse(_VISUALISE_HTML)
