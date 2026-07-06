@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from mcp_memory.database import DatabaseManager
+from mcp_memory.migrations.schema import _relation_type_backfill_statements
 from mcp_memory.models import Entity, Relation
 from mcp_memory.path_resolver import normalize_path
 
@@ -163,6 +164,29 @@ class TestMigrations:
         assert reopened.get_project_for_path(str(repo)) == "platform"
         reopened.close()
 
+    def test_vote_score_backfills_to_zero(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        first = DatabaseManager(db_path)
+        first.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["x"]}]
+        )
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        assert reopened.get_entity("proj", "task/a").vote_score == 0
+        reopened.close()
+
+
+class TestVoteScoreReadPaths:
+    def test_new_entity_reports_zero_vote_score(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["keyword"]}]
+        )
+
+        assert db.get_entity("proj", "task/a").vote_score == 0
+        assert db.search_nodes("proj", "keyword")["entities"][0].vote_score == 0
+        assert db.read_graph("proj")["entities"][0].vote_score == 0
+
 
 class TestRelationTypeBackfill:
     def _seed_variant_relation(
@@ -183,11 +207,15 @@ class TestRelationTypeBackfill:
         db._db.commit()
 
     def _rerun_backfill(self, db: DatabaseManager, db_path: Path) -> DatabaseManager:
-        """Roll schema_version back past v19 and reopen so the idempotent backfill re-runs."""
-        db._db.execute("DELETE FROM schema_version WHERE version >= 19")
+        """Re-run v19's backfill statements directly to prove the backfill is idempotent.
+
+        Rolling back schema_version and reopening would also re-run any later, non-idempotent
+        migrations, so apply the v19 statements straight against the open connection instead.
+        """
+        for statement in _relation_type_backfill_statements():
+            db._db.execute(statement)
         db._db.commit()
-        db.close()
-        return DatabaseManager(db_path)
+        return db
 
     def test_variant_merged_into_canonical(self, tmp_path: Path) -> None:
         db_path = tmp_path / "memory.db"
@@ -745,6 +773,18 @@ class TestSearchNodes:
         assert result["entities"][0].name == "new"
         assert result["entities"][1].name == "old"
 
+    def test_upvote_outranks_identical_unvoted_entity(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "quiet", "entityType": "task", "observations": ["keyword"]},
+                {"name": "useful", "entityType": "task", "observations": ["keyword"]},
+            ],
+        )
+        db.vote_entity("proj", "useful", 1)
+        result = db.search_nodes("proj", "keyword")
+        assert result["entities"][0].name == "useful"
+
     def test_start_date_filters_old_entities(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj",
@@ -920,6 +960,43 @@ class TestUpdatedAt:
         before = db.get_entity("proj", "e1").updated_at
         db.set_entity_status("proj", "e1", "resolved")
         assert db.get_entity("proj", "e1").updated_at != before
+
+
+class TestVoteEntity:
+    def test_upvote_increments_score(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        assert db.vote_entity("proj", "e1", 1) == 1
+
+    def test_downvote_decrements_score(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        assert db.vote_entity("proj", "e1", -1) == -1
+
+    def test_votes_accumulate(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.vote_entity("proj", "e1", 1)
+        db.vote_entity("proj", "e1", 1)
+        db.vote_entity("proj", "e1", -1)
+        assert db.get_entity("proj", "e1").vote_score == 1
+
+    @pytest.mark.parametrize("vote", [0, 2, -3])
+    def test_invalid_vote_raises(self, db: DatabaseManager, vote: int) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        with pytest.raises(ValueError, match="Invalid vote"):
+            db.vote_entity("proj", "e1", vote)
+
+    def test_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.vote_entity("proj", "nope", 1)
+
+    def test_vote_does_not_change_updated_at(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-1 day') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        before = db.get_entity("proj", "e1").updated_at
+        db.vote_entity("proj", "e1", 1)
+        assert db.get_entity("proj", "e1").updated_at == before
 
 
 class TestCompactMode:

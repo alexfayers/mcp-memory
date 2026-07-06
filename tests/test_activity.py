@@ -81,6 +81,7 @@ class TestKindMapping:
             "add_observations": "update",
             "delete_observations": "update",
             "set_entity_status": "update",
+            "vote_entity": "update",
             "delete_entity": "delete",
             "delete_relation": "delete",
             "delete_project": "delete",
@@ -133,6 +134,14 @@ class TestWriteExtraction:
             "set_entity_status",
             {"project": "p", "name": "task/foo", "status": "resolved"},
             {"message": "ok"},
+        )
+        assert activity.recent(0)[0]["entities"] == ["task/foo"]
+
+    def test_vote_entity_extracts_name(self) -> None:
+        activity.record_tool(
+            "vote_entity",
+            {"project": "p", "name": "task/foo", "vote": 1},
+            {"name": "task/foo", "project": "p", "vote_score": 1},
         )
         assert activity.recent(0)[0]["entities"] == ["task/foo"]
 

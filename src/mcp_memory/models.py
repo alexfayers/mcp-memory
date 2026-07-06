@@ -10,6 +10,8 @@ EntityStatus = Literal["planned", "in-progress", "blocked", "resolved", "archive
 
 VALID_STATUSES = ("planned", "in-progress", "blocked", "resolved", "archived")
 
+VALID_VOTES = (1, -1)
+
 VALID_RELATION_TYPES = (
     "implements",
     "depends-on",
@@ -82,6 +84,7 @@ class Entity:
     created_at: str | None = None
     updated_at: str | None = None
     project_name: str | None = None
+    vote_score: int = 0
 
 
 @dataclass

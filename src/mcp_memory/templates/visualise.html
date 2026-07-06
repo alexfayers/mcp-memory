@@ -120,6 +120,11 @@ svg { width: 100vw; height: 100vh; }
   <h3 id="p-type"></h3>
   <div id="p-status"></div>
   <div id="p-created" style="font-size:11px;color:#484f58;margin-bottom:12px"></div>
+  <div id="p-votes" style="font-size:11px;margin-bottom:6px"></div>
+  <div id="p-vote-buttons" style="margin-bottom:12px;display:flex;gap:8px">
+    <button id="vote-up" style="padding:2px 10px;font-size:12px">+1</button>
+    <button id="vote-down" style="padding:2px 10px;font-size:12px">-1</button>
+  </div>
   <div id="p-paths"></div>
   <div id="p-obs"></div>
 </div>
@@ -154,11 +159,30 @@ const zoom = d3.zoom().scaleExtent([ZOOM_MIN, ZOOM_MAX]).on("zoom", e => {
 });
 svg.call(zoom);
 
-let simulation = null, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, orphans = new Set();
+let simulation = null, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, panelDatum = null, orphans = new Set();
 let nodes = [], links = [], relCount = new Map();
 
 const panel = document.getElementById("panel");
 document.getElementById("panel-close").onclick = () => { panel.classList.remove("open"); selectedNode = null; updateSelection(); };
+
+async function castVote(vote) {
+  if (!panelDatum) return;
+  const { project, name } = panelDatum;
+  const up = document.getElementById("vote-up"), down = document.getElementById("vote-down");
+  up.disabled = down.disabled = true;
+  try {
+    const res = await fetch("/api/vote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, name, vote }) });
+    if (!res.ok) return;
+    const data = await res.json();
+    panelDatum.vote_score = data.vote_score;
+    const live = nodes.find(n => n.id === name && n.project === project);
+    if (live) live.vote_score = data.vote_score;
+    renderVotes(data.vote_score);
+  } catch (e) { /* transient; leave display unchanged */ }
+  finally { up.disabled = down.disabled = false; }
+}
+document.getElementById("vote-up").onclick = () => castVote(1);
+document.getElementById("vote-down").onclick = () => castVote(-1);
 
 let pathsByProject = {};
 async function loadProjectPaths() {
@@ -244,7 +268,7 @@ function render(data) {
   const oldMap = new Map(nodes.map(n => [n.id, n]));
   nodes = incoming.map(n => {
     const old = oldMap.get(n.id);
-    if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, observations: n.observations }); return old; }
+    if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, observations: n.observations, vote_score: n.vote_score }); return old; }
     return n;
   });
   links = newLinks;
@@ -307,12 +331,20 @@ function dragStart(e, d) { if (!e.active) simulation.alphaTarget(0.3).restart();
 function dragged(e, d) { d.fx = e.x; d.fy = e.y; }
 function dragEnd(e, d) { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
 
+function renderVotes(score) {
+  const v = score || 0;
+  const colour = v > 0 ? '#3fb950' : v < 0 ? '#f85149' : '#8b949e';
+  document.getElementById("p-votes").innerHTML = `Votes: <span style="color:${colour}">${v > 0 ? "+" : ""}${v}</span>`;
+}
+
 function showPanel(d) {
+  panelDatum = d;
   document.getElementById("p-name").textContent = d.name;
   document.getElementById("p-type").textContent = d.entity_type;
   const sb = document.getElementById("p-status");
   sb.innerHTML = d.status ? `<span class="status-badge" style="color:${statusColours[d.status] || '#c9d1d9'}">${d.status}</span>` : "";
   document.getElementById("p-created").textContent = d.created_at ? `Created: ${new Date(d.created_at + "Z").toLocaleString()}` + (d.updated_at && d.updated_at !== d.created_at ? ` | Updated: ${new Date(d.updated_at + "Z").toLocaleString()}` : "") : "";
+  renderVotes(d.vote_score);
   const paths = pathsByProject[d.project] || [];
   document.getElementById("p-paths").innerHTML = paths.length
     ? `<h4>On disk (${d.project})</h4>` + paths.map(p => `<div class="path">${p.replace(/</g,"&lt;")}</div>`).join("")
@@ -455,7 +487,8 @@ function renderResults(hits) {
   document.getElementById("results-count").textContent = hits.length + (hits.length === 1 ? " match" : " matches");
   document.getElementById("results-list").innerHTML = hits.map(h => {
     const snip = (h.observations[0] || "").replace(/</g, "&lt;");
-    const sub = [h.entity_type, h.project, h.status].filter(Boolean).join(" · ");
+    const votes = h.vote_score ? `${h.vote_score > 0 ? "+" : ""}${h.vote_score} votes` : null;
+    const sub = [h.entity_type, h.project, h.status, votes].filter(Boolean).join(" · ");
     return `<div class="hit" data-name="${h.name.replace(/"/g, "&quot;")}">`
       + `<span class="rank">${h.rank}</span>`
       + `<span class="meta"><span class="nm">${h.name.replace(/</g, "&lt;")}</span>`

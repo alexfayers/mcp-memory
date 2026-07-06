@@ -71,6 +71,7 @@ class TestGetAllGraphData:
                 }
             ],
         )
+        db.vote_entity("proj", "e1", 1)
         result = get_all_graph_data(db, "proj")
         assert len(result["entities"]) == 1
         entity = result["entities"][0]
@@ -78,6 +79,7 @@ class TestGetAllGraphData:
         assert entity["entity_type"] == "task"
         assert entity["observations"] == ["obs1", "obs2"]
         assert entity["status"] == "planned"
+        assert entity["vote_score"] == 1
 
     def test_returns_relations(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -232,6 +234,7 @@ class TestSearchGraph:
             "status": None,
             "created_at": entity["created_at"],
             "updated_at": entity["updated_at"],
+            "vote_score": 0,
             "observations": ["deployment pipeline"],
         }
 
@@ -426,3 +429,76 @@ class TestApiSearch:
         await client.get("/api/search", params={"q": "kafka", "project": "proj"})
         resp = await client.get("/api/activity")
         assert resp.json() == {"events": [], "seq": 0}
+
+
+class TestApiVote:
+    @pytest.mark.anyio
+    async def test_valid_vote_returns_new_score(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": 1})
+        assert resp.status_code == 200
+        assert resp.json() == {"name": "e1", "project": "proj", "vote_score": 1}
+
+        resp = await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": 1})
+        assert resp.json()["vote_score"] == 2
+
+        resp = await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": -1})
+        assert resp.json()["vote_score"] == 1
+
+    @pytest.mark.anyio
+    async def test_vote_records_activity_and_ripples(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": 1})
+        events = (await client.get("/api/activity")).json()["events"]
+        assert len(events) == 1
+        assert events[0]["tool"] == "vote_entity"
+        assert events[0]["kind"] == "update"
+        assert events[0]["entities"] == ["e1"]
+        assert events[0]["project"] == "proj"
+
+    @pytest.mark.anyio
+    async def test_invalid_vote_value_rejected(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        for bad in (5, 0):
+            resp = await client.post(
+                "/api/vote", json={"project": "proj", "name": "e1", "vote": bad}
+            )
+            assert resp.status_code == 400
+            assert resp.json() == {"error": "vote must be 1 or -1"}
+        graph = (await client.get("/api/graph", params={"project": "proj"})).json()
+        assert graph["entities"][0]["vote_score"] == 0
+        assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
+
+    @pytest.mark.anyio
+    async def test_boolean_vote_rejected(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": True})
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "vote must be 1 or -1"}
+
+    @pytest.mark.anyio
+    async def test_unknown_entity_returns_404(self, client: httpx.AsyncClient) -> None:
+        resp = await client.post("/api/vote", json={"project": "proj", "name": "ghost", "vote": 1})
+        assert resp.status_code == 404
+        assert resp.json() == {"error": "entity not found"}
+        assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
+
+    @pytest.mark.anyio
+    async def test_malformed_body_returns_400(self, client: httpx.AsyncClient) -> None:
+        resp = await client.post("/api/vote", content=b"not json")
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "invalid JSON body"}
+
+    @pytest.mark.anyio
+    async def test_missing_fields_returns_400(self, client: httpx.AsyncClient) -> None:
+        resp = await client.post("/api/vote", json={"vote": 1})
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "project and name are required"}

@@ -72,8 +72,9 @@ CREATE_ENTITIES_DESC = (
 )
 SEARCH_NODES_DESC = (
     "Search entities and relations by text query within a project. "
-    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency "
-    "(newer entities rank higher). "
+    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by type-aware recency "
+    "(durable types like pattern/knowledge decay slower than task) and by usefulness votes "
+    "(see vote_entity: upvoted entities rank higher, downvoted ones sink but stay findable). "
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "
@@ -108,6 +109,13 @@ DELETE_OBSERVATIONS_DESC = (
 SET_ENTITY_STATUS_DESC = (
     "Set or clear the status of an entity. "
     "Valid statuses: planned, in-progress, blocked, resolved, archived. Use null to clear."
+)
+VOTE_ENTITY_DESC = (
+    "Record a +1 or -1 usefulness vote on an entity as you retrieve it: +1 for a memory that "
+    "proved useful, -1 for one that was stale or unhelpful. Votes nudge search ranking "
+    "(useful memories surface higher, unhelpful ones sink but remain findable) and do not "
+    "change the entity's content or updated_at. A light alternative to delete_entity when a "
+    "memory is not wrong enough to remove. vote must be 1 or -1; returns the new net vote_score."
 )
 SEARCH_RELATED_NODES_DESC = (
     "Get an entity along with all its directly related entities within a project. "
@@ -149,7 +157,8 @@ MOVE_PROJECT_ENTITIES_DESC = (
 SEARCH_ALL_PROJECTS_DESC = (
     "Search entities and relations across ALL projects in a single call. "
     "Returns results grouped by project name. "
-    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by recency. "
+    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by type-aware recency "
+    "and usefulness votes (see vote_entity). "
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "
@@ -641,6 +650,17 @@ def set_entity_status(
         db = _get_db()
         db.set_entity_status(project, name, status)  # type: ignore[arg-type]
         return {"message": f"Status of '{name}' set to {status!r}."}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=VOTE_ENTITY_DESC)
+@_track
+def vote_entity(project: str, name: str, vote: int) -> dict[str, object]:
+    """Apply a +1/-1 usefulness vote to an entity, returning its new net vote_score."""
+    try:
+        db = _get_db()
+        return {"name": name, "project": project, "vote_score": db.vote_entity(project, name, vote)}
     except Exception as e:
         return {"error": str(e)}
 

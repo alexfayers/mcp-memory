@@ -10,11 +10,27 @@ from pathlib import Path
 from typing import cast
 
 from .migrations.runner import run_migrations
-from .models import VALID_STATUSES, Entity, EntityStatus, Relation
+from .models import VALID_STATUSES, VALID_VOTES, Entity, EntityStatus, Relation
 from .path_resolver import match_project_for_path, normalize_path
 
 _RECENCY_HALF_LIFE_DAYS = 30.0
 _RECENCY_FLOOR = 0.1
+
+# Per-type recency half-lives (days): durable knowledge decays slowly so it is not buried by
+# age, while work items decay fast. Unlisted types fall back to _RECENCY_HALF_LIFE_DAYS.
+_TYPE_HALF_LIFE_DAYS: dict[str, float] = {
+    "task": 14.0,
+    "feature": 90.0,
+    "project": 180.0,
+    "knowledge": 180.0,
+    "pattern": 365.0,
+    "user-preferences": 365.0,
+}
+
+# Usefulness votes nudge ranking by a bounded multiplier 1 + weight*tanh(score/scale), so a
+# runaway score cannot dominate BM25 and a downvoted entity sinks but stays findable.
+_VOTE_WEIGHT = 0.5
+_VOTE_SCALE = 5.0
 
 _RELATIVE_DATE_RE = re.compile(r"^(\d+)([dwm])$")
 _RELATIVE_UNITS = {"d": 1, "w": 7, "m": 30}
@@ -264,6 +280,7 @@ class DatabaseManager:
                 if "project_name" in row.keys()  # noqa: SIM118
                 else None
             ),
+            vote_score=int(row["vote_score"]) if "vote_score" in row.keys() else 0,  # noqa: SIM118
         )
 
     def _sanitize_fts_query(self, query: str, match_all: bool = False) -> str:
@@ -433,6 +450,29 @@ class DatabaseManager:
         self._db.execute("UPDATE entities SET status = ? WHERE id = ?", (status, entity_id))
         self._db.commit()
 
+    def vote_entity(self, project: str, name: str, vote: int) -> int:
+        """Apply a +1/-1 usefulness vote to an entity and return its new net score.
+
+        Deliberately updates only vote_score, leaving updated_at untouched, so a vote
+        (a relevance signal) is not mistaken for a content change by recency ranking.
+        """
+        if vote not in VALID_VOTES:
+            raise ValueError(f"Invalid vote '{vote}'. Must be one of: {VALID_VOTES}")
+
+        project_id = self._get_or_create_project_id(project)
+        entity_id = self._get_entity_id(name, project_id)
+        if entity_id is None:
+            raise ValueError(f"Entity '{name}' not found in project '{project}'")
+
+        self._db.execute(
+            "UPDATE entities SET vote_score = vote_score + ? WHERE id = ?", (vote, entity_id)
+        )
+        self._db.commit()
+        row = self._db.execute(
+            "SELECT vote_score FROM entities WHERE id = ?", (entity_id,)
+        ).fetchone()
+        return int(row["vote_score"])
+
     def create_relations(self, project: str, relations: list[Relation]) -> None:
         """Create relations between entities, ignoring duplicates."""
         project_id = self._get_or_create_project_id(project)
@@ -515,7 +555,8 @@ class DatabaseManager:
         """Get a single entity by name."""
         project_id = self._get_or_create_project_id(project)
         row = self._db.execute(
-            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at "
+            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at, "
+            "e.vote_score "
             "FROM entities e "
             "JOIN entity_types et ON e.entity_type_id = et.id "
             "WHERE e.name = ? AND e.project_id = ?",
@@ -608,7 +649,7 @@ class DatabaseManager:
         sql = (
             "SELECT e.id, e.project_id, p.name AS project_name, "
             "e.name, et.name AS entity_type, e.status, "
-            "e.created_at, e.updated_at, bm25(entities_fts) AS rank "
+            "e.created_at, e.updated_at, e.vote_score, bm25(entities_fts) AS rank "
             "FROM entities_fts fts "
             "JOIN entities e ON fts.rowid = e.id "
             "JOIN entity_types et ON e.entity_type_id = et.id "
@@ -641,9 +682,11 @@ class DatabaseManager:
             bm25_score = -float(row["rank"])
             updated_at = datetime.fromisoformat(row["updated_at"]).replace(tzinfo=UTC)
             age_days = max((now - updated_at).total_seconds() / 86400, 0)
-            decay = -math.log(2) * age_days / _RECENCY_HALF_LIFE_DAYS
+            half_life = _TYPE_HALF_LIFE_DAYS.get(row["entity_type"], _RECENCY_HALF_LIFE_DAYS)
+            decay = -math.log(2) * age_days / half_life
             recency = max(math.exp(decay), _RECENCY_FLOOR)
-            scored.append((bm25_score * recency, row))
+            vote_multiplier = 1.0 + _VOTE_WEIGHT * math.tanh(int(row["vote_score"]) / _VOTE_SCALE)
+            scored.append((bm25_score * recency * vote_multiplier, row))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         top_rows = [row for _, row in scored[:limit]]
@@ -666,7 +709,8 @@ class DatabaseManager:
         project_id = self._get_or_create_project_id(project)
 
         sql = (
-            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at "
+            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at, "
+            "e.vote_score "
             "FROM entities e "
             "JOIN entity_types et ON e.entity_type_id = et.id "
             "WHERE e.project_id = ?"

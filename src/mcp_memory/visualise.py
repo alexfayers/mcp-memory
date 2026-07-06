@@ -49,7 +49,7 @@ def get_all_graph_data(
 
     entity_rows = db._db.execute(
         "SELECT e.id, e.name, et.name AS entity_type, e.status, e.project_id, p.name AS project, "
-        "e.created_at, e.updated_at "
+        "e.created_at, e.updated_at, e.vote_score "
         "FROM entities e "
         "JOIN entity_types et ON e.entity_type_id = et.id "
         "JOIN projects p ON e.project_id = p.id " + where_clause,
@@ -68,6 +68,7 @@ def get_all_graph_data(
                 "status": row["status"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
+                "vote_score": row["vote_score"],
                 "observations": db._get_observations(row["id"]),
             }
         )
@@ -109,6 +110,7 @@ def search_graph(
             "status": entity.status,
             "created_at": entity.created_at,
             "updated_at": entity.updated_at,
+            "vote_score": entity.vote_score,
             "observations": entity.observations,
         }
         for position, entity in enumerate(cast("list[Entity]", result["entities"]), start=1)
@@ -152,6 +154,31 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
         except ValueError:
             since = 0
         return JSONResponse({"events": activity.recent(since), "seq": activity.latest_seq()})
+
+    @mcp.custom_route("/api/vote", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_vote(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        project = body.get("project")
+        name = body.get("name")
+        vote = body.get("vote")
+        if not isinstance(project, str) or not isinstance(name, str):
+            return JSONResponse({"error": "project and name are required"}, status_code=400)
+        if not isinstance(vote, int) or isinstance(vote, bool) or vote not in (1, -1):
+            return JSONResponse({"error": "vote must be 1 or -1"}, status_code=400)
+        try:
+            new_score = get_db().vote_entity(project, name, vote)
+        except ValueError:
+            return JSONResponse({"error": "entity not found"}, status_code=404)
+        result = {"name": name, "project": project, "vote_score": new_score}
+        activity.record_tool(
+            "vote_entity", {"project": project, "name": name, "vote": vote}, result
+        )
+        return JSONResponse(result)
 
     @mcp.custom_route("/visualise", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def visualise_page(request: Request) -> HTMLResponse:
