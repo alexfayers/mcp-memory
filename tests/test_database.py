@@ -773,6 +773,18 @@ class TestSearchNodes:
         assert result["entities"][0].name == "new"
         assert result["entities"][1].name == "old"
 
+    def test_upvote_outranks_identical_unvoted_entity(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "quiet", "entityType": "task", "observations": ["keyword"]},
+                {"name": "useful", "entityType": "task", "observations": ["keyword"]},
+            ],
+        )
+        db.vote_entity("proj", "useful", 1)
+        result = db.search_nodes("proj", "keyword")
+        assert result["entities"][0].name == "useful"
+
     def test_start_date_filters_old_entities(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj",

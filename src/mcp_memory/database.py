@@ -16,6 +16,22 @@ from .path_resolver import match_project_for_path, normalize_path
 _RECENCY_HALF_LIFE_DAYS = 30.0
 _RECENCY_FLOOR = 0.1
 
+# Per-type recency half-lives (days): durable knowledge decays slowly so it is not buried by
+# age, while work items decay fast. Unlisted types fall back to _RECENCY_HALF_LIFE_DAYS.
+_TYPE_HALF_LIFE_DAYS: dict[str, float] = {
+    "task": 14.0,
+    "feature": 90.0,
+    "project": 180.0,
+    "knowledge": 180.0,
+    "pattern": 365.0,
+    "user-preferences": 365.0,
+}
+
+# Usefulness votes nudge ranking by a bounded multiplier 1 + weight*tanh(score/scale), so a
+# runaway score cannot dominate BM25 and a downvoted entity sinks but stays findable.
+_VOTE_WEIGHT = 0.5
+_VOTE_SCALE = 5.0
+
 _RELATIVE_DATE_RE = re.compile(r"^(\d+)([dwm])$")
 _RELATIVE_UNITS = {"d": 1, "w": 7, "m": 30}
 
@@ -666,9 +682,11 @@ class DatabaseManager:
             bm25_score = -float(row["rank"])
             updated_at = datetime.fromisoformat(row["updated_at"]).replace(tzinfo=UTC)
             age_days = max((now - updated_at).total_seconds() / 86400, 0)
-            decay = -math.log(2) * age_days / _RECENCY_HALF_LIFE_DAYS
+            half_life = _TYPE_HALF_LIFE_DAYS.get(row["entity_type"], _RECENCY_HALF_LIFE_DAYS)
+            decay = -math.log(2) * age_days / half_life
             recency = max(math.exp(decay), _RECENCY_FLOOR)
-            scored.append((bm25_score * recency, row))
+            vote_multiplier = 1.0 + _VOTE_WEIGHT * math.tanh(int(row["vote_score"]) / _VOTE_SCALE)
+            scored.append((bm25_score * recency * vote_multiplier, row))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         top_rows = [row for _, row in scored[:limit]]
