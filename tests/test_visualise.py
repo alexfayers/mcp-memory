@@ -71,6 +71,7 @@ class TestGetAllGraphData:
                 }
             ],
         )
+        db.vote_entity("proj", "e1", 1)
         result = get_all_graph_data(db, "proj")
         assert len(result["entities"]) == 1
         entity = result["entities"][0]
@@ -78,6 +79,7 @@ class TestGetAllGraphData:
         assert entity["entity_type"] == "task"
         assert entity["observations"] == ["obs1", "obs2"]
         assert entity["status"] == "planned"
+        assert entity["vote_score"] == 1
 
     def test_returns_relations(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -232,6 +234,7 @@ class TestSearchGraph:
             "status": None,
             "created_at": entity["created_at"],
             "updated_at": entity["updated_at"],
+            "vote_score": 0,
             "observations": ["deployment pipeline"],
         }
 

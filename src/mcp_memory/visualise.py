@@ -49,7 +49,7 @@ def get_all_graph_data(
 
     entity_rows = db._db.execute(
         "SELECT e.id, e.name, et.name AS entity_type, e.status, e.project_id, p.name AS project, "
-        "e.created_at, e.updated_at "
+        "e.created_at, e.updated_at, e.vote_score "
         "FROM entities e "
         "JOIN entity_types et ON e.entity_type_id = et.id "
         "JOIN projects p ON e.project_id = p.id " + where_clause,
@@ -68,6 +68,7 @@ def get_all_graph_data(
                 "status": row["status"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
+                "vote_score": row["vote_score"],
                 "observations": db._get_observations(row["id"]),
             }
         )
@@ -109,6 +110,7 @@ def search_graph(
             "status": entity.status,
             "created_at": entity.created_at,
             "updated_at": entity.updated_at,
+            "vote_score": entity.vote_score,
             "observations": entity.observations,
         }
         for position, entity in enumerate(cast("list[Entity]", result["entities"]), start=1)
