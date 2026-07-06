@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from mcp_memory.database import DatabaseManager
+from mcp_memory.migrations.schema import _relation_type_backfill_statements
 from mcp_memory.models import Entity, Relation
 from mcp_memory.path_resolver import normalize_path
 
@@ -163,6 +164,29 @@ class TestMigrations:
         assert reopened.get_project_for_path(str(repo)) == "platform"
         reopened.close()
 
+    def test_vote_score_backfills_to_zero(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        first = DatabaseManager(db_path)
+        first.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["x"]}]
+        )
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        assert reopened.get_entity("proj", "task/a").vote_score == 0
+        reopened.close()
+
+
+class TestVoteScoreReadPaths:
+    def test_new_entity_reports_zero_vote_score(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["keyword"]}]
+        )
+
+        assert db.get_entity("proj", "task/a").vote_score == 0
+        assert db.search_nodes("proj", "keyword")["entities"][0].vote_score == 0
+        assert db.read_graph("proj")["entities"][0].vote_score == 0
+
 
 class TestRelationTypeBackfill:
     def _seed_variant_relation(
@@ -183,11 +207,15 @@ class TestRelationTypeBackfill:
         db._db.commit()
 
     def _rerun_backfill(self, db: DatabaseManager, db_path: Path) -> DatabaseManager:
-        """Roll schema_version back past v19 and reopen so the idempotent backfill re-runs."""
-        db._db.execute("DELETE FROM schema_version WHERE version >= 19")
+        """Re-run v19's backfill statements directly to prove the backfill is idempotent.
+
+        Rolling back schema_version and reopening would also re-run any later, non-idempotent
+        migrations, so apply the v19 statements straight against the open connection instead.
+        """
+        for statement in _relation_type_backfill_statements():
+            db._db.execute(statement)
         db._db.commit()
-        db.close()
-        return DatabaseManager(db_path)
+        return db
 
     def test_variant_merged_into_canonical(self, tmp_path: Path) -> None:
         db_path = tmp_path / "memory.db"

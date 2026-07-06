@@ -264,6 +264,7 @@ class DatabaseManager:
                 if "project_name" in row.keys()  # noqa: SIM118
                 else None
             ),
+            vote_score=int(row["vote_score"]) if "vote_score" in row.keys() else 0,  # noqa: SIM118
         )
 
     def _sanitize_fts_query(self, query: str, match_all: bool = False) -> str:
@@ -515,7 +516,8 @@ class DatabaseManager:
         """Get a single entity by name."""
         project_id = self._get_or_create_project_id(project)
         row = self._db.execute(
-            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at "
+            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at, "
+            "e.vote_score "
             "FROM entities e "
             "JOIN entity_types et ON e.entity_type_id = et.id "
             "WHERE e.name = ? AND e.project_id = ?",
@@ -608,7 +610,7 @@ class DatabaseManager:
         sql = (
             "SELECT e.id, e.project_id, p.name AS project_name, "
             "e.name, et.name AS entity_type, e.status, "
-            "e.created_at, e.updated_at, bm25(entities_fts) AS rank "
+            "e.created_at, e.updated_at, e.vote_score, bm25(entities_fts) AS rank "
             "FROM entities_fts fts "
             "JOIN entities e ON fts.rowid = e.id "
             "JOIN entity_types et ON e.entity_type_id = et.id "
@@ -666,7 +668,8 @@ class DatabaseManager:
         project_id = self._get_or_create_project_id(project)
 
         sql = (
-            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at "
+            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at, "
+            "e.vote_score "
             "FROM entities e "
             "JOIN entity_types et ON e.entity_type_id = et.id "
             "WHERE e.project_id = ?"

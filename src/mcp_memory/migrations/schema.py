@@ -672,4 +672,10 @@ MIGRATIONS: list[Migration] = [
         version=19,
         statements=_relation_type_backfill_statements(),
     ),
+    Migration(
+        version=20,
+        statements=[
+            "ALTER TABLE entities ADD COLUMN vote_score INTEGER NOT NULL DEFAULT 0",
+        ],
+    ),
 ]
