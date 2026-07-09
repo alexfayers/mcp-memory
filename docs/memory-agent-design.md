@@ -1,6 +1,7 @@
 # memory-agent: an LLM curation/recall service in front of mcp-memory
 
-Status: **v1 built** (`recall` shipped and live-verified); v2 `dream` planned
+Status: **v1 + v2 built** (`recall` and the autonomous `dream` curation pass
+shipped and live-verified)
 
 A dedicated MCP server that puts an LLM "brain" in front of the mcp-memory
 data store. A caller delegates heavy memory recall to it and receives distilled
@@ -155,35 +156,72 @@ the expected model or you may silently pay Opus rates.
 
 ## v2 - `dream` (autonomous curation)
 
-A scheduled pass that grooms the graph. Deferred until after v1.
+A pass that grooms the graph while it is idle. On by default (opt-out via
+`MCP_DREAM_ENABLED=false`).
 
 - **Trigger: 2 hours of memory inactivity**, where "activity" is *any* memory
   tool call (reads included). Active use resets the timer; grooming only runs in
-  a genuine idle window. This also neutralises the concurrency risk below by
-  construction - if nothing else is using memory, there is no competing writer.
-  The dream's own votes count as activity, so it cannot spin.
-- **Mutation surface: demote-never-delete.** The only autonomous mutation is
-  `vote_entity` (so the v2 deny-list is the v1 deny-list **minus**
-  `vote_entity`). Downvoting sinks an entity in ranking but never removes it -
-  functionally equivalent to deletion from the reader's perspective, but
-  reversible. Deletion stays a rare manual operation, because mcp-memory has no
-  soft-delete/history/undo of any kind.
+  a genuine idle window. The dream's own reads/votes count as activity, so it
+  cannot spin.
+- **Mutation surface: demote-never-delete, downvote-only.** The dream's only
+  mutation is `vote_entity` with a vote of `-1` (so its deny-list is the v1
+  recall deny-list **minus** `vote_entity`). It demotes stale, superseded, or
+  duplicated entities and never casts a positive vote or deletes anything.
+  Downvoting sinks an entity in ranking but never removes it - functionally
+  equivalent to deletion from the reader's perspective, but reversible. Deletion
+  stays a rare manual operation, because mcp-memory has no soft-delete/history/
+  undo of any kind.
+- **Scope: all projects.** A pass searches and votes across every project scope.
 - **Voting is ±1 only.** No graded/weighted votes: the ranking multiplier
   already saturates via `tanh`, and letting the model choose magnitude
-  reintroduces calibration risk. If magnitude is ever needed, use
-  fixed-magnitude vote *categories* (system owns the number, model owns the
-  label).
+  reintroduces calibration risk. The dream prompt tells the agent to skip
+  entities already at or below a saturated score, and caps how many it demotes
+  per pass (advisory - the cap lives in the prompt, since votes happen inside
+  the spawned agent).
 
-### v2 open implementation details
+### Host: an in-process idle-watcher, not a scheduled job
 
-- **Idle timestamp must survive restart.** Current tool-call recording is an
-  in-memory bounded deque that is never persisted, and `updated_at` only bumps
-  on writes. The idle-watcher needs a persisted last-activity marker or a
-  lightweight touch on reads.
-- **Set `PRAGMA busy_timeout`** on the dream's write connection. The DB is WAL
-  but `busy_timeout` defaults to 0, so a second writer racing the live server
-  gets an immediate lock error. The 2h-idle trigger makes a race unlikely, but
-  the timeout is cheap insurance and worth setting on all writing connections.
+The dream runs as a background `asyncio` task inside the already-installed
+`memory-agent` server, launched by `agent._serve()` alongside
+`mcp.run_streamable_http_async()` and cancelled cleanly on shutdown. It polls a
+`/api/idle` endpoint on mcp-memory (see below) and spawns one `run_dream_pass()`
+when the idle window opens. It reuses the v1 spawn stack verbatim (hermetic
+`CLAUDE_CONFIG_DIR`, `MCP_TIMEOUT`, pinned model, auto-detected memory URL).
+
+This is **not** started via FastMCP's `lifespan=` parameter:
+`streamable_http_app()` wires its own lifespan (`session_manager.run()`) and
+hands the user lifespan to the low-level server, which in `stateless_http=True`
+mode runs *per request* - a task started there would be spawned and cancelled on
+every request. A separate scheduled launchd/systemd unit was also rejected:
+there is no scheduling machinery in the repo (the renderers emit only a
+`KeepAlive`/`Restart=always` daemon), and a scheduled one-shot would fight that
+daemon.
+
+### Sole-writer: no second-writer race
+
+The dream votes by spawning `claude -p`, which calls `mcp__memory__vote_entity`
+over HTTP - exactly like v1 recall reads. That vote executes *inside* the
+mcp-memory process on its single shared connection; the memory-agent process
+never opens the DB. So mcp-memory remains the sole writer, and even a user
+returning mid-dream shares the same connection on the same event loop - no lock
+contention is possible. The 2h-idle window is a cost/quality knob, not the
+safety mechanism.
+
+`PRAGMA busy_timeout` is set on the DB connection as cheap insurance (it guards
+the manual `relocate` read-write connection), but it is not load-bearing for the
+dream, which never writes the file directly.
+
+### Idle detection
+
+mcp-memory persists a single last-activity timestamp to a marker file next to
+the database (throttled, so read-heavy traffic does not hammer the disk) and
+exposes it at `GET /api/idle` -> `{last_activity, idle_seconds}`. The watcher
+GETs that endpoint using the same resolved memory URL recall uses (with the
+`/mcp` suffix stripped, since the route is app-root-mounted). A plain GET does
+not go through the activity tracker, so polling does not reset the idle timer;
+the dream's own spawned tool calls do. The in-memory marker is seeded from disk
+on first read (surviving a restart) and, on a fresh install with no marker,
+from the current time so a new server does not immediately groom.
 
 ### Deferred beyond v2
 
@@ -213,20 +251,20 @@ local config value; the shipped code, config schema, and docs stay generic.
 
 Ships in this repo, reusing existing patterns:
 
-- a `memory-agent` console-script entry point: bare invocation serves; `memory-agent
-  setup-service` installs the always-on background service (and, for v2, the
-  idle-triggered dream) via the shared service-spec machinery that already
-  generates a macOS launch agent and a Linux systemd unit;
+- a `memory-agent` console-script entry point: bare invocation serves (running
+  the idle-watcher in-process when enabled); `memory-agent setup-service`
+  installs the always-on background service via the shared service-spec machinery
+  that already generates a macOS launch agent and a Linux systemd unit;
 - client registration: `mcp-memory install claude-code` registers **both** the
   data server (`memory`) and the recall server (`memory-agent`) and adds each
   server's `mcp__<name>__*` allow rule.
 
 The agent server discovers the running mcp-memory port itself (see the URL
-resolution above), so no DB path is needed at the agent layer. Its service env
-also carries the installing user's `PATH`, because recall spawns the `claude`
-CLI and launchd/systemd otherwise run with a minimal `PATH` that would not find
-it. The v2 dream job resolves the same DB the main server uses via the existing
-DB-path environment variable.
+resolution above), so no DB path is needed at the agent layer - the dream reads
+idle state over HTTP (`/api/idle`) and votes over HTTP, never opening the DB. Its
+service env also carries the installing user's `PATH`, because recall spawns the
+`claude` CLI and launchd/systemd otherwise run with a minimal `PATH` that would
+not find it, plus any `MCP_DREAM_*` settings present at install time.
 
 ## Testability
 
