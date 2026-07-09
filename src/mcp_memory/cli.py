@@ -12,31 +12,17 @@ import sys
 import textwrap
 from pathlib import Path
 
-from .config import get_db_path, get_default_db_path
+from .config import _DEFAULT_PORT, detect_service_port, get_db_path, get_default_db_path
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
 
-_DEFAULT_PORT = "8000"
 _LAUNCHD_LABEL = "com.mcp-memory"
 _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{_LAUNCHD_LABEL}.plist"
 _SYSTEMD_UNIT = Path("/etc/systemd/system/mcp-memory.service")
 
 
 def _detect_service_port() -> str:
-    """Read the port from an installed service config, falling back to default."""
-    if _LAUNCHD_PLIST.exists():
-        import re
-
-        content = _LAUNCHD_PLIST.read_text(encoding="utf-8")
-        match = re.search(r"<key>MCP_MEMORY_PORT</key>\s*<string>(\d+)</string>", content)
-        if match:
-            return match.group(1)
-
-    if _SYSTEMD_UNIT.exists():
-        for line in _SYSTEMD_UNIT.read_text(encoding="utf-8").splitlines():
-            if line.startswith("Environment=MCP_MEMORY_PORT="):
-                return line.split("=", 2)[2]
-
-    return os.environ.get("MCP_MEMORY_PORT", _DEFAULT_PORT)
+    """Read the port from an installed service config, falling back to env/default."""
+    return detect_service_port() or os.environ.get("MCP_MEMORY_PORT", _DEFAULT_PORT)
 
 
 def _find_binary() -> str:

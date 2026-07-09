@@ -100,8 +100,8 @@ class TestRelocateDb:
 
 class TestDefaultDbPath:
     def test_ignores_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", "/tmp/custom.db")  # noqa: S108
-        assert get_db_path() == Path("/tmp/custom.db")  # noqa: S108
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", "/tmp/custom.db")
+        assert get_db_path() == Path("/tmp/custom.db")
         assert get_default_db_path() == Path("~/.local/share/mcp-memory/memory.db").expanduser()
 
 
