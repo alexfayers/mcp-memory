@@ -155,6 +155,12 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
             since = 0
         return JSONResponse({"events": activity.recent(since), "seq": activity.latest_seq()})
 
+    @mcp.custom_route("/api/idle", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_idle(request: Request) -> JSONResponse:
+        return JSONResponse(
+            {"last_activity": activity.last_activity(), "idle_seconds": activity.idle_seconds()}
+        )
+
     @mcp.custom_route("/api/vote", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_vote(request: Request) -> JSONResponse:
         try:

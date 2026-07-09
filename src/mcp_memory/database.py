@@ -61,6 +61,9 @@ class DatabaseManager:
         self._db.execute("PRAGMA cache_size=1000")
         self._db.execute("PRAGMA temp_store=MEMORY")
         self._db.execute("PRAGMA foreign_keys=ON")
+        # Set explicitly so a writer waits rather than failing instantly on a busy
+        # lock, independent of the sqlite3 driver's connect(timeout=) default.
+        self._db.execute("PRAGMA busy_timeout=5000")
 
         run_migrations(self._db)
 

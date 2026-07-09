@@ -3,17 +3,31 @@
 Records a lightweight, JSON-serialisable event for each MCP tool call so the
 graph visualiser can show reads and writes as they happen. The buffer is held
 entirely in memory (a bounded deque) and is never persisted to the database.
+
+A single last-activity timestamp IS persisted (throttled) to a marker file next
+to the database, so the idle-triggered dream curation pass can tell how long the
+graph has been untouched even across a server restart.
 """
 
 from __future__ import annotations
 
+import json
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Literal, TypedDict
+
+from .config import get_data_dir
 
 Kind = Literal["read", "create", "update", "delete"]
 
 _MAX_EVENTS = 200
+
+# The persisted last-activity marker. Only the timestamp is written, and no more
+# than once per this interval, so read-heavy traffic never hammers the disk.
+_MARKER_THROTTLE_SECONDS = 60.0
+_last_activity: float | None = None
+_last_marker_write = 0.0
 
 _KIND_BY_TOOL: dict[str, Kind] = {
     "search_nodes": "read",
@@ -57,6 +71,7 @@ _seq = 0
 
 def record_tool(tool_name: str, kwargs: dict[str, Any], result: Any) -> None:
     """Record one tool call, skipping calls that returned an error."""
+    _touch_activity()
     if isinstance(result, dict) and "error" in result:
         return
 
@@ -88,9 +103,58 @@ def latest_seq() -> int:
 
 def clear() -> None:
     """Empty the buffer and reset the sequence counter (for test isolation)."""
-    global _seq  # noqa: PLW0603
+    global _seq, _last_activity, _last_marker_write  # noqa: PLW0603
     _events.clear()
     _seq = 0
+    _last_activity = None
+    _last_marker_write = 0.0
+
+
+def last_activity() -> float:
+    """Return the wall-clock time of the most recent tool call.
+
+    Falls back to the persisted marker (surviving a restart) and, if none exists,
+    to the current time so a fresh install does not look infinitely idle.
+    """
+    global _last_activity  # noqa: PLW0603
+    if _last_activity is None:
+        _last_activity = _read_marker() or time.time()
+    return _last_activity
+
+
+def idle_seconds() -> float:
+    """Return how many seconds have elapsed since the last recorded tool call."""
+    return max(time.time() - last_activity(), 0.0)
+
+
+def _marker_path() -> Path:
+    """Return the path of the persisted last-activity marker file."""
+    return get_data_dir() / "last-activity.json"
+
+
+def _touch_activity() -> None:
+    """Update the in-memory last-activity time and throttle-persist it to disk."""
+    global _last_activity, _last_marker_write  # noqa: PLW0603
+    now = time.time()
+    _last_activity = now
+    if now - _last_marker_write < _MARKER_THROTTLE_SECONDS:
+        return
+    try:
+        path = _marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"last_activity": now}), encoding="utf-8")
+        _last_marker_write = now
+    except OSError:
+        pass
+
+
+def _read_marker() -> float | None:
+    """Read the persisted last-activity timestamp, or None if unavailable."""
+    try:
+        value = json.loads(_marker_path().read_text(encoding="utf-8"))["last_activity"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def _extract(

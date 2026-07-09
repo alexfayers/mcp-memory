@@ -177,6 +177,11 @@ class TestMigrations:
         reopened.close()
 
 
+class TestConnectionPragmas:
+    def test_busy_timeout_is_set(self, db: DatabaseManager) -> None:
+        assert db._db.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+
+
 class TestVoteScoreReadPaths:
     def test_new_entity_reports_zero_vote_score(self, db: DatabaseManager) -> None:
         db.create_entities(

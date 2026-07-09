@@ -21,8 +21,9 @@ from mcp_memory.visualise import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_activity() -> None:
-    """Reset the process-global activity buffer before each test."""
+def _clear_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset the process-global activity buffer and isolate the marker file on disk."""
+    monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     activity.clear()
 
 
@@ -195,6 +196,31 @@ class TestApiActivity:
         activity.record_tool("list_projects", {}, {"projects": []})
         resp = await client.get("/api/activity", params={"since": "abc"})
         assert len(resp.json()["events"]) == 1
+
+
+class TestApiIdle:
+    @pytest.mark.anyio
+    async def test_reports_last_activity_and_idle_seconds(
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        activity.record_tool("list_projects", {}, {"projects": []})
+        monkeypatch.setattr(activity.time, "time", lambda: 1030.0)
+        resp = await client.get("/api/idle")
+        assert resp.status_code == 200
+        assert resp.json() == {"last_activity": 1000.0, "idle_seconds": 30.0}
+
+    @pytest.mark.anyio
+    async def test_polling_idle_does_not_reset_the_timer(
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        activity.record_tool("list_projects", {}, {"projects": []})
+        monkeypatch.setattr(activity.time, "time", lambda: 1050.0)
+        await client.get("/api/idle")
+        await client.get("/api/idle")
+        assert activity.last_activity() == 1000.0
+        assert (await client.get("/api/activity")).json()["seq"] == 1
 
 
 class TestGetProjectPaths:

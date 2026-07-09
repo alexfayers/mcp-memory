@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import json
+from typing import TYPE_CHECKING
+
 import pytest
 
 from mcp_memory import activity
 from mcp_memory.models import Entity
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 @pytest.fixture(autouse=True)
-def _clear_activity() -> None:
-    """Reset the process-global activity buffer before each test."""
+def _clear_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset the process-global activity buffer and isolate the marker file on disk."""
+    monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     activity.clear()
 
 
@@ -208,3 +215,47 @@ class TestReadExtraction:
         event = activity.recent(0)[0]
         assert event["kind"] == "read"
         assert event["entities"] == []
+
+
+class TestActivityMarker:
+    def test_recording_advances_last_activity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        activity.record_tool("list_projects", {}, {"projects": []})
+        assert activity.last_activity() == 1000.0
+
+    def test_idle_seconds_measures_gap_since_last_activity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        activity.record_tool("list_projects", {}, {"projects": []})
+        monkeypatch.setattr(activity.time, "time", lambda: 1075.0)
+        assert activity.idle_seconds() == 75.0
+
+    def test_errored_call_still_counts_as_activity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(activity.time, "time", lambda: 4242.0)
+        activity.record_tool("delete_entity", {"project": "p", "name": "e1"}, {"error": "boom"})
+        assert activity.recent(0) == []
+        assert activity.last_activity() == 4242.0
+
+    def test_marker_persists_to_disk_and_seeds_after_clear(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(activity.time, "time", lambda: 5000.0)
+        activity.record_tool("list_projects", {}, {"projects": []})
+        assert json.loads(activity._marker_path().read_text())["last_activity"] == 5000.0
+
+        activity.clear()
+        assert activity.last_activity() == 5000.0
+
+    def test_fresh_install_seeds_now_not_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(activity.time, "time", lambda: 9000.0)
+        assert activity.last_activity() == 9000.0
+        assert activity.idle_seconds() == 0.0
+
+    def test_disk_write_is_throttled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        activity.record_tool("list_projects", {}, {"projects": []})
+        monkeypatch.setattr(activity.time, "time", lambda: 1005.0)
+        activity.record_tool("list_projects", {}, {"projects": []})
+        assert json.loads(activity._marker_path().read_text())["last_activity"] == 1000.0
+        assert activity.last_activity() == 1005.0
