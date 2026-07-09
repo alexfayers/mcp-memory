@@ -10,22 +10,39 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
+import logging
 import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import anyio
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 from .cli import _agent_spec, _setup_service_from_spec
 from .config import (
     get_agent_port,
+    get_dream_enabled,
+    get_dream_idle_seconds,
+    get_dream_max_votes,
+    get_dream_model,
+    get_dream_poll_seconds,
+    get_dream_timeout,
     get_memory_url,
     get_preflight_command,
     get_recall_model,
 )
+
+logger = logging.getLogger("memory-agent")
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Mutating mcp-memory tools plus vote_entity: recall is strictly read-only, so
 # every one of these is denied. Deny rules override the inherited
@@ -67,8 +84,17 @@ DISALLOWED_TOOLS: tuple[str, ...] = (
     *_DISALLOWED_BUILTINS,
 )
 
+# The dream curation pass may vote (its sole mutation), so vote_entity is the one
+# memory tool it is NOT denied; every other mutation and every built-in stays
+# denied, keeping grooming to demote-never-delete.
+DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
+    *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS if tool != "vote_entity"),
+    *_DISALLOWED_BUILTINS,
+)
+
 _RECALL_TIMEOUT_SECONDS = int(os.environ.get("MCP_RECALL_TIMEOUT", "180"))
 _PREFLIGHT_TIMEOUT_SECONDS = 30
+_IDLE_FETCH_TIMEOUT_SECONDS = 5.0
 # Startup wait for the spawned agent's mcp-memory HTTP connection (ms). Without
 # it, claude begins its first turn mid-handshake and the model reports the graph
 # unreachable.
@@ -96,6 +122,30 @@ RECALL_RITUAL = (
     "copied VERBATIM from the tool results - never paraphrase or invent a slug. "
     "If nothing relevant exists, say so plainly. Do not attempt to write, vote, "
     "or otherwise mutate anything."
+)
+
+DREAM_RITUAL = (
+    "You are a memory curation agent grooming a knowledge graph while it is idle, "
+    "with access to the mcp__memory__* tools. "
+    "The mcp__memory server may report as 'still connecting' on your very first "
+    "turn; ignore that and CALL a memory tool anyway - the connection completes "
+    "before the call runs. "
+    "Your ONLY permitted mutation is vote_entity with a vote of -1, to DEMOTE "
+    "entities in ranking. You must NEVER delete anything and NEVER cast a positive "
+    "vote. Deletion and promotion are not your job. "
+    "Search broadly ACROSS ALL PROJECTS (search_all_projects, then search_nodes "
+    "and get_entity_with_relations / search_related_nodes to confirm) for entities "
+    "that are stale, superseded, or duplicated by a better entity. Before voting, "
+    "inspect each candidate's current vote_score: do NOT downvote an entity that is "
+    "already strongly negative (a score at or below -10), because the ranking "
+    "penalty has already saturated and further votes are wasted. "
+    "Demote at most {max_votes} entities this pass - be conservative and prefer "
+    "clear noise over borderline calls. "
+    "When you vote, pass the entity's exact project and name slug VERBATIM from the "
+    "tool results. "
+    "Finish with a terse audit summary: one line per demoted entity as "
+    "[project/entity-name] and a few words of why, or 'nothing demoted' if you "
+    "found no clear candidates."
 )
 
 RECALL_DESC = (
@@ -141,6 +191,30 @@ def build_recall_command(
         "--strict-mcp-config",
         "--disallowedTools",
         *DISALLOWED_TOOLS,
+        "--output-format",
+        "json",
+    ]
+
+
+def build_dream_command(
+    *,
+    claude_bin: str,
+    model: str,
+    mcp_config_path: str,
+    max_votes: int,
+) -> list[str]:
+    """Build the headless ``claude -p`` argv for a downvote-only dream curation spawn."""
+    return [
+        claude_bin,
+        "-p",
+        DREAM_RITUAL.format(max_votes=max_votes),
+        "--model",
+        model,
+        "--mcp-config",
+        mcp_config_path,
+        "--strict-mcp-config",
+        "--disallowedTools",
+        *DREAM_DISALLOWED_TOOLS,
         "--output-format",
         "json",
     ]
@@ -251,9 +325,20 @@ async def _spawn_recall(
     return stdout.decode()
 
 
-@mcp.tool(description=RECALL_DESC)
-async def recall(query: str) -> str:
-    """Run a heavy memory recall in a throwaway agent and return distilled findings."""
+async def _run_isolated_agent(
+    build_command: Callable[[str, str], list[str]],
+    *,
+    model: str,
+    timeout: float,
+) -> str:
+    """Spawn a hermetic headless agent and return its parsed result.
+
+    Resolves the claude CLI, runs the pre-flight gate, then spawns in a throwaway
+    tempdir holding the mcp-config and an isolated CLAUDE_CONFIG_DIR (no user
+    hooks). ``build_command`` receives the resolved claude binary and mcp-config
+    path. All failures surface as their plain message string; the tempdir is
+    always cleaned up.
+    """
     claude_bin = shutil.which("claude")
     if not claude_bin:
         return "recall unavailable: claude CLI not found"
@@ -263,7 +348,6 @@ async def recall(query: str) -> str:
     except RuntimeError as exc:
         return str(exc)
 
-    model = get_recall_model()
     work_dir = tempfile.mkdtemp(prefix="memory-agent-")
     work_path = Path(work_dir)
     config_path = work_path / "mcp-config.json"
@@ -274,13 +358,10 @@ async def recall(query: str) -> str:
         (isolated_config_dir / "settings.json").write_text(
             json.dumps(AGENT_SETTINGS), encoding="utf-8"
         )
-        command = build_recall_command(
-            query,
-            claude_bin=claude_bin,
-            model=model,
-            mcp_config_path=str(config_path),
+        command = build_command(claude_bin, str(config_path))
+        stdout = await _spawn_recall(
+            command, env=build_spawn_env(str(isolated_config_dir)), timeout=timeout
         )
-        stdout = await _spawn_recall(command, env=build_spawn_env(str(isolated_config_dir)))
         return parse_recall_result(stdout, expected_model=model)
     except RuntimeError as exc:
         return str(exc)
@@ -288,11 +369,107 @@ async def recall(query: str) -> str:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+@mcp.tool(description=RECALL_DESC)
+async def recall(query: str) -> str:
+    """Run a heavy memory recall in a throwaway agent and return distilled findings."""
+    model = get_recall_model()
+    return await _run_isolated_agent(
+        lambda claude_bin, config_path: build_recall_command(
+            query, claude_bin=claude_bin, model=model, mcp_config_path=config_path
+        ),
+        model=model,
+        timeout=_RECALL_TIMEOUT_SECONDS,
+    )
+
+
+async def run_dream_pass() -> str:
+    """Run one downvote-only curation pass in a throwaway agent, returning its audit."""
+    model = get_dream_model()
+    return await _run_isolated_agent(
+        lambda claude_bin, config_path: build_dream_command(
+            claude_bin=claude_bin,
+            model=model,
+            mcp_config_path=config_path,
+            max_votes=get_dream_max_votes(),
+        ),
+        model=model,
+        timeout=get_dream_timeout(),
+    )
+
+
+async def fetch_idle_seconds() -> float | None:
+    """Return the mcp-memory server's idle seconds, or None if it cannot be reached.
+
+    Queries the server's ``/api/idle`` route, which is mounted at the app root -
+    not under the ``/mcp`` path that get_memory_url() returns - so the suffix is
+    stripped. A plain GET does not count as memory activity, so polling here does
+    not reset the idle timer.
+    """
+    url = get_memory_url().removesuffix("/mcp") + "/api/idle"
+    try:
+        async with httpx.AsyncClient(timeout=_IDLE_FETCH_TIMEOUT_SECONDS) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            idle = response.json()["idle_seconds"]
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        return None
+    return float(idle) if isinstance(idle, (int, float)) else None
+
+
+async def _dream_tick(last_pass: float) -> float:
+    """Run a dream pass if memory has been idle long enough, returning the new last-pass time.
+
+    Requires BOTH the reported memory idle window AND the time since the previous
+    pass to exceed the threshold. The second guard prevents a degenerate pass that
+    makes no tool calls (so it never resets the idle marker) from re-firing every
+    poll. Returns ``last_pass`` unchanged when no pass runs.
+    """
+    threshold = get_dream_idle_seconds()
+    idle = await fetch_idle_seconds()
+    if idle is None or idle < threshold:
+        return last_pass
+    now = time.monotonic()
+    if now - last_pass < threshold:
+        return last_pass
+    try:
+        logger.info("dream: %s", await run_dream_pass())
+    except Exception:
+        logger.exception("dream pass failed")
+    return now
+
+
+async def _idle_watch_loop() -> None:
+    """Poll for a memory-idle window and run a dream curation pass when one opens."""
+    last_pass = 0.0
+    while True:
+        await asyncio.sleep(get_dream_poll_seconds())
+        last_pass = await _dream_tick(last_pass)
+
+
+async def _serve() -> None:
+    """Serve over streamable HTTP, running the idle-watcher alongside if enabled.
+
+    The watcher is an explicit background task rather than a FastMCP ``lifespan``:
+    in stateless_http mode the low-level server runs per request, so a lifespan
+    task would be spawned and cancelled on every request. Cancelled cleanly on
+    shutdown.
+    """
+    watcher = asyncio.create_task(_idle_watch_loop()) if get_dream_enabled() else None
+    try:
+        await mcp.run_streamable_http_async()
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run the memory-agent server, or install it as a service.
 
-    Bare invocation serves over streamable HTTP; ``setup-service`` installs a
-    persistent background service.
+    Bare invocation serves over streamable HTTP (with the idle-triggered dream
+    curation pass when enabled); ``setup-service`` installs a persistent
+    background service.
     """
     parser = argparse.ArgumentParser(prog="memory-agent", description="Memory recall agent server")
     parser.add_subparsers(dest="command").add_parser(
@@ -303,7 +480,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "setup-service":
         _setup_service_from_spec(_agent_spec(str(get_agent_port())))
     else:
-        mcp.run(transport="streamable-http")
+        anyio.run(_serve)
 
 
 if __name__ == "__main__":

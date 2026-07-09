@@ -33,6 +33,47 @@ class TestMemoryUrl:
         assert config.get_memory_url() == "http://localhost:8000/mcp"
 
 
+class TestDreamConfig:
+    def test_enabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_ENABLED", raising=False)
+        assert config.get_dream_enabled() is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "FALSE"])
+    def test_disabled_by_falsey_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_DREAM_ENABLED", value)
+        assert config.get_dream_enabled() is False
+
+    def test_idle_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_IDLE_SECONDS", raising=False)
+        assert config.get_dream_idle_seconds() == 7200.0
+        monkeypatch.setenv("MCP_DREAM_IDLE_SECONDS", "60")
+        assert config.get_dream_idle_seconds() == 60.0
+
+    def test_poll_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_POLL_SECONDS", raising=False)
+        assert config.get_dream_poll_seconds() == 1800.0
+        monkeypatch.setenv("MCP_DREAM_POLL_SECONDS", "5")
+        assert config.get_dream_poll_seconds() == 5.0
+
+    def test_model_defaults_to_recall_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_MODEL", raising=False)
+        assert config.get_dream_model() == config.get_recall_model()
+        monkeypatch.setenv("MCP_DREAM_MODEL", "some-model")
+        assert config.get_dream_model() == "some-model"
+
+    def test_timeout_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_TIMEOUT", raising=False)
+        assert config.get_dream_timeout() == 300.0
+        monkeypatch.setenv("MCP_DREAM_TIMEOUT", "10")
+        assert config.get_dream_timeout() == 10.0
+
+    def test_max_votes_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_MAX_VOTES", raising=False)
+        assert config.get_dream_max_votes() == 15
+        monkeypatch.setenv("MCP_DREAM_MAX_VOTES", "3")
+        assert config.get_dream_max_votes() == 3
+
+
 class TestDetectServicePort:
     def test_reads_launchd_plist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         plist = tmp_path / "com.mcp-memory.plist"

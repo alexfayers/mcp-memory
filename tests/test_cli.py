@@ -66,6 +66,15 @@ class TestAgentSpec:
         spec = cli._agent_spec("8100")
         assert spec.env["PATH"] == "/custom/bin:/usr/bin"
 
+    def test_propagates_dream_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_DREAM_ENABLED", "false")
+        monkeypatch.setenv("MCP_DREAM_IDLE_SECONDS", "60")
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", "/should/not/leak")
+        spec = cli._agent_spec("8100")
+        assert spec.env["MCP_DREAM_ENABLED"] == "false"
+        assert spec.env["MCP_DREAM_IDLE_SECONDS"] == "60"
+        assert "MCP_MEMORY_DB_PATH" not in spec.env
+
 
 class TestRenderPlist:
     def test_includes_label_binary_and_every_env_key(self) -> None:

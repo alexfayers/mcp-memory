@@ -70,6 +70,9 @@ def _agent_spec(port: str) -> _ServiceSpec:
     path = os.environ.get("PATH")
     if path:
         env["PATH"] = path
+    # Carry any dream-curation settings through so `MCP_DREAM_* memory-agent
+    # setup-service` sticks in the installed service.
+    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_DREAM_")})
     return _ServiceSpec(
         name="memory-agent",
         binary_name="memory-agent",

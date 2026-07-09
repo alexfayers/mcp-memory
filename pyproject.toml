@@ -8,6 +8,7 @@ requires-python = ">=3.12"
 authors = [{ name = "Alex Fayers" }]
 dependencies = [
     "mcp>=1.27",
+    "httpx",
 ]
 
 [project.scripts]

@@ -10,6 +10,11 @@ _DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
 _DEFAULT_PORT = "8000"
 _DEFAULT_AGENT_PORT = "8100"
 _DEFAULT_RECALL_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+_DEFAULT_DREAM_IDLE_SECONDS = "7200"
+_DEFAULT_DREAM_POLL_SECONDS = "1800"
+_DEFAULT_DREAM_TIMEOUT = "300"
+_DEFAULT_DREAM_MAX_VOTES = "15"
+_FALSEY = frozenset({"0", "false", "no", "off"})
 
 _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / "com.mcp-memory.plist"
 _SYSTEMD_UNIT = Path("/etc/systemd/system/mcp-memory.service")
@@ -70,3 +75,33 @@ def get_recall_model() -> str:
 def get_preflight_command() -> str | None:
     """Return the optional pre-flight command run before spawning a recall agent."""
     return os.environ.get("MCP_AGENT_PREFLIGHT_COMMAND") or None
+
+
+def get_dream_enabled() -> bool:
+    """Return whether the autonomous dream curation pass runs (opt-out, on by default)."""
+    return os.environ.get("MCP_DREAM_ENABLED", "true").strip().lower() not in _FALSEY
+
+
+def get_dream_idle_seconds() -> float:
+    """Return the memory-inactivity window before a dream pass may run."""
+    return float(os.environ.get("MCP_DREAM_IDLE_SECONDS", _DEFAULT_DREAM_IDLE_SECONDS))
+
+
+def get_dream_poll_seconds() -> float:
+    """Return how often the idle-watcher checks whether a dream pass is due."""
+    return float(os.environ.get("MCP_DREAM_POLL_SECONDS", _DEFAULT_DREAM_POLL_SECONDS))
+
+
+def get_dream_model() -> str:
+    """Return the model id used for dream spawns, defaulting to the recall model."""
+    return os.environ.get("MCP_DREAM_MODEL") or get_recall_model()
+
+
+def get_dream_timeout() -> float:
+    """Return the overall timeout for a single dream spawn."""
+    return float(os.environ.get("MCP_DREAM_TIMEOUT", _DEFAULT_DREAM_TIMEOUT))
+
+
+def get_dream_max_votes() -> int:
+    """Return the advisory cap on how many entities a single dream pass may demote."""
+    return int(os.environ.get("MCP_DREAM_MAX_VOTES", _DEFAULT_DREAM_MAX_VOTES))
