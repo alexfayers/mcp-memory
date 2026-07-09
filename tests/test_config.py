@@ -34,12 +34,17 @@ class TestMemoryUrl:
 
 
 class TestDreamConfig:
-    def test_enabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_ENABLED", raising=False)
+        assert config.get_dream_enabled() is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
+    def test_enabled_by_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_DREAM_ENABLED", value)
         assert config.get_dream_enabled() is True
 
-    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "FALSE"])
-    def test_disabled_by_falsey_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "nonsense"])
+    def test_disabled_by_non_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_DREAM_ENABLED", value)
         assert config.get_dream_enabled() is False
 

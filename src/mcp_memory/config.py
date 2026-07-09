@@ -14,7 +14,7 @@ _DEFAULT_DREAM_IDLE_SECONDS = "7200"
 _DEFAULT_DREAM_POLL_SECONDS = "1800"
 _DEFAULT_DREAM_TIMEOUT = "300"
 _DEFAULT_DREAM_MAX_VOTES = "15"
-_FALSEY = frozenset({"0", "false", "no", "off"})
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / "com.mcp-memory.plist"
 _SYSTEMD_UNIT = Path("/etc/systemd/system/mcp-memory.service")
@@ -78,8 +78,8 @@ def get_preflight_command() -> str | None:
 
 
 def get_dream_enabled() -> bool:
-    """Return whether the autonomous dream curation pass runs (opt-out, on by default)."""
-    return os.environ.get("MCP_DREAM_ENABLED", "true").strip().lower() not in _FALSEY
+    """Return whether the autonomous dream curation pass runs (opt-in, off by default)."""
+    return os.environ.get("MCP_DREAM_ENABLED", "false").strip().lower() in _TRUTHY
 
 
 def get_dream_idle_seconds() -> float:

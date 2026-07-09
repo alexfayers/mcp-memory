@@ -156,8 +156,8 @@ the expected model or you may silently pay Opus rates.
 
 ## v2 - `dream` (autonomous curation)
 
-A pass that grooms the graph while it is idle. On by default (opt-out via
-`MCP_DREAM_ENABLED=false`).
+A pass that grooms the graph while it is idle. Off by default (opt-in via
+`MCP_DREAM_ENABLED=true`).
 
 - **Trigger: 2 hours of memory inactivity**, where "activity" is *any* memory
   tool call (reads included). Active use resets the timer; grooming only runs in
