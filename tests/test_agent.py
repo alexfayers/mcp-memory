@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from mcp_memory import agent
+from mcp_memory import agent, cli
 
 _MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -76,6 +76,24 @@ class TestBuildRecallCommand:
         prompt = command[command.index("-p") + 1]
         assert "who owns billing" in prompt
         assert "[project/entity-name]" in prompt
+
+
+class TestAgentCli:
+    def test_setup_service_installs_agent_spec(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, object] = {}
+        monkeypatch.setattr(
+            agent, "_setup_service_from_spec", lambda spec: captured.update(spec=spec)
+        )
+        agent.main(["setup-service"])
+        spec = captured["spec"]
+        assert isinstance(spec, cli._ServiceSpec)
+        assert spec.binary_name == "memory-agent"
+
+    def test_bare_invocation_runs_server(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ran: list[bool] = []
+        monkeypatch.setattr(agent.mcp, "run", lambda **_kw: ran.append(True))
+        agent.main([])
+        assert ran == [True]
 
 
 class TestSpawnEnv:

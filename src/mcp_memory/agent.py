@@ -8,6 +8,7 @@ The data store (mcp-memory) is untouched by this server.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from .cli import _agent_spec, _setup_service_from_spec
 from .config import (
     get_agent_port,
     get_memory_url,
@@ -286,9 +288,22 @@ async def recall(query: str) -> str:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def main() -> None:
-    """Run the memory-agent server with streamable HTTP transport."""
-    mcp.run(transport="streamable-http")
+def main(argv: list[str] | None = None) -> None:
+    """Run the memory-agent server, or install it as a service.
+
+    Bare invocation serves over streamable HTTP; ``setup-service`` installs a
+    persistent background service.
+    """
+    parser = argparse.ArgumentParser(prog="memory-agent", description="Memory recall agent server")
+    parser.add_subparsers(dest="command").add_parser(
+        "setup-service", help="Install as a persistent background service"
+    )
+    args = parser.parse_args(argv)
+
+    if args.command == "setup-service":
+        _setup_service_from_spec(_agent_spec(str(get_agent_port())))
+    else:
+        mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

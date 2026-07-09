@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import platform
@@ -10,9 +11,16 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from dataclasses import dataclass
 from pathlib import Path
 
-from .config import _DEFAULT_PORT, detect_service_port, get_db_path, get_default_db_path
+from .config import (
+    _DEFAULT_PORT,
+    detect_service_port,
+    get_agent_port,
+    get_db_path,
+    get_default_db_path,
+)
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
 
 _LAUNCHD_LABEL = "com.mcp-memory"
@@ -20,141 +28,183 @@ _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{_LAUNCHD_LABEL}.p
 _SYSTEMD_UNIT = Path("/etc/systemd/system/mcp-memory.service")
 
 
+@dataclass(frozen=True)
+class _ServiceSpec:
+    """Everything that differs between the two servers when installing a service."""
+
+    name: str
+    binary_name: str
+    label: str
+    description: str
+    port: str
+    env: dict[str, str]
+    log_path: Path
+    plist_path: Path
+    systemd_unit: Path
+
+
+def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
+    """Service spec for the mcp-memory data server."""
+    return _ServiceSpec(
+        name="memory",
+        binary_name="mcp-memory",
+        label=_LAUNCHD_LABEL,
+        description="mcp-memory server",
+        port=port,
+        env={"MCP_MEMORY_DB_PATH": str(db_path), "MCP_MEMORY_PORT": port},
+        log_path=db_path.parent / "mcp-memory.log",
+        plist_path=_LAUNCHD_PLIST,
+        systemd_unit=_SYSTEMD_UNIT,
+    )
+
+
+def _agent_spec(port: str) -> _ServiceSpec:
+    """Service spec for the memory-agent recall server.
+
+    Bakes the installing user's PATH into the service env: recall spawns the
+    `claude` CLI, and launchd/systemd otherwise run with a minimal PATH that
+    would not find it.
+    """
+    label = "com.memory-agent"
+    env = {"MCP_AGENT_PORT": port}
+    path = os.environ.get("PATH")
+    if path:
+        env["PATH"] = path
+    return _ServiceSpec(
+        name="memory-agent",
+        binary_name="memory-agent",
+        label=label,
+        description="memory-agent recall server",
+        port=port,
+        env=env,
+        log_path=get_default_db_path().parent / "memory-agent.log",
+        plist_path=Path.home() / "Library" / "LaunchAgents" / f"{label}.plist",
+        systemd_unit=Path("/etc/systemd/system/memory-agent.service"),
+    )
+
+
 def _detect_service_port() -> str:
     """Read the port from an installed service config, falling back to env/default."""
     return detect_service_port() or os.environ.get("MCP_MEMORY_PORT", _DEFAULT_PORT)
 
 
-def _find_binary() -> str:
-    """Find the mcp-memory binary path."""
-    path = shutil.which("mcp-memory")
+def _find_binary(name: str) -> str:
+    """Find a console-script binary path, or exit with an error."""
+    path = shutil.which(name)
     if not path:
-        print("Error: mcp-memory not found in PATH", file=sys.stderr)
+        print(f"Error: {name} not found in PATH", file=sys.stderr)
         sys.exit(1)
     return path
 
 
-def _setup_launchd(binary: str, port: str, db_path: Path) -> None:
-    """Generate and install a macOS launchd plist."""
-    label = _LAUNCHD_LABEL
-    plist_path = _LAUNCHD_PLIST
-    log_path = db_path.parent / "mcp-memory.log"
-
-    plist_path.parent.mkdir(parents=True, exist_ok=True)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    plist_path.write_text(
-        textwrap.dedent(f"""\
+def _render_plist(spec: _ServiceSpec, *, binary: str) -> str:
+    """Render a macOS launchd plist for a service spec."""
+    env_entries = "\n".join(
+        f"                <key>{key}</key>\n                <string>{value}</string>"
+        for key, value in spec.env.items()
+    )
+    return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
 "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
             <key>Label</key>
-            <string>{label}</string>
+            <string>{spec.label}</string>
             <key>ProgramArguments</key>
             <array>
                 <string>{binary}</string>
             </array>
             <key>EnvironmentVariables</key>
             <dict>
-                <key>MCP_MEMORY_DB_PATH</key>
-                <string>{db_path}</string>
-                <key>MCP_MEMORY_PORT</key>
-                <string>{port}</string>
+{env_entries}
             </dict>
             <key>RunAtLoad</key>
             <true/>
             <key>KeepAlive</key>
             <true/>
             <key>StandardOutPath</key>
-            <string>{log_path}</string>
+            <string>{spec.log_path}</string>
             <key>StandardErrorPath</key>
-            <string>{log_path}</string>
+            <string>{spec.log_path}</string>
         </dict>
         </plist>
     """)
+
+
+def _render_systemd(spec: _ServiceSpec, *, binary: str, user: str) -> str:
+    """Render a systemd unit for a service spec."""
+    env_lines = "\n".join(f"Environment={key}={value}" for key, value in spec.env.items())
+    return (
+        "[Unit]\n"
+        f"Description={spec.description}\n"
+        "After=network.target\n\n"
+        "[Service]\n"
+        f"ExecStart={binary}\n"
+        f"{env_lines}\n"
+        f"User={user}\n"
+        "Restart=always\n"
+        "RestartSec=3\n"
+        f"StandardOutput=append:{spec.log_path}\n"
+        f"StandardError=append:{spec.log_path}\n\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
     )
+
+
+def _setup_launchd(spec: _ServiceSpec, binary: str) -> None:
+    """Generate and install a macOS launchd plist from a service spec."""
+    spec.plist_path.parent.mkdir(parents=True, exist_ok=True)
+    spec.log_path.parent.mkdir(parents=True, exist_ok=True)
+    spec.plist_path.write_text(_render_plist(spec, binary=binary))
 
     uid = os.getuid()
     subprocess.run(
-        ["launchctl", "bootout", f"gui/{uid}", str(plist_path)],
+        ["launchctl", "bootout", f"gui/{uid}", str(spec.plist_path)],
         capture_output=True,
         check=False,
     )
-    subprocess.run(
-        ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
-        check=True,
-    )
-    subprocess.run(
-        ["launchctl", "kickstart", f"gui/{uid}/{label}"],
-        check=True,
-    )
-    print(f"Installed launchd service: {plist_path}")
-    print(f"  Logs: {log_path}")
+    subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", str(spec.plist_path)], check=True)
+    subprocess.run(["launchctl", "kickstart", f"gui/{uid}/{spec.label}"], check=True)
+    print(f"Installed launchd service: {spec.plist_path}")
+    print(f"  Logs: {spec.log_path}")
 
 
-def _setup_systemd(binary: str, port: str, db_path: Path) -> None:
-    """Generate and install a system-wide systemd unit."""
-    import getpass
-
-    unit_path = Path("/etc/systemd/system/mcp-memory.service")
-    log_path = db_path.parent / "mcp-memory.log"
-    user = getpass.getuser()
-
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    unit_content = textwrap.dedent(f"""\
-        [Unit]
-        Description=mcp-memory server
-        After=network.target
-
-        [Service]
-        ExecStart={binary}
-        Environment=MCP_MEMORY_DB_PATH={db_path}
-        Environment=MCP_MEMORY_PORT={port}
-        User={user}
-        Restart=always
-        RestartSec=3
-        StandardOutput=append:{log_path}
-        StandardError=append:{log_path}
-
-        [Install]
-        WantedBy=multi-user.target
-    """)
+def _setup_systemd(spec: _ServiceSpec, binary: str) -> None:
+    """Generate and install a system-wide systemd unit from a service spec."""
+    spec.log_path.parent.mkdir(parents=True, exist_ok=True)
+    unit_content = _render_systemd(spec, binary=binary, user=getpass.getuser())
 
     subprocess.run(
-        ["sudo", "tee", str(unit_path)],
+        ["sudo", "tee", str(spec.systemd_unit)],
         input=unit_content.encode(),
         capture_output=True,
         check=True,
     )
     subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
-    subprocess.run(
-        ["sudo", "systemctl", "enable", "--now", "mcp-memory.service"],
-        check=True,
-    )
-    print(f"Installed systemd service: {unit_path}")
-    print(f"  Logs: {log_path}")
-    print("  Status: sudo systemctl status mcp-memory")
+    subprocess.run(["sudo", "systemctl", "enable", "--now", spec.systemd_unit.name], check=True)
+    print(f"Installed systemd service: {spec.systemd_unit}")
+    print(f"  Logs: {spec.log_path}")
+    print(f"  Status: sudo systemctl status {spec.name}")
+
+
+def _setup_service_from_spec(spec: _ServiceSpec) -> None:
+    """Install a service for the given spec on the current platform."""
+    binary = _find_binary(spec.binary_name)
+    system = platform.system()
+    if system == "Darwin":
+        _setup_launchd(spec, binary)
+    elif system == "Linux":
+        _setup_systemd(spec, binary)
+    else:
+        print(f"Unsupported platform: {system}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Server running on http://localhost:{spec.port}/mcp")
 
 
 def _cmd_setup_service(args: argparse.Namespace) -> None:
     """Handle the setup-service subcommand."""
-    binary = _find_binary()
-    port = args.port
-    db_path = Path(args.db_path).expanduser()
-
-    system = platform.system()
-    if system == "Darwin":
-        _setup_launchd(binary, port, db_path)
-    elif system == "Linux":
-        _setup_systemd(binary, port, db_path)
-    else:
-        print(f"Unsupported platform: {system}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Server running on http://localhost:{port}/mcp")
+    _setup_service_from_spec(_memory_spec(args.port, Path(args.db_path).expanduser()))
 
 
 def _detect_service_db_path() -> str | None:
@@ -262,57 +312,49 @@ def _cmd_install_kiro(args: argparse.Namespace) -> None:
         agent_path.write_text(json.dumps(agent, indent=2) + "\n", encoding="utf-8")
 
 
-def _cmd_install_claude_code() -> None:
-    """Add mcp-memory as a user-scoped MCP server in Claude Code."""
-    import shutil
-    import subprocess
-
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
-        print("error: claude not found on PATH", file=sys.stderr)
-        sys.exit(1)
-
+def _register_claude_code_server(claude_bin: str, name: str, url: str) -> None:
+    """Add one user-scoped HTTP MCP server to Claude Code and allow its tools."""
     result = subprocess.run(
-        [claude_bin, "mcp", "get", "memory"],
+        [claude_bin, "mcp", "get", name],
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode == 0:
-        print("memory MCP server already configured in Claude Code.")
+        print(f"{name} MCP server already configured in Claude Code.")
     else:
-        port = _detect_service_port()
-        url = f"http://localhost:{port}/mcp"
-
         subprocess.run(
-            [
-                claude_bin,
-                "mcp",
-                "add",
-                "--transport",
-                "http",
-                "--scope",
-                "user",
-                "memory",
-                url,
-            ],
+            [claude_bin, "mcp", "add", "--transport", "http", "--scope", "user", name, url],
             check=False,
         )
-        print(f"Added mcp-memory MCP server to Claude Code (url: {url}).")
+        print(f"Added {name} MCP server to Claude Code (url: {url}).")
 
-    # Auto-allow all memory MCP tools
     settings_path = Path.home() / ".claude" / "settings.json"
-    if settings_path.exists():
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    else:
-        settings = {}
+    settings = (
+        json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
+    )
     permissions: dict[str, list[str]] = settings.setdefault("permissions", {})
     allow: list[str] = permissions.setdefault("allow", [])
-    rule = "mcp__memory__*"
+    rule = f"mcp__{name}__*"
     if rule not in allow:
         allow.append(rule)
         settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-        print("Added mcp__memory__* to permissions.allow.")
+        print(f"Added {rule} to permissions.allow.")
+
+
+def _cmd_install_claude_code() -> None:
+    """Register both the memory data server and the memory-agent recall server."""
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        print("error: claude not found on PATH", file=sys.stderr)
+        sys.exit(1)
+
+    _register_claude_code_server(
+        claude_bin, "memory", f"http://localhost:{_detect_service_port()}/mcp"
+    )
+    _register_claude_code_server(
+        claude_bin, "memory-agent", f"http://localhost:{get_agent_port()}/mcp"
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:

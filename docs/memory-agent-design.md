@@ -213,14 +213,20 @@ local config value; the shipped code, config schema, and docs stay generic.
 
 Ships in this repo, reusing existing patterns:
 
-- console-script entry point (as the existing server has);
-- a service unit for the always-on server and, for v2, the idle-triggered dream
-  (the repo already generates a macOS launch agent and a Linux service unit);
-- client registration (the CLI already has helpers that register the memory
-  server and set per-tool permissions).
+- a `memory-agent` console-script entry point: bare invocation serves; `memory-agent
+  setup-service` installs the always-on background service (and, for v2, the
+  idle-triggered dream) via the shared service-spec machinery that already
+  generates a macOS launch agent and a Linux systemd unit;
+- client registration: `mcp-memory install claude-code` registers **both** the
+  data server (`memory`) and the recall server (`memory-agent`) and adds each
+  server's `mcp__<name>__*` allow rule.
 
-Both the memory-agent server and the dream job resolve the same DB the main
-server uses via the existing DB-path environment variable.
+The agent server discovers the running mcp-memory port itself (see the URL
+resolution above), so no DB path is needed at the agent layer. Its service env
+also carries the installing user's `PATH`, because recall spawns the `claude`
+CLI and launchd/systemd otherwise run with a minimal `PATH` that would not find
+it. The v2 dream job resolves the same DB the main server uses via the existing
+DB-path environment variable.
 
 ## Testability
 
