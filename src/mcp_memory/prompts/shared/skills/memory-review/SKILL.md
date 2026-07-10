@@ -15,6 +15,8 @@ Work through this checklist to audit and clean up the memory graph. The `/visual
 
 **Verify before every destructive op.** `delete_observations` requires an EXACT string match - re-read the live entity and copy the exact text; paraphrased/truncated strings silently no-op. For `delete_entity`, confirm the entity is genuinely empty/scratch or that its content is preserved elsewhere before deleting. `delete_entity` is blocked while an entity still has incoming relations - delete or re-point those edges first. To remove an empty "ghost" scope, delete its remaining entities then call `delete_project(project)` (it refuses to delete `global` or any scope that still has entities).
 
+**Focus on structural hygiene the autonomous "dream" cannot do.** An opt-in background curation pass may already be casting `-1` votes on obvious stale/superseded/duplicate entities during idle windows - but downvoting is *all* it can do. It cannot re-link orphans, rename, split bloated entities, move scopes, fix relations, or delete anything. So do not spend a review re-downvoting obvious noise; concentrate on the structural work below (orphans, naming, bloat/splitting, relations, scope errors) that only a human/agent can perform. Treat a strongly negative `vote_score` as a review prompt (see step 5), not as work already finished.
+
 ## 1. Find orphans and naming violations
 
 `create_entities` now rejects new unprefixed names and any mis-named/second `project` entity at creation time (a name must start with `<entityType>/`, and a `project` entity must be named exactly `project/<scope>`). The checks below therefore target **legacy entities created before that enforcement** - new ones can no longer be made.
@@ -71,7 +73,7 @@ Each pattern entity should be independently searchable - someone searching for "
 - Archive or delete resolved tasks that are no longer useful context
 - Delete old ticket/CR entities that were one-off investigations
 - Archive superseded project entities (e.g. old TS project replaced by Python rewrite)
-- Treat a strongly negative `vote_score` as a rot signal - prioritise these entities for review, and trim or delete them if the downvotes reflect stale or misleading content
+- Treat a strongly negative `vote_score` as a rot signal - prioritise these entities for review, and trim or delete them if the downvotes reflect stale or misleading content. A negative score may be the dream's doing (an idle-window demotion) rather than a human judgement, so it is a *prompt to review*, not a verdict: confirm the rot and delete/trim, or cast a `+1` if the entity is still useful and was over-demoted.
 - Remove observations with:
   - Dates/timestamps (entities have automatic created_at/updated_at)
   - File paths in global scope (belong on project entities in project scope)

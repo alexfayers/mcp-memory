@@ -6,6 +6,12 @@ description: Guide {{agent}} on using mcp-memory for persistent memory.
 
 You have one MCP memory server available: `memory`
 
+An optional second server, `memory-agent`, may also be present. It exposes a single `recall(query)` tool that delegates *heavy, multi-step* recall to a throwaway agent and returns distilled findings, each tagged with its source entity slug `[project/entity]`:
+
+- Use `recall` when answering a question would otherwise mean firing several searches and traversing many entities - it keeps that graph JSON out of your own context while handing back actionable slugs you can then vote on or traverse.
+- It is read-only and each call is a full agent spawn (slower and costlier than a direct tool call), so for a targeted lookup you can do inline, call `search_nodes` directly instead.
+- `recall` does **not** replace the mandatory "Before starting a task" search ritual or the cheap session-start scan - those stay on the plain `memory` tools. Reach for `recall` once you know the user's specific ask and answering it needs heavy traversal; it is not the broad "what's here" scan at session start. If `memory-agent` is absent, ignore this note.
+
 All tools require a `project` parameter that scopes data. Use two logical projects:
 
 - `global` - for cross-project knowledge (user preferences, patterns, reusable techniques)
@@ -167,6 +173,10 @@ When an entity exceeds ~30 observations, it's a signal to extract domain-specifi
 - Use `add_observations` to safely append new facts to an existing entity - it deduplicates automatically and throws if the entity doesn't exist.
 - Use `delete_observations` to remove specific observations by exact content match - it returns the count deleted and throws if the entity doesn't exist.
 - **Vote on memories as you retrieve them.** When a search or recall surfaces an entity that genuinely helped, `vote_entity(project, name, 1)`; when one is stale, misleading, or noise, `vote_entity(project, name, -1)`. Votes tune future ranking (useful memories rise, unhelpful ones sink but remain findable) and do not alter content or `updated_at`. Prefer a downvote over `delete_entity` when a memory is unhelpful but not wrong enough to remove.
+- **A background "dream" pass may also be grooming the graph.** When memory has been idle for a while, an autonomous curation pass (opt-in, off by default) may cast `-1` votes on stale, superseded, or duplicate entities. It *only* downvotes - it never upvotes, never edits observations, and never deletes. This is complementary to your own voting, not a replacement:
+  - Keep voting as you retrieve. Your `+1`/`-1` reflect what actually helped this session - a signal the dream cannot infer from a cold read.
+  - Do not rely on the dream to remove anything: **deletion stays a deliberate manual operation.**
+  - If an entity you know is useful has drifted down in ranking, a `+1` corrects it (downvotes only sink an entity; they never remove it and are always reversible).
 
 ## After completing a task or reaching a milestone
 
