@@ -114,6 +114,9 @@ A single tool. This is the whole context-cleanliness win and ships first.
 - **Steering:** the tool description must restrict callers to *heavy,
   multi-step* recall. A lookup the caller could do inline in one search call
   must not pay for a full agent spawn.
+- **Availability gate:** `recall` is only registered in `tools/list` when the
+  `claude` CLI it spawns resolves on `PATH`. When claude is absent the tool is
+  hidden rather than advertised and then failing "unavailable" on every call.
 
 `memory-config.json` for the spawn:
 ```json
@@ -198,7 +201,9 @@ The dream runs as a background `asyncio` task inside the already-installed
 `mcp.run_streamable_http_async()` and cancelled cleanly on shutdown. It polls a
 `/api/idle` endpoint on mcp-memory (see below) and spawns one `run_dream_pass()`
 when the idle window opens. It reuses the v1 spawn stack verbatim (hermetic
-`CLAUDE_CONFIG_DIR`, `MCP_TIMEOUT`, pinned model, auto-detected memory URL).
+`CLAUDE_CONFIG_DIR`, `MCP_TIMEOUT`, pinned model, auto-detected memory URL). The
+watcher starts only when the dream is enabled **and** the `claude` CLI resolves on
+`PATH`; otherwise it would poll uselessly and every pass would no-op.
 
 This is **not** started via FastMCP's `lifespan=` parameter:
 `streamable_http_app()` wires its own lifespan (`session_manager.run()`) and

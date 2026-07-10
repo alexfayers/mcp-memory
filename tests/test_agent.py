@@ -7,6 +7,7 @@ import json
 
 import httpx
 import pytest
+from mcp.server.fastmcp import FastMCP
 
 from mcp_memory import agent, cli
 
@@ -39,6 +40,24 @@ class TestBuildMcpConfig:
         assert config == {
             "mcpServers": {"memory": {"type": "http", "url": "http://localhost:3000/mcp"}}
         }
+
+
+class TestRegisterRecall:
+    @staticmethod
+    def _tool_names(server: FastMCP) -> set[str]:
+        return {tool.name for tool in asyncio.run(server.list_tools())}
+
+    def test_registers_recall_when_claude_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        server = FastMCP("test")
+        agent._register_recall(server)
+        assert "recall" in self._tool_names(server)
+
+    def test_hides_recall_when_claude_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: None)
+        server = FastMCP("test")
+        agent._register_recall(server)
+        assert "recall" not in self._tool_names(server)
 
 
 class TestBuildRecallCommand:
@@ -279,6 +298,7 @@ class TestAgentCli:
 class TestServe:
     def test_starts_watcher_when_dream_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
         started: list[str] = []
 
         async def fake_loop() -> None:
@@ -295,6 +315,22 @@ class TestServe:
 
     def test_no_watcher_when_dream_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
+        started: list[str] = []
+
+        async def fake_loop() -> None:
+            started.append("watching")
+
+        async def fake_serve_http() -> None:
+            await asyncio.sleep(0.02)
+
+        monkeypatch.setattr(agent, "_idle_watch_loop", fake_loop)
+        monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
+        asyncio.run(agent._serve())
+        assert started == []
+
+    def test_no_watcher_when_claude_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: None)
         started: list[str] = []
 
         async def fake_loop() -> None:

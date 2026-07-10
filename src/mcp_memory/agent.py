@@ -178,6 +178,11 @@ mcp = FastMCP(
 )
 
 
+def _claude_bin() -> str | None:
+    """Return the path to the claude CLI, or None if it is not on PATH."""
+    return shutil.which("claude")
+
+
 def build_mcp_config(memory_url: str) -> dict[str, object]:
     """Build the --mcp-config payload pointing the spawned agent at mcp-memory only."""
     return {"mcpServers": {"memory": {"type": "http", "url": memory_url}}}
@@ -352,7 +357,7 @@ async def _run_isolated_agent(
     path. All failures surface as their plain message string; the tempdir is
     always cleaned up.
     """
-    claude_bin = shutil.which("claude")
+    claude_bin = _claude_bin()
     if not claude_bin:
         return "recall unavailable: claude CLI not found"
 
@@ -382,7 +387,6 @@ async def _run_isolated_agent(
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-@mcp.tool(description=RECALL_DESC)
 async def recall(query: str) -> str:
     """Run a heavy memory recall in a throwaway agent and return distilled findings."""
     model = get_recall_model()
@@ -393,6 +397,19 @@ async def recall(query: str) -> str:
         model=model,
         timeout=_RECALL_TIMEOUT_SECONDS,
     )
+
+
+def _register_recall(server: FastMCP) -> None:
+    """Register the recall tool, but only when the claude CLI it depends on is present.
+
+    Without claude every recall would fail at spawn time, so the tool is hidden from
+    ``tools/list`` rather than advertised and then failing on every call.
+    """
+    if _claude_bin():
+        server.add_tool(recall, description=RECALL_DESC)
+
+
+_register_recall(mcp)
 
 
 async def run_dream_pass() -> str:
@@ -462,12 +479,15 @@ async def _idle_watch_loop() -> None:
 async def _serve() -> None:
     """Serve over streamable HTTP, running the idle-watcher alongside if enabled.
 
-    The watcher is an explicit background task rather than a FastMCP ``lifespan``:
-    in stateless_http mode the low-level server runs per request, so a lifespan
-    task would be spawned and cancelled on every request. Cancelled cleanly on
-    shutdown.
+    The watcher starts only when the dream is enabled AND the claude CLI it would
+    spawn is present; otherwise it would poll forever with every pass no-opping. It
+    is an explicit background task rather than a FastMCP ``lifespan``: in
+    stateless_http mode the low-level server runs per request, so a lifespan task
+    would be spawned and cancelled on every request. Cancelled cleanly on shutdown.
     """
-    watcher = asyncio.create_task(_idle_watch_loop()) if get_dream_enabled() else None
+    watcher = (
+        asyncio.create_task(_idle_watch_loop()) if get_dream_enabled() and _claude_bin() else None
+    )
     try:
         await mcp.run_streamable_http_async()
     finally:
