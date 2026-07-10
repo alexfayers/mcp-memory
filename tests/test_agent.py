@@ -307,6 +307,10 @@ class TestSpawnEnv:
         assert env["PATH"] == "/bin"
         assert env["AWS_PROFILE"] == "x"
 
+    def test_disables_tool_search(self) -> None:
+        env = agent.build_spawn_env("/tmp/iso", base_env={"PATH": "/bin"})
+        assert env["ENABLE_TOOL_SEARCH"] == "false"
+
     def test_isolated_settings_preapprove_memory_without_hooks(self) -> None:
         settings = agent.AGENT_SETTINGS
         assert "mcp__memory__*" in settings["permissions"]["allow"]

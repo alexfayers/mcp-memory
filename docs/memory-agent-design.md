@@ -69,7 +69,7 @@ A single tool. This is the whole context-cleanliness win and ships first.
   `asyncio.create_subprocess_exec`.
 - **Spawn:**
   ```
-  CLAUDE_CONFIG_DIR=<isolated dir> MCP_TIMEOUT=30000 \
+  CLAUDE_CONFIG_DIR=<isolated dir> MCP_TIMEOUT=30000 ENABLE_TOOL_SEARCH=false \
   claude -p "<query + recall ritual>" \
     --model global.anthropic.claude-haiku-4-5-20251001-v1:0 \
     --mcp-config <memory-http.json> \
@@ -88,6 +88,10 @@ A single tool. This is the whole context-cleanliness win and ships first.
 - **`MCP_TIMEOUT`.** Without it, `claude` starts its first model turn mid-
   handshake and the model reports the memory server "still connecting". Set it
   so the agent blocks until the mcp-memory HTTP connection is established.
+- **Tool search off (`ENABLE_TOOL_SEARCH=false`).** The CLI defers MCP tools
+  behind a discovery step by default; a small recall model then wastes turns
+  "loading schemas" and can wrongly report the graph empty. Disabling it makes
+  every memory tool directly callable from the first turn.
 - **Memory URL is auto-detected.** The spawn config points at the *running*
   mcp-memory port, resolved as `MCP_MEMORY_URL` -> `MCP_MEMORY_PORT` -> the port
   parsed from the installed launchd plist / systemd unit -> the default. The

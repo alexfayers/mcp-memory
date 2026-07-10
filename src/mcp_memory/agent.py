@@ -99,6 +99,11 @@ _IDLE_FETCH_TIMEOUT_SECONDS = 5.0
 # it, claude begins its first turn mid-handshake and the model reports the graph
 # unreachable.
 _MCP_STARTUP_TIMEOUT_MS = "30000"
+# The CLI defers MCP tools behind a ToolSearch discovery step by default. A small
+# recall model then wastes turns "loading schemas" and can wrongly report the
+# graph empty, so force every mcp__memory__* tool to load upfront. CLI-internal
+# env var (no public flag); an unrecognised value is ignored, reverting to default.
+_ENABLE_TOOL_SEARCH = "false"
 
 # The spawned agent runs against an isolated CLAUDE_CONFIG_DIR so it never reads
 # the user's ~/.claude hooks or SessionStart skills - those inject reminders that
@@ -221,17 +226,18 @@ def build_dream_command(
 
 
 def build_spawn_env(config_dir: str, *, base_env: dict[str, str] | None = None) -> dict[str, str]:
-    """Return the subprocess env for a recall spawn.
+    """Return the subprocess env for a recall or dream spawn.
 
-    Isolates CLAUDE_CONFIG_DIR from the user's hooks and sets MCP_TIMEOUT so the
-    spawned agent blocks until the mcp-memory connection is established, rather
-    than starting its first turn mid-handshake and reporting the graph
-    unreachable. Inherits the parent environment so AWS/Bedrock credentials still
-    resolve; only these two keys are overridden.
+    Inherits the parent environment so AWS/Bedrock credentials still resolve, and
+    overrides three keys: CLAUDE_CONFIG_DIR isolates the spawn from the user's
+    hooks; MCP_TIMEOUT blocks the first turn until the mcp-memory connection is
+    established (avoiding a spurious "graph unreachable"); and ENABLE_TOOL_SEARCH
+    loads the memory tools upfront instead of behind a discovery step.
     """
     env = dict(os.environ if base_env is None else base_env)
     env["CLAUDE_CONFIG_DIR"] = config_dir
     env["MCP_TIMEOUT"] = _MCP_STARTUP_TIMEOUT_MS
+    env["ENABLE_TOOL_SEARCH"] = _ENABLE_TOOL_SEARCH
     return env
 
 
