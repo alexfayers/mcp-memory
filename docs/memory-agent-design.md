@@ -92,6 +92,14 @@ A single tool. This is the whole context-cleanliness win and ships first.
   behind a discovery step by default; a small recall model then wastes turns
   "loading schemas" and can wrongly report the graph empty. Disabling it makes
   every memory tool directly callable from the first turn.
+- **Fact-completeness steering (prompt).** The recall prompt tells the agent to
+  search from several angles, read through all of an entity's observations,
+  extract specific facts (numbers, dates, decisions), and prefer newer
+  observations on conflict, while keeping the output compact. Note a hard
+  ceiling: the CLI persists any large tool result to a file and hands the model
+  only a preview, and recall denies the Read tool, so facts buried deep in a very
+  large entity may still not surface - the durable fix is memory hygiene (keep
+  entities focused) rather than recall tuning.
 - **Memory URL is auto-detected.** The spawn config points at the *running*
   mcp-memory port, resolved as `MCP_MEMORY_URL` -> `MCP_MEMORY_PORT` -> the port
   parsed from the installed launchd plist / systemd unit -> the default. The

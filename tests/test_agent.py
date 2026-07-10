@@ -87,6 +87,16 @@ class TestBuildRecallCommand:
         assert "who owns billing" in prompt
         assert "[project/entity-name]" in prompt
 
+    def test_prompt_steers_for_specific_facts(self) -> None:
+        command = agent.build_recall_command(
+            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/c.json"
+        )
+        prompt = command[command.index("-p") + 1].lower()
+        assert "still connecting" in prompt
+        assert "[project/entity-name]" in prompt
+        assert "all of its observations" in prompt
+        assert "newer" in prompt
+
 
 class TestBuildDreamCommand:
     def test_allows_vote_entity_but_denies_other_mutations(self) -> None:
