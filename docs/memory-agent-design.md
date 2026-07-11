@@ -265,6 +265,36 @@ same pattern as the last-activity marker):
   `vote_score` in amber as **demoted** - the ground-truth demoted state,
   including manual downvotes. Undo is the inspector's existing `+1` vote button.
 
+### Surfacing recall activity in the visualiser
+
+Recall is surfaced by the same marker bridge, but its shape differs from the
+dream's because recall is a **pull** tool - spawned per caller-request, run
+concurrently, and leaving no trace on the graph. There is no `vote_score`
+ground truth to read back, so the marker itself is the only record of what
+recall did, and a single latest-only entry is not enough:
+
+- The agent writes `recall-status.json` next to the database, holding a live
+  in-flight `active` count and a **bounded rolling history of the last 20
+  finished recalls** (each with a wall-clock timestamp, the query truncated to
+  80 characters, a success flag, and the `duration_ms`/`num_turns`/`total_cost_usd`
+  the `claude -p` run reported). The query is truncated at the record site for
+  compactness and light privacy.
+- Recording lives in `recall()` itself, not the shared `_run_isolated_agent`
+  spawn helper that recall and the dream both call - only `recall()` has the
+  query, and gating it there keeps dream passes from writing recall history.
+  The `active` count is incremented before the spawn and decremented in a
+  `finally`, so it never leaks on a timeout or error, and it is reset to zero at
+  agent startup to bound a stale count a crash could leave mid-recall.
+- Because concurrent `recall()` coroutines write the marker while a separate
+  process (mcp-memory) reads it, the write is **atomic** (temp file plus
+  `os.replace`) rather than the dream's plain write - a torn read would
+  otherwise expose corrupt JSON. The reader tolerates a bad read as absent.
+- mcp-memory serves it same-origin at `GET /api/recall` (a plain route, so
+  polling records no activity). The visualiser shows a **recall feed** stacked
+  above the dream card - a live "N running" indicator plus each recent recall
+  (time, query, duration/turns/cost, coloured by success). When the marker is
+  absent the feed reports empty.
+
 ### Deferred beyond v2
 
 - **Synthesised-observation append.** Gated behind observation-level voting
