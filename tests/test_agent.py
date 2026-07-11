@@ -4,14 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
 
-from mcp_memory import agent, cli, dream_status
+from mcp_memory import agent, cli, dream_status, recall_status
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the status markers on disk so recording never touches the real data dir."""
+    monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    dream_status.clear()
+    recall_status.clear()
 
 
 def _acoro(value: object) -> object:
@@ -23,15 +35,22 @@ def _acoro(value: object) -> object:
     return _call
 
 
-def _recall_payload(result: str, *, model: str = _MODEL, is_error: bool = False) -> str:
-    return json.dumps(
-        {
-            "type": "result",
-            "is_error": is_error,
-            "result": result,
-            "modelUsage": {model: {"inputTokens": 100, "outputTokens": 50}},
-        }
-    )
+def _recall_payload(
+    result: str,
+    *,
+    model: str = _MODEL,
+    is_error: bool = False,
+    metrics: bool = False,
+) -> str:
+    payload: dict[str, object] = {
+        "type": "result",
+        "is_error": is_error,
+        "result": result,
+        "modelUsage": {model: {"inputTokens": 100, "outputTokens": 50}},
+    }
+    if metrics:
+        payload |= {"duration_ms": 15200, "num_turns": 6, "total_cost_usd": 0.09}
+    return json.dumps(payload)
 
 
 class TestBuildMcpConfig:
@@ -413,6 +432,19 @@ class TestServe:
         asyncio.run(agent._serve())
         assert started == []
 
+    def test_resets_recall_active_at_boot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
+        recall_status.record_start()  # a stale in-flight count a crash could leave
+
+        async def fake_serve_http() -> None:
+            await asyncio.sleep(0.01)
+
+        monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
+        asyncio.run(agent._serve())
+        status = recall_status.read_status()
+        assert status is not None
+        assert status["active"] == 0
+
 
 class TestSpawnEnv:
     def test_isolates_config_dir_from_user_hooks(self) -> None:
@@ -436,7 +468,22 @@ class TestParseRecallResult:
     def test_returns_distilled_findings(self) -> None:
         stdout = _recall_payload("- Billing owned by team [bre/feature-billing]")
         result = agent.parse_recall_result(stdout, expected_model=_MODEL)
-        assert result == "- Billing owned by team [bre/feature-billing]"
+        assert result["text"] == "- Billing owned by team [bre/feature-billing]"
+        assert result["ok"] is True
+
+    def test_extracts_metrics_when_present(self) -> None:
+        stdout = _recall_payload("- finding", metrics=True)
+        result = agent.parse_recall_result(stdout, expected_model=_MODEL)
+        assert result["duration_ms"] == 15200
+        assert result["num_turns"] == 6
+        assert result["cost_usd"] == 0.09
+
+    def test_metrics_default_to_none_when_absent(self) -> None:
+        stdout = _recall_payload("- finding")
+        result = agent.parse_recall_result(stdout, expected_model=_MODEL)
+        assert result["duration_ms"] is None
+        assert result["num_turns"] is None
+        assert result["cost_usd"] is None
 
     def test_rejects_unexpected_model(self) -> None:
         stdout = _recall_payload("- finding", model="global.anthropic.claude-opus-4-8-v1:0")
@@ -582,3 +629,85 @@ class TestRunDreamPass:
         monkeypatch.setattr(agent, "_spawn_recall", fake_spawn)
         result = asyncio.run(agent.run_dream_pass())
         assert "unexpected model" in result
+
+
+class TestRecallRecording:
+    @staticmethod
+    def _wire_spawn(monkeypatch: pytest.MonkeyPatch, payload: str) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(agent, "get_recall_model", lambda: _MODEL)
+        monkeypatch.setattr(agent, "get_preflight_command", lambda: None)
+
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+        ) -> str:
+            return payload
+
+        monkeypatch.setattr(agent, "_spawn_recall", fake_spawn)
+
+    def test_successful_recall_is_recorded_with_metrics(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._wire_spawn(monkeypatch, _recall_payload("- Owned by team [bre/x]", metrics=True))
+        asyncio.run(agent.recall("who owns billing"))
+        status = recall_status.read_status()
+        assert status is not None
+        assert status["active"] == 0
+        assert len(status["recent"]) == 1
+        record = status["recent"][0]
+        assert record["query"] == "who owns billing"
+        assert record["ok"] is True
+        assert record["duration_ms"] == 15200
+        assert record["num_turns"] == 6
+        assert record["cost_usd"] == 0.09
+
+    def test_recall_is_in_flight_during_spawn(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(agent, "get_recall_model", lambda: _MODEL)
+        monkeypatch.setattr(agent, "get_preflight_command", lambda: None)
+        seen: list[int] = []
+
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+        ) -> str:
+            status = recall_status.read_status()
+            seen.append(status["active"] if status else -1)
+            return _recall_payload("- x")
+
+        monkeypatch.setattr(agent, "_spawn_recall", fake_spawn)
+        asyncio.run(agent.recall("q"))
+        assert seen == [1]  # active while the spawn ran
+        after = recall_status.read_status()
+        assert after is not None
+        assert after["active"] == 0
+
+    def test_failed_recall_is_recorded_ok_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: None)
+        asyncio.run(agent.recall("q"))
+        status = recall_status.read_status()
+        assert status is not None
+        assert status["active"] == 0
+        assert status["recent"][-1]["ok"] is False
+
+    def test_dream_pass_records_no_recall_history(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(agent, "get_dream_model", lambda: _MODEL)
+        monkeypatch.setattr(agent, "get_preflight_command", lambda: None)
+
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+        ) -> str:
+            return _recall_payload("[p/task/old] - stale")
+
+        monkeypatch.setattr(agent, "_spawn_recall", fake_spawn)
+        asyncio.run(agent.run_dream_pass())
+        assert recall_status.read_status() is None

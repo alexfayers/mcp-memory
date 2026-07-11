@@ -19,13 +19,13 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import anyio
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from . import dream_status
+from . import dream_status, recall_status
 from .cli import _agent_spec, _setup_service_from_spec
 from .config import (
     get_agent_port,
@@ -44,6 +44,22 @@ logger = logging.getLogger("memory-agent")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+class SpawnResult(TypedDict):
+    """The outcome of an isolated agent spawn: findings plus the reported metrics.
+
+    ``ok`` distinguishes a real result from a handled failure (whose message is
+    carried in ``text``). Metrics come from the ``claude -p`` JSON payload and are
+    None when the spawn failed or the payload omitted them.
+    """
+
+    text: str
+    ok: bool
+    duration_ms: int | None
+    num_turns: int | None
+    cost_usd: float | None
+
 
 # Mutating mcp-memory tools plus vote_entity: recall is strictly read-only, so
 # every one of these is denied. Deny rules override the inherited
@@ -267,8 +283,8 @@ def _model_matches(model_id: str, usage_keys: list[str]) -> bool:
     return any(token in key.lower() for key in usage_keys)
 
 
-def parse_recall_result(stdout: str, *, expected_model: str) -> str:
-    """Extract the distilled result from a ``claude -p --output-format json`` payload.
+def parse_recall_result(stdout: str, *, expected_model: str) -> SpawnResult:
+    """Extract the distilled result and metrics from a ``claude -p`` JSON payload.
 
     Raises:
         RuntimeError: if the payload is malformed, reports an error, or the model
@@ -291,7 +307,23 @@ def parse_recall_result(stdout: str, *, expected_model: str) -> str:
     if not _model_matches(expected_model, usage_keys):
         raise RuntimeError("recall ran on an unexpected model")
 
-    return result
+    return {
+        "text": result,
+        "ok": True,
+        "duration_ms": _as_int(payload.get("duration_ms")),
+        "num_turns": _as_int(payload.get("num_turns")),
+        "cost_usd": _as_float(payload.get("total_cost_usd")),
+    }
+
+
+def _as_int(value: object) -> int | None:
+    """Coerce a numeric payload field to int, or None if absent or non-numeric."""
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _as_float(value: object) -> float | None:
+    """Coerce a numeric payload field to float, or None if absent or non-numeric."""
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 async def run_preflight(
@@ -345,28 +377,33 @@ async def _spawn_recall(
     return stdout.decode()
 
 
+def _failed_spawn(message: str) -> SpawnResult:
+    """Build a failed SpawnResult carrying the handled-failure message in ``text``."""
+    return {"text": message, "ok": False, "duration_ms": None, "num_turns": None, "cost_usd": None}
+
+
 async def _run_isolated_agent(
     build_command: Callable[[str, str], list[str]],
     *,
     model: str,
     timeout: float,
-) -> str:
+) -> SpawnResult:
     """Spawn a hermetic headless agent and return its parsed result.
 
     Resolves the claude CLI, runs the pre-flight gate, then spawns in a throwaway
     tempdir holding the mcp-config and an isolated CLAUDE_CONFIG_DIR (no user
     hooks). ``build_command`` receives the resolved claude binary and mcp-config
-    path. All failures surface as their plain message string; the tempdir is
-    always cleaned up.
+    path. All failures surface as an ``ok=False`` result whose message is in
+    ``text``; the tempdir is always cleaned up.
     """
     claude_bin = _claude_bin()
     if not claude_bin:
-        return "recall unavailable: claude CLI not found"
+        return _failed_spawn("recall unavailable: claude CLI not found")
 
     try:
         await run_preflight(get_preflight_command())
     except RuntimeError as exc:
-        return str(exc)
+        return _failed_spawn(str(exc))
 
     work_dir = tempfile.mkdtemp(prefix="memory-agent-")
     work_path = Path(work_dir)
@@ -384,21 +421,38 @@ async def _run_isolated_agent(
         )
         return parse_recall_result(stdout, expected_model=model)
     except RuntimeError as exc:
-        return str(exc)
+        return _failed_spawn(str(exc))
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
 async def recall(query: str) -> str:
-    """Run a heavy memory recall in a throwaway agent and return distilled findings."""
+    """Run a heavy memory recall in a throwaway agent and return distilled findings.
+
+    Records the recall to the shared status marker for the visualiser: an in-flight
+    count while it runs and a finished-history entry after. The finish is in a
+    ``finally`` so the in-flight count never leaks on timeout or error.
+    """
     model = get_recall_model()
-    return await _run_isolated_agent(
-        lambda claude_bin, config_path: build_recall_command(
-            query, claude_bin=claude_bin, model=model, mcp_config_path=config_path
-        ),
-        model=model,
-        timeout=_RECALL_TIMEOUT_SECONDS,
-    )
+    recall_status.record_start()
+    result: SpawnResult | None = None
+    try:
+        result = await _run_isolated_agent(
+            lambda claude_bin, config_path: build_recall_command(
+                query, claude_bin=claude_bin, model=model, mcp_config_path=config_path
+            ),
+            model=model,
+            timeout=_RECALL_TIMEOUT_SECONDS,
+        )
+        return result["text"]
+    finally:
+        recall_status.record_finish(
+            query,
+            ok=result["ok"] if result else False,
+            duration_ms=result["duration_ms"] if result else None,
+            num_turns=result["num_turns"] if result else None,
+            cost_usd=result["cost_usd"] if result else None,
+        )
 
 
 def _register_recall(server: FastMCP) -> None:
@@ -417,7 +471,7 @@ _register_recall(mcp)
 async def run_dream_pass() -> str:
     """Run one downvote-only curation pass in a throwaway agent, returning its audit."""
     model = get_dream_model()
-    return await _run_isolated_agent(
+    result = await _run_isolated_agent(
         lambda claude_bin, config_path: build_dream_command(
             claude_bin=claude_bin,
             model=model,
@@ -427,6 +481,7 @@ async def run_dream_pass() -> str:
         model=model,
         timeout=get_dream_timeout(),
     )
+    return result["text"]
 
 
 async def fetch_idle_seconds() -> float | None:
@@ -505,6 +560,7 @@ async def _serve() -> None:
     stateless_http mode the low-level server runs per request, so a lifespan task
     would be spawned and cancelled on every request. Cancelled cleanly on shutdown.
     """
+    recall_status.record_startup()
     watcher = (
         asyncio.create_task(_idle_watch_loop()) if get_dream_enabled() and _claude_bin() else None
     )
