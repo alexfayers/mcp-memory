@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from . import activity
+from . import activity, dream_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,6 +34,28 @@ def get_project_paths(db: DatabaseManager) -> dict[str, list[str]]:
     for project, path in db.list_project_paths():
         grouped.setdefault(project, []).append(path)
     return grouped
+
+
+def get_dream_state() -> dict[str, object]:
+    """Compose the persisted dream status with live idle so the UI polls it in one call.
+
+    The dream runs in the separate memory-agent process and persists its config and
+    latest pass to a shared marker; this reads that marker and pairs it with the
+    server's own live idle time. When the marker is absent (the dream never ran or
+    is disabled), the config fields report as unavailable but live idle is still
+    included.
+    """
+    status = dream_status.read_status()
+    config = status["config"] if status else None
+    return {
+        "available": status is not None,
+        "enabled": bool(config["enabled"]) if config else False,
+        "idle_threshold_seconds": config["idle_threshold_seconds"] if config else None,
+        "poll_seconds": config["poll_seconds"] if config else None,
+        "last_pass": status["last_pass"] if status else None,
+        "idle_seconds": activity.idle_seconds(),
+        "last_activity": activity.last_activity(),
+    }
 
 
 def get_all_graph_data(
@@ -160,6 +182,10 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
         return JSONResponse(
             {"last_activity": activity.last_activity(), "idle_seconds": activity.idle_seconds()}
         )
+
+    @mcp.custom_route("/api/dream", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_dream(request: Request) -> JSONResponse:
+        return JSONResponse(get_dream_state())
 
     @mcp.custom_route("/api/vote", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_vote(request: Request) -> JSONResponse:

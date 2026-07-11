@@ -8,7 +8,7 @@ import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
 
-from mcp_memory import activity
+from mcp_memory import activity, dream_status
 from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
 from mcp_memory.visualise import (
@@ -22,9 +22,10 @@ from mcp_memory.visualise import (
 
 @pytest.fixture(autouse=True)
 def _clear_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reset the process-global activity buffer and isolate the marker file on disk."""
+    """Reset the process-global activity and dream state, isolating markers on disk."""
     monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     activity.clear()
+    dream_status.clear()
 
 
 @pytest.fixture
@@ -221,6 +222,47 @@ class TestApiIdle:
         await client.get("/api/idle")
         assert activity.last_activity() == 1000.0
         assert (await client.get("/api/activity")).json()["seq"] == 1
+
+
+class TestApiDream:
+    @pytest.mark.anyio
+    async def test_absent_status_reports_unavailable_with_live_idle(
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        activity.record_tool("list_projects", {}, {"projects": []})
+        monkeypatch.setattr(activity.time, "time", lambda: 1042.0)
+        resp = await client.get("/api/dream")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["available"] is False
+        assert data["enabled"] is False
+        assert data["idle_threshold_seconds"] is None
+        assert data["last_pass"] is None
+        assert data["idle_seconds"] == 42.0
+        assert data["last_activity"] == 1000.0
+
+    @pytest.mark.anyio
+    async def test_reports_config_and_last_pass(self, client: httpx.AsyncClient) -> None:
+        dream_status.record_startup(
+            enabled=True, idle_threshold_seconds=7200.0, poll_seconds=1800.0
+        )
+        dream_status.record_pass("[scratch/task/old] - stale", ok=True)
+        resp = await client.get("/api/dream")
+        data = resp.json()
+        assert data["available"] is True
+        assert data["enabled"] is True
+        assert data["idle_threshold_seconds"] == 7200.0
+        assert data["poll_seconds"] == 1800.0
+        assert data["last_pass"]["ok"] is True
+        assert data["last_pass"]["demotions"] == [
+            {"project": "scratch", "name": "task/old", "reason": "stale"}
+        ]
+
+    @pytest.mark.anyio
+    async def test_polling_dream_does_not_record_activity(self, client: httpx.AsyncClient) -> None:
+        await client.get("/api/dream")
+        assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
 
 
 class TestGetProjectPaths:
