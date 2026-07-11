@@ -9,7 +9,7 @@ import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
 
-from mcp_memory import agent, cli
+from mcp_memory import agent, cli, dream_status
 
 _MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -155,6 +155,20 @@ class TestBuildDreamCommand:
         assert "vote_entity" in prompt
         assert "-1" in prompt
 
+    def test_prompt_specifies_a_parseable_audit_format(self) -> None:
+        command = agent.build_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7
+        )
+        prompt = command[command.index("-p") + 1]
+        assert "[project/entity-name] - reason" in prompt
+        assert "nothing demoted" in prompt
+
+    def test_ritual_example_line_round_trips_through_parse_demotions(self) -> None:
+        demotions = dream_status.parse_demotions("[myproj/task/old-thing] - superseded")
+        assert demotions == [
+            {"project": "myproj", "name": "task/old-thing", "reason": "superseded"}
+        ]
+
 
 class TestFetchIdleSeconds:
     @staticmethod
@@ -195,6 +209,7 @@ class TestDreamTick:
         now: float,
         passes: list[str],
         outcome: str | Exception = "audit",
+        recorded: list[tuple[str, bool]] | None = None,
     ) -> None:
         monkeypatch.setattr(agent, "get_dream_idle_seconds", lambda: 7200.0)
         monkeypatch.setattr(agent, "fetch_idle_seconds", _acoro(idle))
@@ -207,6 +222,12 @@ class TestDreamTick:
             return outcome
 
         monkeypatch.setattr(agent, "run_dream_pass", fake_pass)
+
+        def fake_record(audit_text: str, *, ok: bool) -> None:
+            if recorded is not None:
+                recorded.append((audit_text, ok))
+
+        monkeypatch.setattr(agent.dream_status, "record_pass", fake_record)
 
     def test_runs_pass_when_idle_exceeds_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
         passes: list[str] = []
@@ -252,11 +273,58 @@ class TestDreamTick:
         assert passes == ["ran"]
         assert new_last_pass == 100_000.0
 
+    def test_records_a_successful_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        recorded: list[tuple[str, bool]] = []
+        self._wire(
+            monkeypatch,
+            idle=8000.0,
+            now=100_000.0,
+            passes=[],
+            outcome="[p/task/x] - stale",
+            recorded=recorded,
+        )
+        asyncio.run(agent._dream_tick(0.0))
+        assert recorded == [("[p/task/x] - stale", True)]
+
+    def test_records_a_handled_failure_as_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        recorded: list[tuple[str, bool]] = []
+        self._wire(
+            monkeypatch,
+            idle=8000.0,
+            now=100_000.0,
+            passes=[],
+            outcome="recall unavailable: claude CLI not found",
+            recorded=recorded,
+        )
+        asyncio.run(agent._dream_tick(0.0))
+        assert recorded == [("recall unavailable: claude CLI not found", False)]
+
+    def test_records_a_raising_pass_as_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        recorded: list[tuple[str, bool]] = []
+        self._wire(
+            monkeypatch,
+            idle=8000.0,
+            now=100_000.0,
+            passes=[],
+            outcome=RuntimeError("boom"),
+            recorded=recorded,
+        )
+        asyncio.run(agent._dream_tick(0.0))
+        assert len(recorded) == 1
+        assert recorded[0][1] is False
+
 
 class TestIdleWatchLoop:
     def test_cancels_cleanly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "get_dream_poll_seconds", lambda: 0.0)
         monkeypatch.setattr(agent, "get_dream_idle_seconds", lambda: 7200.0)
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
+        starts: list[bool] = []
+        monkeypatch.setattr(
+            agent.dream_status,
+            "record_startup",
+            lambda **_kwargs: starts.append(True),
+        )
         ticks: list[float] = []
 
         async def fake_tick(last_pass: float) -> float:
@@ -274,6 +342,7 @@ class TestIdleWatchLoop:
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(drive())
         assert ticks  # the loop ran at least one tick before cancellation
+        assert starts == [True]  # config snapshotted once before the loop
 
 
 class TestAgentCli:

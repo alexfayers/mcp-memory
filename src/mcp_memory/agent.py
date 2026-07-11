@@ -25,6 +25,7 @@ import anyio
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from . import dream_status
 from .cli import _agent_spec, _setup_service_from_spec
 from .config import (
     get_agent_port,
@@ -155,8 +156,9 @@ DREAM_RITUAL = (
     "clear noise over borderline calls. "
     "When you vote, pass the entity's exact project and name slug VERBATIM from the "
     "tool results. "
-    "Finish with a terse audit summary: one line per demoted entity as "
-    "[project/entity-name] and a few words of why, or 'nothing demoted' if you "
+    "Finish with a terse audit summary: exactly one line per demoted entity in the "
+    "form '[project/entity-name] - reason' (the slug in square brackets, then a "
+    "hyphen, then a few words of why), or the single line 'nothing demoted' if you "
     "found no clear candidates."
 )
 
@@ -462,14 +464,32 @@ async def _dream_tick(last_pass: float) -> float:
     if now - last_pass < threshold:
         return last_pass
     try:
-        logger.info("dream: %s", await run_dream_pass())
-    except Exception:
+        audit = await run_dream_pass()
+    except Exception as exc:
         logger.exception("dream pass failed")
+        dream_status.record_pass(str(exc), ok=False)
+    else:
+        logger.info("dream: %s", audit)
+        dream_status.record_pass(audit, ok=_pass_succeeded(audit))
     return now
+
+
+def _pass_succeeded(audit: str) -> bool:
+    """Return whether a dream audit describes a real pass rather than a handled failure.
+
+    Every handled-failure return string from the spawn stack begins with "recall ",
+    which a genuine audit (demotion lines or "nothing demoted") never does.
+    """
+    return not audit.startswith("recall ")
 
 
 async def _idle_watch_loop() -> None:
     """Poll for a memory-idle window and run a dream curation pass when one opens."""
+    dream_status.record_startup(
+        enabled=get_dream_enabled(),
+        idle_threshold_seconds=get_dream_idle_seconds(),
+        poll_seconds=get_dream_poll_seconds(),
+    )
     last_pass = 0.0
     while True:
         await asyncio.sleep(get_dream_poll_seconds())
