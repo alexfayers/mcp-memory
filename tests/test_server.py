@@ -546,3 +546,24 @@ class TestSearchTools:
         strict = server.search_all_projects("alpha beta", match_all=True)["results"]
         assert set(default) == {"p1", "p2"}
         assert set(strict) == {"p2"}
+
+
+class TestImplicitUsefulnessAutoVote:
+    def test_search_then_edit_raises_vote_score_by_one(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
+        )
+
+        server.search_nodes("proj", "needle")
+        server.add_observations("proj", "task/a", ["follow-up"])
+
+        assert server_db.get_entity("proj", "task/a").vote_score == 1
+
+    def test_edit_without_prior_search_does_not_vote(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
+        )
+
+        server.add_observations("proj", "task/a", ["follow-up"])
+
+        assert server_db.get_entity("proj", "task/a").vote_score == 0

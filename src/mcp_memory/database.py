@@ -35,6 +35,10 @@ _VOTE_SCALE = 5.0
 _RELATIVE_DATE_RE = re.compile(r"^(\d+)([dwm])$")
 _RELATIVE_UNITS = {"d": 1, "w": 7, "m": 30}
 
+# Retrieval telemetry (surfaced_entities) older than this is pruned on startup. Kept long
+# enough to seed the ranking eval, short enough that the table does not grow without bound.
+_SURFACED_RETENTION_DAYS = 30
+
 
 def _parse_date(value: str) -> str:
     """Parse a relative ('7d', '2w', '3m') or ISO date string to an ISO timestamp."""
@@ -66,6 +70,7 @@ class DatabaseManager:
         self._db.execute("PRAGMA busy_timeout=5000")
 
         run_migrations(self._db)
+        self.prune_surfaced_entities(_SURFACED_RETENTION_DAYS)
 
     def list_projects(self) -> list[str]:
         """Return all project names from the database."""
@@ -476,6 +481,90 @@ class DatabaseManager:
         ).fetchone()
         return int(row["vote_score"])
 
+    def record_surfaced(
+        self,
+        tool: str,
+        query: str,
+        retrieval_id: str,
+        hits: list[tuple[str, str, int]],
+    ) -> None:
+        """Record the entities a ranked search surfaced, for implicit-usefulness telemetry.
+
+        Each hit is ``(project, entity_name, rank)`` where rank is 1-based. Grouped by
+        ``retrieval_id`` so the ranking eval can reconstruct the exact ranked list later.
+        """
+        if not hits:
+            return
+        with self._db:
+            self._db.executemany(
+                "INSERT INTO surfaced_entities "
+                "(retrieval_id, project, query, tool, entity_name, rank) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [(retrieval_id, project, query, tool, name, rank) for project, name, rank in hits],
+            )
+
+    def register_use(
+        self, project: str, name: str, *, window_seconds: float, max_per_day: int
+    ) -> int | None:
+        """Cast a deterministic implicit-usefulness vote if this entity was recently surfaced.
+
+        Consumes the newest not-yet-matched surfacing of ``name`` within ``window_seconds``:
+        an in-window edit following a search is an observed "this was useful". Casts a bounded
+        ``+1`` (via the vote_score column directly, not the vote_entity tool, so instrumentation
+        does not recurse) unless the per-entity daily cap is already reached, in which case the
+        surfacing is still consumed but no vote fires. Returns the new vote_score, or ``None``
+        when there was no eligible surfacing, the cap was hit, or the entity is gone.
+        """
+        with self._db:
+            surfaced = self._db.execute(
+                "SELECT id FROM surfaced_entities "
+                "WHERE project = ? AND entity_name = ? AND used_at IS NULL "
+                "AND surfaced_at >= datetime('now', ?) "
+                "ORDER BY surfaced_at DESC, id DESC LIMIT 1",
+                (project, name, f"-{window_seconds} seconds"),
+            ).fetchone()
+            if surfaced is None:
+                return None
+
+            self._db.execute(
+                "UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (surfaced["id"],),
+            )
+
+            project_id = self._get_or_create_project_id(project)
+            entity_id = self._get_entity_id(name, project_id)
+            if entity_id is None:
+                return None
+
+            votes_today = self._db.execute(
+                "SELECT COUNT(*) AS n FROM surfaced_entities "
+                "WHERE project = ? AND entity_name = ? AND vote_cast = 1 "
+                "AND used_at >= date('now')",
+                (project, name),
+            ).fetchone()["n"]
+            if votes_today >= max_per_day:
+                return None
+
+            self._db.execute(
+                "UPDATE surfaced_entities SET vote_cast = 1 WHERE id = ?", (surfaced["id"],)
+            )
+            self._db.execute(
+                "UPDATE entities SET vote_score = vote_score + 1 WHERE id = ?", (entity_id,)
+            )
+            row = self._db.execute(
+                "SELECT vote_score FROM entities WHERE id = ?", (entity_id,)
+            ).fetchone()
+            return int(row["vote_score"])
+
+    def prune_surfaced_entities(self, retention_days: int) -> int:
+        """Delete retrieval telemetry older than the retention window, returning the row count."""
+        with self._db:
+            cursor = self._db.execute(
+                "DELETE FROM surfaced_entities WHERE surfaced_at < datetime('now', ?)",
+                (f"-{retention_days} days",),
+            )
+        return cursor.rowcount
+
     def create_relations(self, project: str, relations: list[Relation]) -> None:
         """Create relations between entities, ignoring duplicates."""
         project_id = self._get_or_create_project_id(project)
@@ -525,6 +614,10 @@ class DatabaseManager:
         with self._db:
             self._db.execute("DELETE FROM observations WHERE entity_id = ?", (entity_id,))
             self._db.execute("DELETE FROM relations WHERE source_id = ?", (entity_id,))
+            self._db.execute(
+                "DELETE FROM surfaced_entities WHERE project = ? AND entity_name = ?",
+                (project, name),
+            )
             self._db.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
 
     def delete_relation(self, project: str, source: str, target: str, relation_type: str) -> None:

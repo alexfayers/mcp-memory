@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from mcp_memory.database import DatabaseManager
-from mcp_memory.migrations.schema import _relation_type_backfill_statements
+from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
 from mcp_memory.models import Entity, Relation
 from mcp_memory.path_resolver import normalize_path
 
@@ -176,6 +176,46 @@ class TestMigrations:
         assert reopened.get_entity("proj", "task/a").vote_score == 0
         reopened.close()
 
+    def test_surfaced_entities_table_and_indexes_exist(self, db: DatabaseManager) -> None:
+        tables = {
+            row[0]
+            for row in db._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "surfaced_entities" in tables
+
+        columns = {
+            row[1] for row in db._db.execute("PRAGMA table_info(surfaced_entities)").fetchall()
+        }
+        assert columns == {
+            "id",
+            "retrieval_id",
+            "project",
+            "query",
+            "tool",
+            "entity_name",
+            "rank",
+            "surfaced_at",
+            "used_at",
+            "vote_cast",
+        }
+
+        indexes = {
+            row[0]
+            for row in db._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='surfaced_entities'"
+            ).fetchall()
+        }
+        assert "idx_surfaced_project_name" in indexes
+        assert "idx_surfaced_retrieval" in indexes
+
+    def test_surfaced_entities_migration_is_idempotent(self, db: DatabaseManager) -> None:
+        v21 = next(m for m in MIGRATIONS if m.version == 21)
+        for statement in v21.statements:
+            db._db.execute(statement)
+        db._db.commit()
+
 
 class TestConnectionPragmas:
     def test_busy_timeout_is_set(self, db: DatabaseManager) -> None:
@@ -191,6 +231,172 @@ class TestVoteScoreReadPaths:
         assert db.get_entity("proj", "task/a").vote_score == 0
         assert db.search_nodes("proj", "keyword")["entities"][0].vote_score == 0
         assert db.read_graph("proj")["entities"][0].vote_score == 0
+
+
+class TestRecordSurfaced:
+    def test_records_one_row_per_hit_with_rank_query_and_retrieval_id(
+        self, db: DatabaseManager
+    ) -> None:
+        db.record_surfaced(
+            "search_nodes",
+            "cache miss",
+            "rid-1",
+            [("proj", "task/a", 1), ("proj", "task/b", 2)],
+        )
+
+        rows = db._db.execute(
+            "SELECT retrieval_id, project, query, tool, entity_name, rank, "
+            "used_at, vote_cast FROM surfaced_entities ORDER BY rank"
+        ).fetchall()
+        assert [(r["entity_name"], r["rank"]) for r in rows] == [("task/a", 1), ("task/b", 2)]
+        assert all(r["retrieval_id"] == "rid-1" for r in rows)
+        assert all(r["query"] == "cache miss" for r in rows)
+        assert all(r["tool"] == "search_nodes" for r in rows)
+        assert all(r["project"] == "proj" for r in rows)
+        assert all(r["used_at"] is None for r in rows)
+        assert all(r["vote_cast"] == 0 for r in rows)
+
+    def test_empty_hits_records_nothing(self, db: DatabaseManager) -> None:
+        db.record_surfaced("search_nodes", "q", "rid-empty", [])
+        count = db._db.execute("SELECT COUNT(*) AS n FROM surfaced_entities").fetchone()["n"]
+        assert count == 0
+
+
+class TestRegisterUse:
+    def _surface(self, db: DatabaseManager, name: str, retrieval_id: str = "rid") -> None:
+        db.record_surfaced("search_nodes", "q", retrieval_id, [("proj", name, 1)])
+
+    def _backdate_surfaced(self, db: DatabaseManager, name: str, seconds: int) -> None:
+        db._db.execute(
+            "UPDATE surfaced_entities SET surfaced_at = datetime('now', ?) WHERE entity_name = ?",
+            (f"-{seconds} seconds", name),
+        )
+        db._db.commit()
+
+    def _make_entity(self, db: DatabaseManager, name: str) -> None:
+        db.create_entities("proj", [{"name": name, "entityType": "task", "observations": ["x"]}])
+
+    def test_in_window_edit_casts_one_upvote(self, db: DatabaseManager) -> None:
+        self._make_entity(db, "task/a")
+        self._surface(db, "task/a")
+
+        new_score = db.register_use("proj", "task/a", window_seconds=1800.0, max_per_day=3)
+
+        assert new_score == 1
+        assert db.get_entity("proj", "task/a").vote_score == 1
+
+    def test_out_of_window_edit_casts_nothing(self, db: DatabaseManager) -> None:
+        self._make_entity(db, "task/a")
+        self._surface(db, "task/a")
+        self._backdate_surfaced(db, "task/a", 3600)
+
+        new_score = db.register_use("proj", "task/a", window_seconds=1800, max_per_day=3)
+
+        assert new_score is None
+        assert db.get_entity("proj", "task/a").vote_score == 0
+
+    def test_no_surfacing_casts_nothing(self, db: DatabaseManager) -> None:
+        self._make_entity(db, "task/a")
+
+        assert db.register_use("proj", "task/a", window_seconds=1800, max_per_day=3) is None
+        assert db.get_entity("proj", "task/a").vote_score == 0
+
+    def test_re_edit_after_one_search_does_not_double_vote(self, db: DatabaseManager) -> None:
+        self._make_entity(db, "task/a")
+        self._surface(db, "task/a")
+
+        first = db.register_use("proj", "task/a", window_seconds=1800, max_per_day=3)
+        second = db.register_use("proj", "task/a", window_seconds=1800, max_per_day=3)
+
+        assert first == 1
+        assert second is None
+        assert db.get_entity("proj", "task/a").vote_score == 1
+
+    def test_two_separate_searches_each_earn_a_vote(self, db: DatabaseManager) -> None:
+        self._make_entity(db, "task/a")
+        self._surface(db, "task/a", "rid-1")
+        db.register_use("proj", "task/a", window_seconds=1800, max_per_day=3)
+        self._surface(db, "task/a", "rid-2")
+        second = db.register_use("proj", "task/a", window_seconds=1800, max_per_day=3)
+
+        assert second == 2
+        assert db.get_entity("proj", "task/a").vote_score == 2
+
+    def test_daily_cap_records_use_but_skips_vote(self, db: DatabaseManager) -> None:
+        self._make_entity(db, "task/a")
+        scores = []
+        for i in range(3):
+            self._surface(db, "task/a", f"rid-{i}")
+            scores.append(db.register_use("proj", "task/a", window_seconds=1800, max_per_day=2))
+
+        assert scores == [1, 2, None]
+        assert db.get_entity("proj", "task/a").vote_score == 2
+        used = db._db.execute(
+            "SELECT COUNT(*) AS n FROM surfaced_entities WHERE used_at IS NOT NULL"
+        ).fetchone()["n"]
+        assert used == 3
+
+    def test_auto_vote_leaves_updated_at_untouched(self, db: DatabaseManager) -> None:
+        self._make_entity(db, "task/a")
+        before = db.get_entity("proj", "task/a").updated_at
+        self._surface(db, "task/a")
+
+        db.register_use("proj", "task/a", window_seconds=1800, max_per_day=3)
+
+        assert db.get_entity("proj", "task/a").updated_at == before
+
+    def test_deleted_entity_is_skipped(self, db: DatabaseManager) -> None:
+        self._surface(db, "task/gone")
+
+        assert db.register_use("proj", "task/gone", window_seconds=1800, max_per_day=3) is None
+
+
+class TestPruneSurfaced:
+    def test_prune_drops_rows_older_than_retention(self, db: DatabaseManager) -> None:
+        db.record_surfaced("search_nodes", "q", "old", [("proj", "task/a", 1)])
+        db.record_surfaced("search_nodes", "q", "new", [("proj", "task/b", 1)])
+        db._db.execute(
+            "UPDATE surfaced_entities SET surfaced_at = datetime('now', '-40 days') "
+            "WHERE retrieval_id = 'old'"
+        )
+        db._db.commit()
+
+        removed = db.prune_surfaced_entities(retention_days=30)
+
+        assert removed == 1
+        remaining = {
+            row["retrieval_id"]
+            for row in db._db.execute("SELECT retrieval_id FROM surfaced_entities").fetchall()
+        }
+        assert remaining == {"new"}
+
+    def test_startup_prunes_old_surfacings(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        first = DatabaseManager(db_path)
+        first.record_surfaced("search_nodes", "q", "old", [("proj", "task/a", 1)])
+        first._db.execute("UPDATE surfaced_entities SET surfaced_at = datetime('now', '-400 days')")
+        first._db.commit()
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        count = reopened._db.execute("SELECT COUNT(*) AS n FROM surfaced_entities").fetchone()["n"]
+        assert count == 0
+        reopened.close()
+
+
+class TestDeleteEntityPurgesSurfaced:
+    def test_delete_entity_removes_its_surfaced_rows(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["x"]}]
+        )
+        db.record_surfaced("search_nodes", "q", "rid", [("proj", "task/a", 1)])
+
+        db.delete_entity("proj", "task/a")
+
+        count = db._db.execute(
+            "SELECT COUNT(*) AS n FROM surfaced_entities WHERE entity_name = 'task/a'"
+        ).fetchone()["n"]
+        assert count == 0
 
 
 class TestRelationTypeBackfill:

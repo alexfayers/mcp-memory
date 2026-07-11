@@ -678,4 +678,28 @@ MIGRATIONS: list[Migration] = [
             "ALTER TABLE entities ADD COLUMN vote_score INTEGER NOT NULL DEFAULT 0",
         ],
     ),
+    Migration(
+        version=21,
+        statements=[
+            # Durable retrieval telemetry: one row per entity surfaced by a ranked search,
+            # grouped by retrieval_id (a search's hits). used_at is the ground-truth
+            # relevance label (an in-window edit followed the surfacing). Stored by name,
+            # NOT a FK to entities.id, so delete_entity is never blocked and churn is fine.
+            """CREATE TABLE IF NOT EXISTS surfaced_entities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                retrieval_id TEXT NOT NULL,
+                project TEXT NOT NULL,
+                query TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                entity_name TEXT NOT NULL,
+                rank INTEGER NOT NULL,
+                surfaced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                used_at DATETIME,
+                vote_cast INTEGER NOT NULL DEFAULT 0
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_surfaced_project_name "
+            "ON surfaced_entities(project, entity_name, surfaced_at)",
+            "CREATE INDEX IF NOT EXISTS idx_surfaced_retrieval ON surfaced_entities(retrieval_id)",
+        ],
+    ),
 ]

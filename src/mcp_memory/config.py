@@ -11,6 +11,8 @@ _DEFAULT_PORT = "8000"
 _DEFAULT_AGENT_PORT = "8100"
 _DEFAULT_RECALL_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 _DEFAULT_RECALL_MAX_TURNS = "12"
+_DEFAULT_AUTO_VOTE_WINDOW_SECONDS = "1800"
+_DEFAULT_AUTO_VOTE_MAX_PER_DAY = "3"
 _DEFAULT_DREAM_IDLE_SECONDS = "7200"
 _DEFAULT_DREAM_POLL_SECONDS = "1800"
 _DEFAULT_DREAM_TIMEOUT = "300"
@@ -80,6 +82,20 @@ def get_recall_max_turns() -> int:
     sequential multi-turn tool loop - not the model - dominates recall latency.
     """
     return int(os.environ.get("MCP_RECALL_MAX_TURNS", _DEFAULT_RECALL_MAX_TURNS))
+
+
+def get_auto_vote_window_seconds() -> float:
+    """Return how long after a search an edit still counts as an implicit-usefulness vote.
+
+    The deterministic auto-vote fires only when a surfaced entity is edited within this
+    window; longer windows attribute more edits to a search, shorter ones are stricter.
+    """
+    return float(os.environ.get("MCP_AUTO_VOTE_WINDOW_SECONDS", _DEFAULT_AUTO_VOTE_WINDOW_SECONDS))
+
+
+def get_auto_vote_max_per_day() -> int:
+    """Return the per-entity daily cap on deterministic auto-votes, bounding score growth."""
+    return int(os.environ.get("MCP_AUTO_VOTE_MAX_PER_DAY", _DEFAULT_AUTO_VOTE_MAX_PER_DAY))
 
 
 def get_preflight_command() -> str | None:
