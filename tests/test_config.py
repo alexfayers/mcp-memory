@@ -33,6 +33,14 @@ class TestMemoryUrl:
         assert config.get_memory_url() == "http://localhost:8000/mcp"
 
 
+class TestRecallConfig:
+    def test_max_turns_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_RECALL_MAX_TURNS", raising=False)
+        assert config.get_recall_max_turns() == 12
+        monkeypatch.setenv("MCP_RECALL_MAX_TURNS", "6")
+        assert config.get_recall_max_turns() == 6
+
+
 class TestDreamConfig:
     def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_ENABLED", raising=False)

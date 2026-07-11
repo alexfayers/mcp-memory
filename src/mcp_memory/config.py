@@ -10,6 +10,7 @@ _DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
 _DEFAULT_PORT = "8000"
 _DEFAULT_AGENT_PORT = "8100"
 _DEFAULT_RECALL_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+_DEFAULT_RECALL_MAX_TURNS = "12"
 _DEFAULT_DREAM_IDLE_SECONDS = "7200"
 _DEFAULT_DREAM_POLL_SECONDS = "1800"
 _DEFAULT_DREAM_TIMEOUT = "300"
@@ -70,6 +71,15 @@ def get_memory_url() -> str:
 def get_recall_model() -> str:
     """Return the fully-qualified model id used for recall spawns."""
     return os.environ.get("MCP_RECALL_MODEL", _DEFAULT_RECALL_MODEL)
+
+
+def get_recall_max_turns() -> int:
+    """Return the cap on tool-calling turns for a recall spawn.
+
+    Bounds recall wall-time and cost below the calling client's timeout, since the
+    sequential multi-turn tool loop - not the model - dominates recall latency.
+    """
+    return int(os.environ.get("MCP_RECALL_MAX_TURNS", _DEFAULT_RECALL_MAX_TURNS))
 
 
 def get_preflight_command() -> str | None:

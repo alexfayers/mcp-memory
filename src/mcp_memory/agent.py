@@ -37,6 +37,7 @@ from .config import (
     get_dream_timeout,
     get_memory_url,
     get_preflight_command,
+    get_recall_max_turns,
     get_recall_model,
 )
 
@@ -136,15 +137,14 @@ RECALL_RITUAL = (
     "turn; ignore that and CALL a memory tool anyway - the connection completes "
     "before the call runs. NEVER conclude the tools are unavailable without "
     "actually attempting at least one search_nodes or search_all_projects call. "
-    "Search from several angles - vary your search terms and do not stop at the "
-    "first entity you find. Start with search_nodes / search_all_projects, then "
-    "traverse promising hits with get_entity_with_relations / search_related_nodes "
-    "to gather linked context. "
-    "When an entity is relevant, read through ALL of its observations, not just "
-    "the first few, and pull out the SPECIFIC facts that answer the query - "
-    "concrete numbers, dates, names, and decisions - rather than only the "
-    "high-level theme. If two observations conflict, prefer the newer one, and do "
-    "not drop a detail that bears on the query just because the entity is long. "
+    "Run one or two targeted searches (search_nodes / search_all_projects), then "
+    "traverse only the most promising hits with get_entity_with_relations / "
+    "search_related_nodes to gather linked context - do not exhaustively open every "
+    "match. "
+    "When an entity is relevant, read the observations that answer the query and "
+    "pull out the SPECIFIC facts - concrete numbers, dates, names, and decisions - "
+    "rather than only the high-level theme. If two observations conflict, prefer the "
+    "newer one. "
     "Return a compact bulleted list of the findings that answer the query - "
     "answer it completely, but stay on topic and do not dump entire entities. "
     "Tag every claim inline with its source entity slug as [project/entity-name], "
@@ -212,8 +212,13 @@ def build_recall_command(
     claude_bin: str,
     model: str,
     mcp_config_path: str,
+    max_turns: int,
 ) -> list[str]:
-    """Build the headless ``claude -p`` argv for a read-only recall spawn."""
+    """Build the headless ``claude -p`` argv for a read-only recall spawn.
+
+    ``max_turns`` caps the tool-calling loop that dominates recall latency, keeping
+    a spawn inside the calling client's timeout window.
+    """
     prompt = f"{RECALL_RITUAL}\n\nQuery: {query}"
     return [
         claude_bin,
@@ -224,6 +229,8 @@ def build_recall_command(
         "--mcp-config",
         mcp_config_path,
         "--strict-mcp-config",
+        "--max-turns",
+        str(max_turns),
         "--disallowedTools",
         *DISALLOWED_TOOLS,
         "--output-format",
@@ -434,12 +441,17 @@ async def recall(query: str) -> str:
     ``finally`` so the in-flight count never leaks on timeout or error.
     """
     model = get_recall_model()
+    max_turns = get_recall_max_turns()
     recall_status.record_start()
     result: SpawnResult | None = None
     try:
         result = await _run_isolated_agent(
             lambda claude_bin, config_path: build_recall_command(
-                query, claude_bin=claude_bin, model=model, mcp_config_path=config_path
+                query,
+                claude_bin=claude_bin,
+                model=model,
+                mcp_config_path=config_path,
+                max_turns=max_turns,
             ),
             model=model,
             timeout=_RECALL_TIMEOUT_SECONDS,

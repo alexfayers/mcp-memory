@@ -168,6 +168,13 @@ the expected model or you may silently pay Opus rates.
 - Wall: ~15-33s, dominated by the multi-turn tool-calling loop (not the model),
   so this is roughly the floor regardless of model. Reinforces "heavy recall
   only".
+- The loop is bounded by `--max-turns` (`MCP_RECALL_MAX_TURNS`, default 12), which
+  caps wall-time and cost by limiting how many sequential tool calls a recall may
+  make. This is the lever, not the timeout: the spawn's own hard timeout
+  (`MCP_RECALL_TIMEOUT`, default 180s) sits far above the calling client's MCP
+  timeout, so a long recall would otherwise complete (and bill) after the client
+  has already given up. Capping turns keeps a recall inside the client window;
+  lowering the timeout would instead kill legitimate multi-turn recalls mid-flight.
 
 ## v2 - `dream` (autonomous curation)
 

@@ -86,6 +86,7 @@ class TestBuildRecallCommand:
             claude_bin="/usr/bin/claude",
             model=_MODEL,
             mcp_config_path="/tmp/cfg.json",
+            max_turns=12,
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
@@ -95,14 +96,14 @@ class TestBuildRecallCommand:
 
     def test_allows_memory_read_tools_by_not_denying_them(self) -> None:
         command = agent.build_recall_command(
-            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json"
+            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_turns=12
         )
         assert "mcp__memory__search_nodes" not in command
         assert "mcp__memory__get_entity_with_relations" not in command
 
     def test_denies_filesystem_and_web_read_builtins(self) -> None:
         command = agent.build_recall_command(
-            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json"
+            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_turns=12
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
@@ -111,15 +112,25 @@ class TestBuildRecallCommand:
 
     def test_isolates_and_pins_the_spawn(self) -> None:
         command = agent.build_recall_command(
-            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json"
+            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_turns=12
         )
         assert "--strict-mcp-config" in command
         assert command[command.index("--model") + 1] == _MODEL
         assert command[command.index("--mcp-config") + 1] == "/tmp/cfg.json"
 
+    def test_caps_tool_calling_turns(self) -> None:
+        command = agent.build_recall_command(
+            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_turns=8
+        )
+        assert command[command.index("--max-turns") + 1] == "8"
+
     def test_embeds_query_and_slug_ritual_in_prompt(self) -> None:
         command = agent.build_recall_command(
-            "who owns billing", claude_bin="claude", model=_MODEL, mcp_config_path="/c.json"
+            "who owns billing",
+            claude_bin="claude",
+            model=_MODEL,
+            mcp_config_path="/c.json",
+            max_turns=12,
         )
         prompt = command[command.index("-p") + 1]
         assert "who owns billing" in prompt
@@ -127,12 +138,12 @@ class TestBuildRecallCommand:
 
     def test_prompt_steers_for_specific_facts(self) -> None:
         command = agent.build_recall_command(
-            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/c.json"
+            "q", claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_turns=12
         )
         prompt = command[command.index("-p") + 1].lower()
         assert "still connecting" in prompt
         assert "[project/entity-name]" in prompt
-        assert "all of its observations" in prompt
+        assert "observations that answer the query" in prompt
         assert "newer" in prompt
 
 
