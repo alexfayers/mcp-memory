@@ -240,6 +240,31 @@ the dream's own spawned tool calls do. The in-memory marker is seeded from disk
 on first read (surviving a restart) and, on a fresh install with no marker,
 from the current time so a new server does not immediately groom.
 
+### Surfacing the dream in the visualiser
+
+The dream runs in the memory-agent process, but the graph visualiser is served
+by mcp-memory, which does not otherwise know the dream's config or actions. The
+two processes share a data directory, so the bridge is a small marker file (the
+same pattern as the last-activity marker):
+
+- The agent writes `dream-status.json` next to the database - its config
+  snapshot at watcher startup, and the latest pass (wall-clock timestamp,
+  success flag, raw audit text, and a best-effort parse of the audit's
+  `[project/entity-name] - reason` lines) after each `_dream_tick`. Only the
+  most recent pass is kept; the graph's current `vote_score` state is the ground
+  truth for what remains demoted, so no history is retained. The dream ritual
+  pins the audit to that one-line-per-demotion format so the parse is reliable.
+- mcp-memory reads that marker and pairs it with its own live idle time at
+  `GET /api/dream`, so the browser gets everything same-origin in one poll (a
+  plain route, so polling it records no activity). When the marker is absent
+  (disabled or never run), the config fields report as unavailable but live idle
+  is still returned.
+- The visualiser shows a **dream status card** (enabled/idle/estimated
+  time-to-next-pass/last-ran and the last pass's reported demotions, each row
+  linking to the entity's inspector) and rings every node with a negative
+  `vote_score` in amber as **demoted** - the ground-truth demoted state,
+  including manual downvotes. Undo is the inspector's existing `+1` vote button.
+
 ### Deferred beyond v2
 
 - **Synthesised-observation append.** Gated behind observation-level voting
