@@ -6,6 +6,7 @@ SQLite-backed persistent memory MCP server with FTS5 search and project scoping.
 
 - **Project-scoped data** - all tools take a `project` parameter to isolate data per project
 - **FTS5 full-text search** - recency-weighted BM25 ranking with porter stemming, time-range filtering
+- **Implicit-usefulness ranking** - an entity edited soon after a search surfaced it earns an automatic upvote, so ranking self-tunes from observed use without relying on explicit votes
 - **Graph traversal** - explore entity relationships with filtering by type
 - **Safe observation updates** - append or delete individual observations without overwriting
 - **Entity status tracking** - track entity lifecycle with status fields
@@ -168,6 +169,8 @@ Set or clear the status of an entity. Valid statuses: `planned`, `in-progress`, 
 ### vote_entity
 
 Record a `+1` (useful) or `-1` (stale/unhelpful) usefulness vote on an entity as you retrieve it. Votes accumulate into a net `vote_score` that nudges search ranking within bounds - useful memories surface higher, unhelpful ones sink but stay findable - without changing the entity's content or `updated_at`. Returns the new net `vote_score`.
+
+In addition to these explicit votes, the server casts a deterministic `+1` on its own when an entity that a search surfaced is edited within a short window (default 30 minutes, `MCP_AUTO_VOTE_WINDOW_SECONDS`) - treating "searched, then acted on" as observed usefulness. Auto-votes are idempotent per surfacing and capped per entity per day (`MCP_AUTO_VOTE_MAX_PER_DAY`, default 3); the surfacings are also retained for 30 days to measure ranking quality (precision@k / MRR).
 
 ### delete_entity
 
