@@ -8,7 +8,7 @@ import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
 
-from mcp_memory import activity, dream_status
+from mcp_memory import activity, dream_status, recall_status
 from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
 from mcp_memory.visualise import (
@@ -26,6 +26,7 @@ def _clear_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     activity.clear()
     dream_status.clear()
+    recall_status.clear()
 
 
 @pytest.fixture
@@ -275,6 +276,44 @@ class TestApiDream:
     @pytest.mark.anyio
     async def test_polling_dream_does_not_record_activity(self, client: httpx.AsyncClient) -> None:
         await client.get("/api/dream")
+        assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
+
+
+class TestApiRecall:
+    @pytest.mark.anyio
+    async def test_absent_marker_reports_unavailable(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/api/recall")
+        assert resp.status_code == 200
+        assert resp.json() == {"available": False, "active": 0, "recent": []}
+
+    @pytest.mark.anyio
+    async def test_reports_active_and_recent(self, client: httpx.AsyncClient) -> None:
+        recall_status.record_start()
+        recall_status.record_finish(
+            "who owns billing", ok=True, duration_ms=15200, num_turns=6, cost_usd=0.09
+        )
+        resp = await client.get("/api/recall")
+        data = resp.json()
+        assert data["available"] is True
+        assert data["active"] == 0
+        assert len(data["recent"]) == 1
+        assert data["recent"][0]["query"] == "who owns billing"
+        assert data["recent"][0]["ok"] is True
+        assert data["recent"][0]["duration_ms"] == 15200
+        assert data["recent"][0]["num_turns"] == 6
+        assert data["recent"][0]["cost_usd"] == 0.09
+
+    @pytest.mark.anyio
+    async def test_reports_in_flight_count(self, client: httpx.AsyncClient) -> None:
+        recall_status.record_start()
+        recall_status.record_start()
+        data = (await client.get("/api/recall")).json()
+        assert data["available"] is True
+        assert data["active"] == 2
+
+    @pytest.mark.anyio
+    async def test_polling_recall_does_not_record_activity(self, client: httpx.AsyncClient) -> None:
+        await client.get("/api/recall")
         assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
 
 

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from . import activity, dream_status
+from . import activity, dream_status, recall_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -55,6 +55,22 @@ def get_dream_state() -> dict[str, object]:
         "last_pass": status["last_pass"] if status else None,
         "idle_seconds": activity.idle_seconds(),
         "last_activity": activity.last_activity(),
+    }
+
+
+def get_recall_state() -> dict[str, object]:
+    """Return the memory-agent's recall activity for the UI: in-flight count and history.
+
+    Recall runs in the separate memory-agent process and persists its live count and
+    recent finished recalls to a shared marker; this reads that marker. There is no
+    server-side signal to compose (recall does not run in mcp-memory), so an absent
+    marker reports as unavailable with an empty history.
+    """
+    status = recall_status.read_status()
+    return {
+        "available": status is not None,
+        "active": status["active"] if status else 0,
+        "recent": status["recent"] if status else [],
     }
 
 
@@ -186,6 +202,10 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
     @mcp.custom_route("/api/dream", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_dream(request: Request) -> JSONResponse:
         return JSONResponse(get_dream_state())
+
+    @mcp.custom_route("/api/recall", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_recall(request: Request) -> JSONResponse:
+        return JSONResponse(get_recall_state())
 
     @mcp.custom_route("/api/vote", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_vote(request: Request) -> JSONResponse:
