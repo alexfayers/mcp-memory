@@ -78,6 +78,25 @@ svg { width: 100vw; height: 100vh; }
 .node.search-hit circle:first-of-type { stroke: #58a6ff !important; stroke-width: 3; }
 .search-ring { fill: none; stroke: #58a6ff; stroke-opacity: 0.9; pointer-events: none; }
 .search-badge { fill: #58a6ff; font-size: 9px; font-weight: 700; pointer-events: none; }
+#dream { position: fixed; bottom: 12px; right: 12px; z-index: 10; width: 300px; max-width: 40vw;
+  background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
+  backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
+#dream-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
+#dream-head .pill { display: inline-flex; align-items: center; gap: 6px; color: #8b949e; }
+#dream-head .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #484f58; flex-shrink: 0; }
+#dream-head.on .pill .dot { background: #bc8cff; box-shadow: 0 0 6px #bc8cff; }
+#dream-head .idle { margin-left: auto; color: #6e7681; font-variant-numeric: tabular-nums; }
+#dream-body { padding: 6px 12px; }
+#dream-body .line { color: #8b949e; padding: 2px 0; }
+#dream-body .line .em { color: #c9d1d9; font-variant-numeric: tabular-nums; }
+#dream-demotions { margin-top: 4px; max-height: 22vh; overflow-y: auto; }
+#dream-demotions .dm { display: flex; gap: 6px; align-items: baseline; padding: 3px 0; border-top: 1px solid #21262d; cursor: pointer; }
+#dream-demotions .dm:hover { background: rgba(188,140,255,0.08); }
+#dream-demotions .dm .v { color: #d29922; font-weight: 700; flex-shrink: 0; }
+#dream-demotions .dm .nm { color: #c9d1d9; word-break: break-all; }
+#dream-demotions .dm .why { color: #6e7681; display: block; }
+.node.demoted circle { stroke: #d29922; stroke-dasharray: 2 2; }
+.demoted-ring { fill: none; stroke: #d29922; stroke-opacity: 0.8; stroke-dasharray: 2 2; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -113,6 +132,13 @@ svg { width: 100vw; height: 100vh; }
     <h4>Activity</h4>
     <div id="legend-activity"></div>
   </div>
+</div>
+<div id="dream">
+  <div id="dream-head">
+    <span class="pill"><span class="dot"></span><span id="dream-state">dream</span></span>
+    <span class="idle" id="dream-idle"></span>
+  </div>
+  <div id="dream-body"></div>
 </div>
 <div id="panel">
   <button id="panel-close">&times;</button>
@@ -217,6 +243,7 @@ function buildLegend() {
     statuses.innerHTML += `<div class="row"><span class="dot" style="border:2px solid ${colour};background:transparent"></span>${name}</div>`;
   }
   statuses.innerHTML += `<div class="row"><span class="dot" style="border:2px dashed #f85149;background:transparent"></span>orphan (no relations)</div>`;
+  statuses.innerHTML += `<div class="row"><span class="dot" style="border:2px dashed #d29922;background:transparent"></span>demoted (downvoted)</div>`;
   const acts = document.getElementById("legend-activity");
   for (const [name, colour] of Object.entries(KIND_COLOURS)) {
     acts.innerHTML += `<div class="row"><span class="dot" style="background:${colour};box-shadow:0 0 5px ${colour}"></span>${name}</div>`;
@@ -235,6 +262,8 @@ async function fetchGraph() {
     data.relations.forEach(r => { connected.add(r.source); connected.add(r.target); });
     const orphanCount = data.entities.filter(e => !connected.has(e.name) && e.entity_type !== "project").length;
     if (orphanCount) document.getElementById("status").textContent += `, ${orphanCount} orphan${orphanCount > 1 ? "s" : ""}`;
+    const demotedCount = data.entities.filter(e => (e.vote_score || 0) < 0).length;
+    if (demotedCount) document.getElementById("status").textContent += `, ${demotedCount} demoted`;
     if (JSON.stringify(data) !== JSON.stringify(currentData)) { currentData = data; render(data); }
   } catch (e) { document.getElementById("status").textContent = "error: " + e.message; }
 }
@@ -318,6 +347,7 @@ function render(data) {
   }
 
   applySearchRings();  // nodeSel was just rebuilt; reapply persistent search rings
+  applyDemotedRings();  // flag nodes the dream (or a manual vote) demoted
 }
 
 function ticked() {
@@ -481,6 +511,17 @@ function applySearchRings() {
   });
 }
 
+function applyDemotedRings() {
+  if (!nodeSel) return;
+  nodeSel.classed("demoted", false);
+  nodeLayer.selectAll(".demoted-ring").remove();
+  nodeSel.filter(d => (d.vote_score || 0) < 0).each(function(d) {
+    const grp = d3.select(this), r = nodeRadius(d);
+    grp.classed("demoted", true);
+    grp.append("circle").attr("class", "demoted-ring").attr("r", r + 3).attr("stroke-width", 1.5);
+  });
+}
+
 function renderResults(hits) {
   searchHits = hits;
   searchRankByName = new Map(hits.map(h => [h.name, h.rank]));
@@ -519,6 +560,69 @@ document.getElementById("results-list").onclick = (e) => {
   else { showPanel(searchHits.find(h => h.name === row.dataset.name)); }
   document.getElementById("results").classList.remove("open");
 };
+
+function formatDuration(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+function renderDream(d) {
+  const head = document.getElementById("dream-head");
+  const enabled = d.available && d.enabled;
+  head.classList.toggle("on", !!enabled);
+  document.getElementById("dream-state").textContent =
+    !d.available ? "dream · unknown" : enabled ? "dream · on" : "dream · off";
+  document.getElementById("dream-idle").textContent = `idle ${formatDuration(d.idle_seconds)}`;
+
+  const body = document.getElementById("dream-body");
+  const lines = [];
+  if (enabled && d.idle_threshold_seconds != null) {
+    const remaining = d.idle_threshold_seconds - d.idle_seconds;
+    const next = remaining <= 0 ? "idle window open" : `~${formatDuration(remaining)}`;
+    lines.push(`<div class="line">Next pass: <span class="em">${next}</span></div>`);
+  } else if (!d.available) {
+    lines.push(`<div class="line">No dream pass has run yet.</div>`);
+  } else {
+    lines.push(`<div class="line">Curation is off (opt-in).</div>`);
+  }
+
+  const lp = d.last_pass;
+  if (lp) {
+    const when = new Date(lp.ts * 1000).toLocaleString();
+    const status = lp.ok ? "" : ' <span style="color:#f85149">(failed)</span>';
+    lines.push(`<div class="line">Last ran: <span class="em">${when}</span>${status}</div>`);
+    if (lp.ok && lp.demotions.length) {
+      lines.push(`<div class="line">Demoted ${lp.demotions.length} last pass:</div>`);
+      lines.push('<div id="dream-demotions">' + lp.demotions.map(dm =>
+        `<div class="dm" data-project="${(dm.project || "").replace(/"/g, "&quot;")}" data-name="${(dm.name || "").replace(/"/g, "&quot;")}">`
+        + `<span class="v">-1</span><span class="meta"><span class="nm">${(dm.name || "").replace(/</g, "&lt;")}</span>`
+        + (dm.reason ? `<span class="why">${dm.reason.replace(/</g, "&lt;")}</span>` : "")
+        + `</span></div>`).join("") + '</div>');
+    } else if (lp.ok) {
+      lines.push(`<div class="line">Nothing demoted last pass.</div>`);
+    } else {
+      lines.push(`<div class="line" style="color:#6e7681">${(lp.audit_text || "").replace(/</g, "&lt;")}</div>`);
+    }
+  }
+  body.innerHTML = lines.join("");
+}
+
+async function fetchDream() {
+  try { renderDream(await (await fetch("/api/dream")).json()); }
+  catch (e) { /* transient poll failure; retry next tick */ }
+}
+document.getElementById("dream-body").onclick = (e) => {
+  const row = e.target.closest(".dm");
+  if (!row) return;
+  const node = nodes.find(n => n.id === row.dataset.name && n.project === row.dataset.project);
+  if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
+};
+fetchDream();
+setInterval(fetchDream, 5000);
 
 loadProjects();
 </script>

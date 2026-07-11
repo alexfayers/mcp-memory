@@ -124,6 +124,19 @@ class TestVisualisePage:
         assert "text/html" in resp.headers["content-type"]
         assert "mcp-memory graph" in resp.text
 
+    @pytest.mark.anyio
+    async def test_includes_the_dream_card(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert 'id="dream"' in resp.text
+        assert "fetchDream" in resp.text
+        assert "/api/dream" in resp.text
+
+    @pytest.mark.anyio
+    async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "applyDemotedRings" in resp.text
+        assert "demoted (downvoted)" in resp.text
+
 
 class TestApiProjects:
     @pytest.mark.anyio
