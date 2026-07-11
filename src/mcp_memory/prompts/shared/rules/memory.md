@@ -9,6 +9,7 @@ You have one MCP memory server available: `memory`
 An optional second server, `memory-agent`, may also be present. It exposes a single `recall(query)` tool that delegates *heavy, multi-step* recall to a throwaway agent and returns distilled findings, each tagged with its source entity slug `[project/entity]`:
 
 - Use `recall` when answering a question would otherwise mean firing several searches and traversing many entities - it keeps that graph JSON out of your own context while handing back actionable slugs you can then vote on or traverse.
+- **Mechanical trip-wire (do not rely on judgement here):** the moment you notice you are about to fire a *second* broad `search_nodes`/`search_all_projects` call for the *same* question, or a single search result is large enough to be truncated/persisted to a file, stop and route the question through `recall` instead. Multiple broad searches for one question is the signal you should have used `recall` from the start.
 - It is read-only and each call is a full agent spawn (slower and costlier than a direct tool call), so for a targeted lookup you can do inline, call `search_nodes` directly instead.
 - `recall` does **not** replace the mandatory "Before starting a task" search ritual or the cheap session-start scan - those stay on the plain `memory` tools. Reach for `recall` once you know the user's specific ask and answering it needs heavy traversal; it is not the broad "what's here" scan at session start. If `memory-agent` is absent, ignore this note.
 
