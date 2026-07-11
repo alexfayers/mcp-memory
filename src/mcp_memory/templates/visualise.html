@@ -78,9 +78,24 @@ svg { width: 100vw; height: 100vh; }
 .node.search-hit circle:first-of-type { stroke: #58a6ff !important; stroke-width: 3; }
 .search-ring { fill: none; stroke: #58a6ff; stroke-opacity: 0.9; pointer-events: none; }
 .search-badge { fill: #58a6ff; font-size: 9px; font-weight: 700; pointer-events: none; }
-#dream { position: fixed; bottom: 12px; right: 12px; z-index: 10; width: 300px; max-width: 40vw;
-  background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
+#agent-panels { position: fixed; bottom: 12px; right: 12px; z-index: 10; width: 300px; max-width: 40vw;
+  display: flex; flex-direction: column; gap: 8px; }
+#dream { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
   backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
+#recall { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
+  backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
+#recall-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
+#recall-head .pill { display: inline-flex; align-items: center; gap: 6px; color: #8b949e; }
+#recall-head .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #484f58; flex-shrink: 0; }
+#recall-head.on .pill .dot { background: #58a6ff; box-shadow: 0 0 6px #58a6ff; animation: glowpulse 1.6s ease-in-out infinite; }
+#recall-head .running { margin-left: auto; color: #58a6ff; font-variant-numeric: tabular-nums; }
+#recall-feed { max-height: 22vh; overflow-y: auto; }
+#recall-feed:empty::after { content: "No recalls yet"; display: block; padding: 8px 12px; color: #484f58; font-style: italic; }
+#recall-feed .rc { display: flex; flex-direction: column; gap: 1px; padding: 4px 12px; border-left: 3px solid var(--c); }
+#recall-feed .rc .top { display: flex; gap: 6px; align-items: baseline; }
+#recall-feed .rc .t { color: #484f58; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+#recall-feed .rc .q { color: #c9d1d9; word-break: break-word; }
+#recall-feed .rc .meta { color: #6e7681; font-variant-numeric: tabular-nums; }
 #dream-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
 #dream-head .pill { display: inline-flex; align-items: center; gap: 6px; color: #8b949e; }
 #dream-head .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #484f58; flex-shrink: 0; }
@@ -133,12 +148,21 @@ svg { width: 100vw; height: 100vh; }
     <div id="legend-activity"></div>
   </div>
 </div>
-<div id="dream">
-  <div id="dream-head">
-    <span class="pill"><span class="dot"></span><span id="dream-state">dream</span></span>
-    <span class="idle" id="dream-idle"></span>
+<div id="agent-panels">
+  <div id="recall">
+    <div id="recall-head">
+      <span class="pill"><span class="dot"></span><span id="recall-state">recall</span></span>
+      <span class="running" id="recall-active"></span>
+    </div>
+    <div id="recall-feed"></div>
   </div>
-  <div id="dream-body"></div>
+  <div id="dream">
+    <div id="dream-head">
+      <span class="pill"><span class="dot"></span><span id="dream-state">dream</span></span>
+      <span class="idle" id="dream-idle"></span>
+    </div>
+    <div id="dream-body"></div>
+  </div>
 </div>
 <div id="panel">
   <button id="panel-close">&times;</button>
@@ -623,6 +647,33 @@ document.getElementById("dream-body").onclick = (e) => {
 };
 fetchDream();
 setInterval(fetchDream, 5000);
+
+function renderRecall(d) {
+  const head = document.getElementById("recall-head");
+  head.classList.toggle("on", d.active > 0);
+  document.getElementById("recall-active").textContent = d.active > 0 ? `${d.active} running` : "";
+  const feed = document.getElementById("recall-feed");
+  const rows = (d.recent || []).slice().reverse().map(r => {  // newest first
+    const time = new Date(r.ts * 1000).toLocaleTimeString();
+    const colour = r.ok ? "#3fb950" : "#f85149";
+    const bits = [];
+    if (r.duration_ms != null) bits.push(formatDuration(r.duration_ms / 1000));
+    if (r.num_turns != null) bits.push(`${r.num_turns} turns`);
+    if (r.cost_usd != null) bits.push(`$${r.cost_usd.toFixed(2)}`);
+    const meta = bits.join(" · ") || (r.ok ? "" : "failed");
+    return `<div class="rc" style="--c:${colour}"><div class="top">`
+      + `<span class="t">${time}</span><span class="q">${(r.query || "").replace(/</g, "&lt;")}</span></div>`
+      + (meta ? `<span class="meta">${meta}</span>` : "") + `</div>`;
+  });
+  feed.innerHTML = rows.join("");
+}
+
+async function fetchRecall() {
+  try { renderRecall(await (await fetch("/api/recall")).json()); }
+  catch (e) { /* transient poll failure; retry next tick */ }
+}
+fetchRecall();
+setInterval(fetchRecall, 3000);
 
 loadProjects();
 </script>

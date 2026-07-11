@@ -138,6 +138,13 @@ class TestVisualisePage:
         assert "applyDemotedRings" in resp.text
         assert "demoted (downvoted)" in resp.text
 
+    @pytest.mark.anyio
+    async def test_includes_the_recall_panel(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert 'id="recall"' in resp.text
+        assert "fetchRecall" in resp.text
+        assert "/api/recall" in resp.text
+
 
 class TestApiProjects:
     @pytest.mark.anyio
