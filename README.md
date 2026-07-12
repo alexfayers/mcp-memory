@@ -9,6 +9,7 @@ SQLite-backed persistent memory MCP server with FTS5 search and project scoping.
 - **Implicit-usefulness ranking** - an entity edited soon after a search surfaced it earns an automatic upvote, so ranking self-tunes from observed use without relying on explicit votes
 - **Graph traversal** - explore entity relationships with filtering by type
 - **Safe observation updates** - append or delete individual observations without overwriting
+- **Observation-level voting** - up/down-vote individual observations so an entity's most useful lines surface first and stale ones sink, not just whole-entity votes
 - **Entity status tracking** - track entity lifecycle with status fields
 - **Migration framework** - automatic schema upgrades
 - **HTTP transport** - single server instance shared across all clients via streamable-http
@@ -140,11 +141,11 @@ Append observations to an existing entity without overwriting. Skips duplicates.
 
 ### delete_observations
 
-Delete specific observations from an existing entity by exact content match. Returns the count deleted. Throws if the entity does not exist.
+Delete specific observations from an existing entity by exact content match. Returns the count deleted. Throws if the entity does not exist. For an observation that is stale but not wrong enough to remove, prefer `vote_observation` (downvote to sink it) over deletion.
 
 ### search_nodes
 
-FTS5 full-text search with recency- and vote-weighted BM25 ranking. Recency decay is type-aware (durable types such as `pattern` and `knowledge` decay far slower than `task`), and usefulness votes (see `vote_entity`) nudge results up or down within bounds. Multi-word queries match entities containing *any* of the terms by default (entities matching more terms rank first); pass `match_all=true` to require *all* terms. Optional `entity_type`, `status`, and time-range (`start_date`/`end_date`) filters. Date params support relative formats (`7d`, `2w`, `3m`) and ISO dates.
+FTS5 full-text search with recency- and vote-weighted BM25 ranking. Recency decay is type-aware (durable types such as `pattern` and `knowledge` decay far slower than `task`), and usefulness votes (see `vote_entity`) nudge results up or down within bounds. Multi-word queries match entities containing *any* of the terms by default (entities matching more terms rank first); pass `match_all=true` to require *all* terms. Optional `entity_type`, `status`, and time-range (`start_date`/`end_date`) filters. Date params support relative formats (`7d`, `2w`, `3m`) and ISO dates. Within each returned entity, observations are ordered best-first by their own votes (see `vote_observation`).
 
 ### read_graph
 
@@ -171,6 +172,10 @@ Set or clear the status of an entity. Valid statuses: `planned`, `in-progress`, 
 Record a `+1` (useful) or `-1` (stale/unhelpful) usefulness vote on an entity as you retrieve it. Votes accumulate into a net `vote_score` that nudges search ranking within bounds - useful memories surface higher, unhelpful ones sink but stay findable - without changing the entity's content or `updated_at`. Returns the new net `vote_score`.
 
 In addition to these explicit votes, the server casts a deterministic `+1` on its own when an entity that a search surfaced is edited within a short window (default 30 minutes, `MCP_AUTO_VOTE_WINDOW_SECONDS`) - treating "searched, then acted on" as observed usefulness. Auto-votes are idempotent per surfacing and capped per entity per day (`MCP_AUTO_VOTE_MAX_PER_DAY`, default 3); the surfacings are also retained for 30 days to measure ranking quality (precision@k / MRR).
+
+### vote_observation
+
+Record a `+1` or `-1` usefulness vote on a single observation of an entity, addressed by its exact content (like `delete_observations`). Upvoted observations surface first within the entity and downvoted ones sink, so a fat entity leads with its most useful lines. This is a light alternative to `delete_observations` when an observation is stale but not wrong enough to remove, and complements `vote_entity`, which ranks whole entities. Voting does not change content or `updated_at`. Returns the observation's new net `vote_score`.
 
 ### delete_entity
 
