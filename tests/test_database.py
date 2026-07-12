@@ -216,6 +216,21 @@ class TestMigrations:
             db._db.execute(statement)
         db._db.commit()
 
+    def test_observation_vote_score_column_backfills_to_zero(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        first = DatabaseManager(db_path)
+        first.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["x"]}]
+        )
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        scores = [
+            row[0] for row in reopened._db.execute("SELECT vote_score FROM observations").fetchall()
+        ]
+        assert scores == [0]
+        reopened.close()
+
 
 class TestConnectionPragmas:
     def test_busy_timeout_is_set(self, db: DatabaseManager) -> None:

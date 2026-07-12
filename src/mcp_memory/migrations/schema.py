@@ -702,4 +702,10 @@ MIGRATIONS: list[Migration] = [
             "CREATE INDEX IF NOT EXISTS idx_surfaced_retrieval ON surfaced_entities(retrieval_id)",
         ],
     ),
+    Migration(
+        version=22,
+        statements=[
+            "ALTER TABLE observations ADD COLUMN vote_score INTEGER NOT NULL DEFAULT 0",
+        ],
+    ),
 ]
