@@ -82,7 +82,8 @@ SEARCH_NODES_DESC = (
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "
     "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
-    "Use compact=true to omit observations for a lightweight summary."
+    "Within each returned entity, observations are ordered best-first by their own votes "
+    "(see vote_observation). Use compact=true to omit observations for a lightweight summary."
 )
 READ_GRAPH_DESC = (
     "Get the most recent entities and their relations for a project. "
@@ -103,11 +104,14 @@ GET_ENTITY_WITH_RELATIONS_DESC = (
 )
 ADD_OBSERVATIONS_DESC = (
     "Append observations to an existing entity without overwriting. "
-    "Skips duplicates. Throws if the entity does not exist."
+    "Skips duplicates. Throws if the entity does not exist. "
+    "To reorder existing observations by usefulness rather than add one, see vote_observation."
 )
 DELETE_OBSERVATIONS_DESC = (
     "Delete specific observations from an existing entity by exact content match. "
-    "Returns the count of deleted observations. Throws if the entity does not exist."
+    "Returns the count of deleted observations. Throws if the entity does not exist. "
+    "For an observation that is stale but not wrong enough to remove, prefer vote_observation "
+    "(downvote to sink it) over deletion."
 )
 SET_ENTITY_STATUS_DESC = (
     "Set or clear the status of an entity. "
