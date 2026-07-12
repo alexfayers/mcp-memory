@@ -660,6 +660,26 @@ class TestObservations:
         with pytest.raises(ValueError, match="not found"):
             db.delete_observations("proj", "missing", ["x"])
 
+    def test_upvoted_observation_leads(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
+        )
+        db.vote_observation("proj", "e1", "c", 1)
+        assert db.get_entity("proj", "e1").observations == ["c", "a", "b"]
+
+    def test_downvoted_observation_sinks(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
+        )
+        db.vote_observation("proj", "e1", "a", -1)
+        assert db.get_entity("proj", "e1").observations == ["b", "c", "a"]
+
+    def test_unvoted_observations_keep_insertion_order(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
+        )
+        assert db.get_entity("proj", "e1").observations == ["a", "b", "c"]
+
 
 class TestEntityStatus:
     def test_set_status(self, db: DatabaseManager) -> None:

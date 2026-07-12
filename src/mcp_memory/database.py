@@ -268,12 +268,17 @@ class DatabaseManager:
         ).fetchone()
         return row["name"] if row else None
 
-    def _get_observations(self, entity_id: int) -> list[str]:
+    def _get_observations_with_scores(self, entity_id: int) -> list[tuple[str, int]]:
+        """Return an entity's observations best-first (vote_score DESC, then insertion order)."""
         rows = self._db.execute(
-            "SELECT content FROM observations WHERE entity_id = ? ORDER BY id",
+            "SELECT content, vote_score FROM observations WHERE entity_id = ? "
+            "ORDER BY vote_score DESC, id",
             (entity_id,),
         ).fetchall()
-        return [row["content"] for row in rows]
+        return [(row["content"], int(row["vote_score"])) for row in rows]
+
+    def _get_observations(self, entity_id: int) -> list[str]:
+        return [content for content, _ in self._get_observations_with_scores(entity_id)]
 
     def _build_entity(self, row: sqlite3.Row, entity_id: int, compact: bool = False) -> Entity:
         return Entity(
