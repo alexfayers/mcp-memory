@@ -152,6 +152,14 @@ class TestWriteExtraction:
         )
         assert activity.recent(0)[0]["entities"] == ["task/foo"]
 
+    def test_vote_observation_extracts_entity_name(self) -> None:
+        activity.record_tool(
+            "vote_observation",
+            {"project": "p", "entityName": "task/foo", "observation": "o", "vote": 1},
+            {"entityName": "task/foo", "project": "p", "observation": "o", "vote_score": 1},
+        )
+        assert activity.recent(0)[0]["entities"] == ["task/foo"]
+
     def test_project_level_tools_record_project_with_no_entities(self) -> None:
         activity.record_tool("delete_project", {"project": "scratch"}, {"message": "ok"})
         event = activity.recent(0)[0]

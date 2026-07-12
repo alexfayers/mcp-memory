@@ -120,6 +120,14 @@ VOTE_ENTITY_DESC = (
     "change the entity's content or updated_at. A light alternative to delete_entity when a "
     "memory is not wrong enough to remove. vote must be 1 or -1; returns the new net vote_score."
 )
+VOTE_OBSERVATION_DESC = (
+    "Record a +1 or -1 usefulness vote on a single observation of an entity, addressed by its "
+    "exact content (like delete_observations). Upvoted observations surface first within the "
+    "entity and downvoted ones sink, so a fat entity leads with its most useful lines. A light "
+    "alternative to delete_observations when an observation is stale but not wrong enough to "
+    "remove. Complements vote_entity, which ranks whole entities. Does not change content or "
+    "updated_at. vote must be 1 or -1; returns the observation's new net vote_score."
+)
 SEARCH_RELATED_NODES_DESC = (
     "Get an entity along with all its directly related entities within a project. "
     "Optionally filter by entityType and/or relationType."
@@ -664,6 +672,24 @@ def vote_entity(project: str, name: str, vote: int) -> dict[str, object]:
     try:
         db = _get_db()
         return {"name": name, "project": project, "vote_score": db.vote_entity(project, name, vote)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=VOTE_OBSERVATION_DESC)
+@_track
+def vote_observation(
+    project: str, entityName: str, observation: str, vote: int
+) -> dict[str, object]:
+    """Apply a +1/-1 usefulness vote to a single observation, returning its new net vote_score."""
+    try:
+        db = _get_db()
+        return {
+            "entityName": entityName,
+            "project": project,
+            "observation": observation,
+            "vote_score": db.vote_observation(project, entityName, observation, vote),
+        }
     except Exception as e:
         return {"error": str(e)}
 

@@ -406,6 +406,32 @@ class TestVoteEntityTool:
         assert "error" in server.vote_entity("proj", "nope", 1)
 
 
+class TestVoteObservationTool:
+    def test_valid_vote_returns_new_score(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        server.vote_observation("proj", "e1", "x", 1)
+        assert server.vote_observation("proj", "e1", "x", 1) == {
+            "entityName": "e1",
+            "project": "proj",
+            "observation": "x",
+            "vote_score": 2,
+        }
+
+    def test_invalid_vote_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        assert "error" in server.vote_observation("proj", "e1", "x", 5)
+
+    def test_missing_observation_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        assert "error" in server.vote_observation("proj", "e1", "nope", 1)
+
+
 class TestProjectPathTools:
     def test_set_project_paths_registers_and_creates_root(
         self, server_db: DatabaseManager, tmp_path: Path
