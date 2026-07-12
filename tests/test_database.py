@@ -1225,6 +1225,69 @@ class TestVoteEntity:
         assert db.get_entity("proj", "e1").updated_at == before
 
 
+class TestVoteObservation:
+    def test_upvote_returns_new_score(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        assert db.vote_observation("proj", "e1", "x", 1) == 1
+
+    def test_votes_accumulate(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.vote_observation("proj", "e1", "x", 1)
+        db.vote_observation("proj", "e1", "x", 1)
+        assert db.vote_observation("proj", "e1", "x", -1) == 1
+
+    @pytest.mark.parametrize("vote", [0, 2, -3])
+    def test_invalid_vote_raises(self, db: DatabaseManager, vote: int) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        with pytest.raises(ValueError, match="Invalid vote"):
+            db.vote_observation("proj", "e1", "x", vote)
+
+    def test_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.vote_observation("proj", "nope", "x", 1)
+
+    def test_missing_observation_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        with pytest.raises(ValueError, match="not found"):
+            db.vote_observation("proj", "e1", "no-such-obs", 1)
+
+    def test_vote_does_not_change_updated_at(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-1 day') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        before = db.get_entity("proj", "e1").updated_at
+        db.vote_observation("proj", "e1", "x", 1)
+        assert db.get_entity("proj", "e1").updated_at == before
+
+    def test_duplicate_content_observations_move_together(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["dup", "dup"]}]
+        )
+        db.vote_observation("proj", "e1", "dup", 1)
+        scores = [
+            row[0]
+            for row in db._db.execute(
+                "SELECT vote_score FROM observations WHERE content = 'dup'"
+            ).fetchall()
+        ]
+        assert scores == [1, 1]
+
+    def test_voting_observation_does_not_change_entity_ranking(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "task/a", "entityType": "task", "observations": ["deploy"]},
+                {"name": "task/b", "entityType": "task", "observations": ["deploy"]},
+            ],
+        )
+        before = [e.name for e in db.search_nodes("proj", "deploy")["entities"]]
+        db.vote_observation("proj", "task/a", "deploy", 1)
+        after = [e.name for e in db.search_nodes("proj", "deploy")["entities"]]
+        assert after == before
+
+
 class TestCompactMode:
     def test_read_graph_compact_omits_observations(self, db: DatabaseManager) -> None:
         db.create_entities(

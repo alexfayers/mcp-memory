@@ -481,6 +481,36 @@ class DatabaseManager:
         ).fetchone()
         return int(row["vote_score"])
 
+    def vote_observation(self, project: str, entity_name: str, content: str, vote: int) -> int:
+        """Apply a +1/-1 usefulness vote to a single observation and return its new score.
+
+        The observation is addressed by exact content within its entity (like
+        delete_observations). Content is not DB-unique, so identical observations all
+        receive the vote and share the returned score. Like vote_entity, this leaves
+        updated_at untouched, so a vote does not disturb recency ranking.
+        """
+        if vote not in VALID_VOTES:
+            raise ValueError(f"Invalid vote '{vote}'. Must be one of: {VALID_VOTES}")
+
+        project_id = self._get_or_create_project_id(project)
+        entity_id = self._get_entity_id(entity_name, project_id)
+        if entity_id is None:
+            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+
+        cursor = self._db.execute(
+            "UPDATE observations SET vote_score = vote_score + ? "
+            "WHERE entity_id = ? AND content = ?",
+            (vote, entity_id, content),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Observation not found in entity '{entity_name}'")
+        self._db.commit()
+        row = self._db.execute(
+            "SELECT vote_score FROM observations WHERE entity_id = ? AND content = ?",
+            (entity_id, content),
+        ).fetchone()
+        return int(row["vote_score"])
+
     def record_surfaced(
         self,
         tool: str,
