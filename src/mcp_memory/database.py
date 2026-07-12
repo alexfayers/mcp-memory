@@ -280,6 +280,18 @@ class DatabaseManager:
     def _get_observations(self, entity_id: int) -> list[str]:
         return [content for content, _ in self._get_observations_with_scores(entity_id)]
 
+    def observation_scores(self, project: str, name: str) -> list[int]:
+        """Return an entity's observation vote scores, aligned with its observation order.
+
+        Empty when the entity does not exist. Read-only companion to _get_observations
+        for callers (e.g. the visualiser) that hold an entity by name, not id.
+        """
+        project_id = self._get_or_create_project_id(project)
+        entity_id = self._get_entity_id(name, project_id)
+        if entity_id is None:
+            return []
+        return [score for _, score in self._get_observations_with_scores(entity_id)]
+
     def _build_entity(self, row: sqlite3.Row, entity_id: int, compact: bool = False) -> Entity:
         return Entity(
             name=row["name"],

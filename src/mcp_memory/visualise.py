@@ -98,6 +98,7 @@ def get_all_graph_data(
     entity_ids: list[int] = []
     project_ids: set[int] = set()
     for row in entity_rows:
+        scored = db._get_observations_with_scores(row["id"])
         entities.append(
             {
                 "name": row["name"],
@@ -107,7 +108,8 @@ def get_all_graph_data(
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "vote_score": row["vote_score"],
-                "observations": db._get_observations(row["id"]),
+                "observations": [content for content, _ in scored],
+                "observation_votes": [score for _, score in scored],
             }
         )
         entity_ids.append(row["id"])
@@ -150,6 +152,7 @@ def search_graph(
             "updated_at": entity.updated_at,
             "vote_score": entity.vote_score,
             "observations": entity.observations,
+            "observation_votes": db.observation_scores(entity.project_name or "", entity.name),
         }
         for position, entity in enumerate(cast("list[Entity]", result["entities"]), start=1)
     ]
@@ -159,6 +162,33 @@ def search_graph(
     ]
 
     return {"entities": entities, "relations": relations}
+
+
+async def _parse_vote_body(
+    request: Request, *, require_observation: bool = False
+) -> tuple[str, str, int, str | None] | JSONResponse:
+    """Validate a vote request body shared by /api/vote and /api/vote-observation.
+
+    Returns ``(project, name, vote, observation)`` on success (observation is None unless
+    required), or a 400 JSONResponse mirroring the entity-vote validation ladder.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    project = body.get("project")
+    name = body.get("name")
+    vote = body.get("vote")
+    if not isinstance(project, str) or not isinstance(name, str):
+        return JSONResponse({"error": "project and name are required"}, status_code=400)
+    observation = body.get("observation")
+    if require_observation and not isinstance(observation, str):
+        return JSONResponse({"error": "observation is required"}, status_code=400)
+    if not isinstance(vote, int) or isinstance(vote, bool) or vote not in (1, -1):
+        return JSONResponse({"error": "vote must be 1 or -1"}, status_code=400)
+    return project, name, vote, (observation if require_observation else None)
 
 
 def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager]) -> None:
@@ -209,19 +239,10 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
 
     @mcp.custom_route("/api/vote", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_vote(request: Request) -> JSONResponse:
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        if not isinstance(body, dict):
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        project = body.get("project")
-        name = body.get("name")
-        vote = body.get("vote")
-        if not isinstance(project, str) or not isinstance(name, str):
-            return JSONResponse({"error": "project and name are required"}, status_code=400)
-        if not isinstance(vote, int) or isinstance(vote, bool) or vote not in (1, -1):
-            return JSONResponse({"error": "vote must be 1 or -1"}, status_code=400)
+        parsed = await _parse_vote_body(request)
+        if isinstance(parsed, JSONResponse):
+            return parsed
+        project, name, vote, _ = parsed
         try:
             new_score = get_db().vote_entity(project, name, vote)
         except ValueError:
@@ -229,6 +250,29 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
         result = {"name": name, "project": project, "vote_score": new_score}
         activity.record_tool(
             "vote_entity", {"project": project, "name": name, "vote": vote}, result
+        )
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/vote-observation", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_vote_observation(request: Request) -> JSONResponse:
+        parsed = await _parse_vote_body(request, require_observation=True)
+        if isinstance(parsed, JSONResponse):
+            return parsed
+        project, name, vote, observation = parsed
+        try:
+            new_score = get_db().vote_observation(project, name, observation or "", vote)
+        except ValueError:
+            return JSONResponse({"error": "observation not found"}, status_code=404)
+        result = {
+            "name": name,
+            "project": project,
+            "observation": observation,
+            "vote_score": new_score,
+        }
+        activity.record_tool(
+            "vote_observation",
+            {"project": project, "entityName": name, "observation": observation, "vote": vote},
+            result,
         )
         return JSONResponse(result)
 

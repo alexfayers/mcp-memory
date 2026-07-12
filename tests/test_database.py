@@ -680,6 +680,17 @@ class TestObservations:
         )
         assert db.get_entity("proj", "e1").observations == ["a", "b", "c"]
 
+    def test_observation_scores_align_with_observation_order(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
+        )
+        db.vote_observation("proj", "e1", "c", 1)
+        assert db.get_entity("proj", "e1").observations == ["c", "a", "b"]
+        assert db.observation_scores("proj", "e1") == [1, 0, 0]
+
+    def test_observation_scores_missing_entity_is_empty(self, db: DatabaseManager) -> None:
+        assert db.observation_scores("proj", "ghost") == []
+
 
 class TestEntityStatus:
     def test_set_status(self, db: DatabaseManager) -> None:

@@ -116,6 +116,15 @@ class TestGetAllGraphData:
         result = get_all_graph_data(db)
         assert len(result["entities"]) == 2
 
+    def test_observation_votes_align_with_ordered_observations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
+        )
+        db.vote_observation("proj", "e1", "c", 1)
+        entity = get_all_graph_data(db, "proj")["entities"][0]
+        assert entity["observations"] == ["c", "a", "b"]
+        assert entity["observation_votes"] == [1, 0, 0]
+
 
 class TestVisualisePage:
     @pytest.mark.anyio
@@ -363,6 +372,7 @@ class TestSearchGraph:
             "updated_at": entity["updated_at"],
             "vote_score": 0,
             "observations": ["deployment pipeline"],
+            "observation_votes": [0],
         }
 
     def test_empty_query_returns_empty(self, db: DatabaseManager) -> None:
@@ -629,3 +639,72 @@ class TestApiVote:
         resp = await client.post("/api/vote", json={"vote": 1})
         assert resp.status_code == 400
         assert resp.json() == {"error": "project and name are required"}
+
+
+class TestApiVoteObservation:
+    @pytest.mark.anyio
+    async def test_valid_vote_returns_new_score(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post(
+            "/api/vote-observation",
+            json={"project": "proj", "name": "e1", "observation": "o", "vote": 1},
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "name": "e1",
+            "project": "proj",
+            "observation": "o",
+            "vote_score": 1,
+        }
+
+    @pytest.mark.anyio
+    async def test_vote_records_activity_and_ripples(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        await client.post(
+            "/api/vote-observation",
+            json={"project": "proj", "name": "e1", "observation": "o", "vote": 1},
+        )
+        events = (await client.get("/api/activity")).json()["events"]
+        assert len(events) == 1
+        assert events[0]["tool"] == "vote_observation"
+        assert events[0]["kind"] == "update"
+        assert events[0]["entities"] == ["e1"]
+
+    @pytest.mark.anyio
+    async def test_missing_observation_field_returns_400(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post(
+            "/api/vote-observation", json={"project": "proj", "name": "e1", "vote": 1}
+        )
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "observation is required"}
+
+    @pytest.mark.anyio
+    async def test_invalid_vote_value_rejected(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post(
+            "/api/vote-observation",
+            json={"project": "proj", "name": "e1", "observation": "o", "vote": 5},
+        )
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "vote must be 1 or -1"}
+
+    @pytest.mark.anyio
+    async def test_unknown_observation_returns_404(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post(
+            "/api/vote-observation",
+            json={"project": "proj", "name": "e1", "observation": "ghost", "vote": 1},
+        )
+        assert resp.status_code == 404
+        assert resp.json() == {"error": "observation not found"}

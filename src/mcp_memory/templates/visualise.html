@@ -16,7 +16,12 @@ select:hover, button:hover { border-color: #58a6ff; }
 #panel h2 { font-size: 15px; margin-bottom: 4px; color: #58a6ff; word-break: break-all; }
 #panel h3 { font-size: 12px; color: #484f58; margin-bottom: 12px; }
 #panel .status-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #30363d; margin-bottom: 12px; }
-#panel .obs { font-size: 12px; line-height: 1.6; color: #8b949e; padding: 4px 0; border-bottom: 1px solid #21262d; }
+#panel .obs { font-size: 12px; line-height: 1.6; color: #8b949e; padding: 4px 0; border-bottom: 1px solid #21262d; display: flex; gap: 8px; align-items: flex-start; }
+#panel .obs-text { flex: 1; }
+#panel .obs-vote { display: flex; gap: 4px; align-items: center; flex-shrink: 0; opacity: 0; transition: opacity .1s; }
+#panel .obs:hover .obs-vote { opacity: 1; }
+#panel .obs-score { font-size: 11px; min-width: 18px; text-align: right; }
+#panel .obs-btn { padding: 0 6px; font-size: 11px; cursor: pointer; }
 #panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #484f58; cursor: pointer; font-size: 18px; }
 svg { width: 100vw; height: 100vh; }
 .link { stroke-opacity: 0.4; }
@@ -215,15 +220,19 @@ let nodes = [], links = [], relCount = new Map();
 const panel = document.getElementById("panel");
 document.getElementById("panel-close").onclick = () => { panel.classList.remove("open"); selectedNode = null; updateSelection(); };
 
+async function postVote(url, payload) {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  return res.ok ? res.json() : null;
+}
+
 async function castVote(vote) {
   if (!panelDatum) return;
   const { project, name } = panelDatum;
   const up = document.getElementById("vote-up"), down = document.getElementById("vote-down");
   up.disabled = down.disabled = true;
   try {
-    const res = await fetch("/api/vote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, name, vote }) });
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await postVote("/api/vote", { project, name, vote });
+    if (!data) return;
     panelDatum.vote_score = data.vote_score;
     const live = nodes.find(n => n.id === name && n.project === project);
     if (live) live.vote_score = data.vote_score;
@@ -233,6 +242,20 @@ async function castVote(vote) {
 }
 document.getElementById("vote-up").onclick = () => castVote(1);
 document.getElementById("vote-down").onclick = () => castVote(-1);
+
+async function castObservationVote(observation, vote, btns) {
+  if (!panelDatum) return;
+  const { project, name } = panelDatum;
+  btns.forEach(b => b.disabled = true);
+  try {
+    const data = await postVote("/api/vote-observation", { project, name, observation, vote });
+    if (!data) return;
+    const idx = (panelDatum.observations || []).indexOf(observation);
+    if (idx >= 0 && panelDatum.observation_votes) panelDatum.observation_votes[idx] = data.vote_score;
+    renderObservations(panelDatum);
+  } catch (e) { /* transient; leave display unchanged */ }
+  finally { btns.forEach(b => b.disabled = false); }
+}
 
 let pathsByProject = {};
 async function loadProjectPaths() {
@@ -403,9 +426,41 @@ function showPanel(d) {
   document.getElementById("p-paths").innerHTML = paths.length
     ? `<h4>On disk (${d.project})</h4>` + paths.map(p => `<div class="path">${p.replace(/</g,"&lt;")}</div>`).join("")
     : "";
-  document.getElementById("p-obs").innerHTML = d.observations.map(o => `<div class="obs">${o.replace(/</g,"&lt;")}</div>`).join("");
+  renderObservations(d);
   document.getElementById("results").classList.remove("open");
   panel.classList.add("open");
+}
+
+function renderObservations(d) {
+  const container = document.getElementById("p-obs");
+  container.innerHTML = "";
+  const obs = d.observations || [], votes = d.observation_votes || [];
+  obs.forEach((o, i) => {
+    const score = votes[i] || 0;
+    const colour = score > 0 ? '#3fb950' : score < 0 ? '#f85149' : '#8b949e';
+    const row = document.createElement("div");
+    row.className = "obs";
+    const text = document.createElement("span");
+    text.className = "obs-text";
+    text.textContent = o;
+    const controls = document.createElement("span");
+    controls.className = "obs-vote";
+    const scoreEl = document.createElement("span");
+    scoreEl.className = "obs-score";
+    scoreEl.style.color = colour;
+    scoreEl.textContent = score > 0 ? `+${score}` : `${score}`;
+    const up = document.createElement("button");
+    up.className = "obs-btn";
+    up.textContent = "+1";
+    const down = document.createElement("button");
+    down.className = "obs-btn";
+    down.textContent = "-1";
+    up.onclick = () => castObservationVote(o, 1, [up, down]);
+    down.onclick = () => castObservationVote(o, -1, [up, down]);
+    controls.append(scoreEl, up, down);
+    row.append(text, controls);
+    container.append(row);
+  });
 }
 
 function updateSelection() {
