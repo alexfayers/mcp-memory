@@ -87,6 +87,12 @@ _MEMORY_REVIEW_NUDGE = (
 _DEFAULT_READ_ONLY_AGENT_TYPES = frozenset({"Explore", "Plan"})
 _READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
 
+_DEFAULT_FILE_EDIT_TOOL_NAMES = frozenset(
+    {"Edit", "Write", "MultiEdit", "NotebookEdit", "replace_in_file", "write_to_file"}
+)
+_FILE_EDIT_TOOLS_ENV = "MCP_MEMORY_EDIT_TOOLS"
+_EDIT_TOOL_WEIGHT = 0.25
+
 
 def _read_only_agent_types() -> frozenset[str]:
     """Return the agent types exempt from the memory gate, including env overrides."""
@@ -98,6 +104,18 @@ def _read_only_agent_types() -> frozenset[str]:
 def _is_exempt_agent(agent_type: str) -> bool:
     """Return True if a read-only subagent type is exempt from the memory gate."""
     return bool(agent_type) and agent_type in _read_only_agent_types()
+
+
+def _file_edit_tool_names() -> frozenset[str]:
+    """Return file-edit tool names, including MCP_MEMORY_EDIT_TOOLS extras."""
+    raw = os.environ.get(_FILE_EDIT_TOOLS_ENV, "")
+    extra = {name.strip() for name in raw.split(",") if name.strip()}
+    return _DEFAULT_FILE_EDIT_TOOL_NAMES | extra
+
+
+def _is_file_edit(tool_name: str) -> bool:
+    """Return True if a tool call is a reduced-weight file-edit operation."""
+    return _extract_mcp_suffix(tool_name) in _file_edit_tool_names()
 
 
 def _is_subagent(agent_type: str) -> bool:
@@ -381,7 +399,10 @@ class MemoryPlugin(HooksPlugin):
         if _is_memory_read(tool_name, parameters):
             return None
 
-        increment(task_id)
+        if _is_file_edit(tool_name):
+            increment(task_id, _EDIT_TOOL_WEIGHT)
+        else:
+            increment(task_id)
         self._update_scope_from_parameters(tool_name, parameters)
 
         if tool_name in _MEMORY_REMINDER_TOOLS:
@@ -410,7 +431,7 @@ class MemoryPlugin(HooksPlugin):
         path_str = ""
         if tool_name in {"replace_in_file", "write_to_file", "read_file"}:
             path_str = str(parameters.get("path", ""))
-        elif tool_name in {"Edit", "Write", "Read", "NotebookEdit"}:
+        elif tool_name in {"Edit", "Write", "MultiEdit", "Read", "NotebookEdit"}:
             path_str = str(parameters.get("file_path", "") or parameters.get("notebook_path", ""))
         elif tool_name in {"execute_command", "execute_bash"}:
             path_str = str(parameters.get("working_dir", "") or parameters.get("cwd", ""))

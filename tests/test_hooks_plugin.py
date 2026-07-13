@@ -8,8 +8,10 @@ from unittest.mock import patch
 import pytest
 
 from mcp_memory.hooks.plugin import (
+    _EDIT_TOOL_WEIGHT,
     MemoryPlugin,
     _find_project_from_path,
+    _is_file_edit,
     _is_memory_read,
     _parse_mcp_arguments,
     _workspace_entity_note,
@@ -22,6 +24,15 @@ _READ_TOOL_NAMES = [
     "search_all_projects",
     "get_entity_with_relations",
     "search_related_nodes",
+]
+
+_EDIT_TOOL_NAMES = [
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "replace_in_file",
+    "write_to_file",
 ]
 
 
@@ -543,6 +554,20 @@ class TestIsMemoryRead:
         assert not _is_memory_read("read_file", {})
 
 
+class TestIsFileEdit:
+    @pytest.mark.parametrize("name", _EDIT_TOOL_NAMES)
+    def test_bare_name_is_edit(self, name: str) -> None:
+        assert _is_file_edit(name)
+
+    @pytest.mark.parametrize("name", _EDIT_TOOL_NAMES)
+    def test_prefixed_name_is_edit(self, name: str) -> None:
+        assert _is_file_edit(f"mcp__memory__{name}")
+
+    def test_read_tool_is_not_edit(self) -> None:
+        assert not _is_file_edit("read_file")
+        assert not _is_file_edit("execute_command")
+
+
 class TestMemoryReadsNotGated:
     @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
     def test_pre_tool_use_read_not_blocked(self, plugin: MemoryPlugin, name: str) -> None:
@@ -805,3 +830,69 @@ class TestMemoryReadsDoNotIncrement:
                 is_state_write=False,
             )
         mock_increment.assert_called_once_with("t1")
+
+
+class TestFileEditsReducedWeight:
+    @pytest.mark.parametrize("name", _EDIT_TOOL_NAMES)
+    def test_post_tool_use_edit_increments_by_weight(self, name: str) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset"),
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            plugin = MemoryPlugin()
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name=name,
+                parameters={},
+                is_state_write=False,
+            )
+        mock_increment.assert_called_once_with("t1", _EDIT_TOOL_WEIGHT)
+
+    def test_post_tool_use_multiedit_updates_scope(
+        self, plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        repo_a = tmp_path / "repo-a"
+        repo_b = tmp_path / "repo-b"
+        (repo_a / ".git").mkdir(parents=True)
+        (repo_b / ".git").mkdir(parents=True)
+
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
+        plugin.on_hook(
+            "PostToolUse",
+            task_id="t1",
+            tool_name="MultiEdit",
+            parameters={"file_path": str(repo_b / "src" / "file.py")},
+            is_state_write=False,
+        )
+        assert plugin._project_scope == "repo-b"
+
+    def test_pre_tool_use_edit_still_blockable(self, plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="Edit",
+                parameters={},
+            )
+        assert result is not None
+        assert result.block is not None
+
+    def test_env_var_extends_edit_tools(
+        self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_EDIT_TOOLS", "apply_patch, str_replace")
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset"),
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="apply_patch",
+                parameters={},
+                is_state_write=False,
+            )
+        mock_increment.assert_called_once_with("t1", _EDIT_TOOL_WEIGHT)
