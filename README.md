@@ -40,6 +40,8 @@ Then run `llm-prompts setup` to install everything.
 |---|---|---|
 | `MCP_MEMORY_DB_PATH` | Database file path | `~/.local/share/mcp-memory/memory.db` |
 | `MCP_MEMORY_PORT` | HTTP server port | `8000` |
+| `MCP_MEMORY_READONLY_AGENTS` | Extra agent types exempt from the memory-update gate (comma-separated) | `Explore`, `Plan` |
+| `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names counted at reduced weight toward the gate (comma-separated) | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `replace_in_file`, `write_to_file` |
 
 ### MCP client config
 
