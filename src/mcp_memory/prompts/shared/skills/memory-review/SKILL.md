@@ -5,6 +5,8 @@ description: Audit and clean up the memory graph - fix orphans, consolidate dupl
 
 # memory-review
 
+**When to run: only when explicitly asked, or at a genuine lull (session wind-down, no active task).** This is a long, heavyweight audit. Do NOT launch it - especially not as a background subagent - in the middle of active work just because a periodic "review due" reminder fired. Mid-task it competes for attention and slows the real work; the reminder is a nudge to schedule it, not an instruction to start it now. When a reminder fires during active work, note it and defer to the next lull, or ask the user first.
+
 Work through this checklist to audit and clean up the memory graph. The `/visualise` endpoint gives a visual overview, but auditors MUST read the graph data via the **read-only memory MCP tools** (`read_graph`, `search_nodes`, `get_entity_with_relations`, `search_related_nodes`), NOT via `curl`/`Read` of `/api/graph`.
 
 **Read the graph via the read-only memory MCP tools** (`read_graph`, `get_entity_with_relations`), not curl. The "MEMORY UPDATE REQUIRED" gate (in mcp-memory's own hook plugin, `hooks/plugin.py`, NOT cline-hooks) never hard-blocks subagents - it applies to the main agent loop only - so auditors run freely regardless of agent type. (Reading via curl is fine on the MAIN thread too, where you can write to satisfy the gate.)
