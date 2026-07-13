@@ -187,7 +187,8 @@ _SCOPE_MISMATCH_WARNING = (
     "WRONG SCOPE: You are writing to `{target}` but the current"
     ' workspace project is `{detected}`. Use `project="{detected}"`'
     ' for project-specific data, or `project="global"` for'
-    " cross-project knowledge."
+    " cross-project knowledge. If the write to `{target}` is"
+    " intentional, run the exact same call again to proceed."
 )
 
 

@@ -315,6 +315,28 @@ class TestMemoryPluginScopeValidation:
         assert "`wrong-project`" in result.block
         assert "`my-repo`" in result.block
 
+    def test_block_message_tells_agent_to_retry_if_intentional(
+        self,
+        plugin: MemoryPlugin,
+        tmp_path: Path,
+    ) -> None:
+        repo = tmp_path / "my-repo"
+        (repo / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="use_mcp_tool",
+            parameters={
+                "tool_name": "add_observations",
+                "arguments": '{"project": "wrong-project"}',
+            },
+        )
+        assert result is not None
+        assert result.block is not None
+        assert "again" in result.block.lower()
+
     def test_warns_on_subsequent_wrong_project_scope(
         self,
         plugin: MemoryPlugin,
