@@ -1,7 +1,8 @@
 # memory-agent: an LLM curation/recall service in front of mcp-memory
 
 Status: **v1 + v2 built** (`recall` and the autonomous `dream` curation pass
-shipped and live-verified)
+shipped and live-verified), plus an in-process GC that soft-deletes downvoted
+orphan entities on startup (opt-in; see [Autonomous curation](#autonomous-dream-curation-pass-v2))
 
 A dedicated MCP server that puts an LLM "brain" in front of the mcp-memory
 data store. A caller delegates heavy memory recall to it and receives distilled
@@ -22,7 +23,9 @@ finding, and the measured numbers live in the memory graph (see
 - **Autonomous grooming.** A periodic pass re-ranks stale/duplicate memories
   with no human in the loop.
 
-Non-goals for v1: writing synthesised observations, deletion, team hosting.
+Non-goals for v1: writing synthesised observations, autonomous *hard* deletion by
+the agent, team hosting. (The agent still never deletes; a separate in-process GC
+may reversibly *soft*-delete downvoted orphans - see below.)
 
 ## Architecture
 
@@ -198,6 +201,19 @@ A pass that grooms the graph while it is idle. Off by default (opt-in via
   - hidden from reads but kept intact and restorable until a grace-window purge -
   which is how `merge_entities` removes a folded-away duplicate; the light dream
   does not do this, it only votes.)
+- **In-process GC (separate from the dream agent).** The dream downvotes stale
+  entities down to a saturation floor (`-10`) and then stops - the ranking penalty
+  is maxed out, so further votes are wasted, and nothing ever removes the floored
+  entity. A gated in-process GC (`gc_downvoted_orphans`, off by default via
+  `MCP_MEMORY_GC_ENABLED`) closes that loop on startup: it *soft*-deletes entities
+  that are both at/below the floor **and** orphaned (no live entity points at them),
+  skipping `project` roots and `user-preferences` singletons. This is pure
+  mcp-memory startup logic - **not** an MCP tool, so the autonomous claude agent
+  never holds it and the "agent never deletes" guarantee is untouched. Removal is a
+  reversible soft-delete; the grace-window purge remains the sole permanent removal.
+  The full lifecycle: **dream downvotes -> GC soft-deletes floor + orphans -> purge
+  hard-removes past the grace window** (all three gated, GC before purge so a
+  just-GC'd entity survives its full grace period).
 - **Scope: all projects.** A pass searches and votes across every project scope.
 - **Voting is ±1 only.** No graded/weighted votes: the ranking multiplier
   already saturates via `tanh`, and letting the model choose magnitude
@@ -313,6 +329,10 @@ recall did, and a single latest-only entry is not enough:
   shipping first: entity-level voting cannot down-rank a single bad observation,
   so auto-append could poison a good entity and compound the model's own
   guesses. See the observation-level-voting task in the memory graph.
+- **Heavy autonomous dream tier.** A second, less-frequent pass on a larger model
+  doing structural curation (merges, relinking) with a mutation set of
+  `vote_entity` + `merge_entities` only - all hard-`delete_*` still denied. See the
+  full-curation task in the memory graph.
 - **Team / cross-device HTTP hosting** with authentication.
 
 ## Pre-flight gate (both phases)

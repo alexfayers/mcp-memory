@@ -42,6 +42,9 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_MEMORY_PORT` | HTTP server port | `8000` |
 | `MCP_MEMORY_READONLY_AGENTS` | Extra agent types exempt from the memory-update gate (comma-separated) | `Explore`, `Plan` |
 | `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names counted at reduced weight toward the gate (comma-separated) | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `replace_in_file`, `write_to_file` |
+| `MCP_MEMORY_GC_ENABLED` | On startup, soft-delete downvoted orphan entities (score at/below `-10` with no live incoming relation). Reversible; the purge below is the only permanent removal. | off |
+| `MCP_MEMORY_PURGE_ENABLED` | On startup, hard-delete soft-deleted entities older than the grace window | off |
+| `MCP_MEMORY_PURGE_GRACE_DAYS` | How long a soft-deleted entity is retained before it may be purged | `30` |
 
 ### MCP client config
 

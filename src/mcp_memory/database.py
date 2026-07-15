@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from .config import get_purge_enabled, get_purge_grace_days
+from .config import get_gc_enabled, get_purge_enabled, get_purge_grace_days
 from .migrations.runner import run_migrations
 from .models import VALID_STATUSES, VALID_VOTES, Entity, EntityStatus, Relation
 from .path_resolver import match_project_for_path, normalize_path
@@ -39,6 +39,16 @@ _RELATIVE_UNITS = {"d": 1, "w": 7, "m": 30}
 # Retrieval telemetry (surfaced_entities) older than this is pruned on startup. Kept long
 # enough to seed the ranking eval, short enough that the table does not grow without bound.
 _SURFACED_RETENTION_DAYS = 30
+
+# Vote score at or below which an orphan becomes eligible for autonomous GC. Matches the
+# dream's saturation floor (see agent.py: it stops downvoting at -10), so GC reaps exactly
+# where the dream gives up. The two must stay aligned.
+_GC_DOWNVOTE_FLOOR = -10
+
+# Entity types the autonomous GC must never reap even when downvoted and orphaned: a project
+# root or user-preferences singleton is structurally load-bearing. Duplicated from
+# server.RELATION_EXEMPT_TYPES rather than imported, to avoid a database -> server cycle.
+_GC_EXEMPT_ENTITY_TYPES: tuple[str, ...] = ("project", "user-preferences")
 
 
 def _parse_date(value: str) -> str:
@@ -72,6 +82,8 @@ class DatabaseManager:
 
         run_migrations(self._db)
         self.prune_surfaced_entities(_SURFACED_RETENTION_DAYS)
+        if get_gc_enabled():
+            self.gc_downvoted_orphans()
         if get_purge_enabled():
             self.purge_soft_deleted(get_purge_grace_days())
 
@@ -783,6 +795,29 @@ class DatabaseManager:
             for row in rows:
                 self._delete_entity_row(row["id"], row["project"], row["name"])
         return len(rows)
+
+    def gc_downvoted_orphans(self, threshold: int = _GC_DOWNVOTE_FLOOR) -> int:
+        """Soft-delete downvoted orphan entities, returning the number reaped.
+
+        Reaps an entity that is all of: live, at or below the downvote floor, not a
+        relation-exempt type, and with no live incoming relation. Removal is a reversible
+        soft-delete, so the grace-window purge stays the sole path to permanent removal.
+        """
+        placeholders = ",".join("?" * len(_GC_EXEMPT_ENTITY_TYPES))
+        with self._db:
+            cursor = self._db.execute(
+                f"UPDATE entities SET deleted_at = CURRENT_TIMESTAMP "
+                f"WHERE deleted_at IS NULL "
+                f"AND vote_score <= ? "
+                f"AND entity_type_id NOT IN "
+                f"(SELECT id FROM entity_types WHERE name IN ({placeholders})) "
+                f"AND NOT EXISTS ("
+                f"SELECT 1 FROM relations r "
+                f"JOIN entities src ON r.source_id = src.id "
+                f"WHERE r.target_id = entities.id AND src.deleted_at IS NULL)",
+                (threshold, *_GC_EXEMPT_ENTITY_TYPES),
+            )
+        return cursor.rowcount
 
     def delete_relation(self, project: str, source: str, target: str, relation_type: str) -> None:
         """Delete a specific relation between two entities."""

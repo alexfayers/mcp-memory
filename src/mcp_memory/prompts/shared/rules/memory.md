@@ -180,9 +180,9 @@ When an entity exceeds ~30 observations, it's a signal to extract domain-specifi
   - The entity is worth keeping but **one observation** in it is the gold (or is stale noise) -> `vote_observation` (`+1` to float it, `-1` to sink it).
   - An observation is outright **wrong** -> `delete_observations`; downvote only when it is stale-but-not-wrong.
   Like entity votes, an observation vote never changes content or `updated_at`. There is no automatic observation vote (the implicit-usefulness auto-vote is entity-level only), so observation ranking depends entirely on you casting these as you read.
-- **A background "dream" pass may also be grooming the graph.** When memory has been idle for a while, an autonomous curation pass (opt-in, off by default) may cast `-1` votes on stale, superseded, or duplicate entities. It *only* downvotes - it never upvotes, never edits observations, and never deletes. This is complementary to your own voting, not a replacement:
+- **A background "dream" pass may also be grooming the graph.** When memory has been idle for a while, an autonomous curation pass (opt-in, off by default) may cast `-1` votes on stale, superseded, or duplicate entities. The dream agent *only* downvotes - it never upvotes, never edits observations, and never deletes. This is complementary to your own voting, not a replacement:
   - Keep voting as you retrieve. Your `+1`/`-1` reflect what actually helped this session - a signal the dream cannot infer from a cold read.
-  - Do not rely on the dream to remove anything: **deletion stays a deliberate manual operation.**
+  - Do not rely on the dream to remove anything: hard **deletion stays a deliberate manual operation.** (A separate opt-in startup GC may *reversibly soft-delete* an entity that has been driven to the saturation floor **and** is orphaned - never a `project` root or `user-preferences` - but that is recoverable until a grace-window purge, so it is not a substitute for deliberate cleanup.)
   - If an entity you know is useful has drifted down in ranking, a `+1` corrects it (downvotes only sink an entity; they never remove it and are always reversible).
 
 ## After completing a task or reaching a milestone

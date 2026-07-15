@@ -146,3 +146,13 @@ def get_purge_enabled() -> bool:
 def get_purge_grace_days() -> int:
     """Return how long a soft-deleted entity is retained before it may be purged."""
     return int(os.environ.get("MCP_MEMORY_PURGE_GRACE_DAYS", _DEFAULT_PURGE_GRACE_DAYS))
+
+
+def get_gc_enabled() -> bool:
+    """Return whether downvoted orphan entities are garbage-collected on startup.
+
+    Off by default so a normal boot (and every test database) never reaps an
+    entity. Reversible: the GC only soft-deletes, so the grace-window purge stays
+    the sole path to permanent removal.
+    """
+    return os.environ.get("MCP_MEMORY_GC_ENABLED", "false").strip().lower() in _TRUTHY

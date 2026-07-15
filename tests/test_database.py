@@ -1043,6 +1043,131 @@ class TestMergeEntities:
         assert db._get_entity_id("dup", project_id, include_deleted=True) is None
 
 
+class TestGcDownvotedOrphans:
+    @staticmethod
+    def _downvote(db: DatabaseManager, project: str, name: str, times: int) -> None:
+        for _ in range(times):
+            db.vote_entity(project, name, -1)
+
+    @staticmethod
+    def _is_reaped(db: DatabaseManager, project: str, name: str) -> bool:
+        project_id = db._get_or_create_project_id(project)
+        try:
+            db.get_entity(project, name)
+        except ValueError:
+            return db._get_entity_id(name, project_id, include_deleted=True) is not None
+        return False
+
+    def test_floored_orphan_is_reaped(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        self._downvote(db, "proj", "e1", 10)
+        assert db.gc_downvoted_orphans() == 1
+        assert self._is_reaped(db, "proj", "e1")
+
+    def test_above_threshold_orphan_is_spared(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        self._downvote(db, "proj", "e1", 9)
+        assert db.gc_downvoted_orphans() == 0
+        assert db.get_entity("proj", "e1").observations == ["x"]
+
+    def test_at_floor_boundary_is_reaped(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        self._downvote(db, "proj", "e1", 10)
+        assert db.get_entity("proj", "e1").vote_score == -10
+        assert db.gc_downvoted_orphans() == 1
+
+    def test_floored_entity_with_live_incoming_edge_is_spared(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "pointer", "entityType": "task", "observations": ["p"]},
+                {"name": "keeper", "entityType": "feature", "observations": ["k"]},
+            ],
+        )
+        db.create_relations(
+            "proj", [Relation(source="pointer", target="keeper", relation_type="implements")]
+        )
+        self._downvote(db, "proj", "keeper", 10)
+        assert db.gc_downvoted_orphans() == 0
+        assert db.get_entity("proj", "keeper").observations == ["k"]
+
+    def test_floored_orphan_whose_only_source_is_soft_deleted_is_reaped(
+        self, db: DatabaseManager
+    ) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "srcdel", "entityType": "task", "observations": ["s"]},
+                {"name": "victim", "entityType": "feature", "observations": ["v"]},
+            ],
+        )
+        db.create_relations(
+            "proj", [Relation(source="srcdel", target="victim", relation_type="implements")]
+        )
+        db.soft_delete_entity("proj", "srcdel")
+        self._downvote(db, "proj", "victim", 10)
+        assert db.gc_downvoted_orphans() == 1
+        assert self._is_reaped(db, "proj", "victim")
+
+    @pytest.mark.parametrize("entity_type", ["project", "user-preferences"])
+    def test_exempt_type_is_spared(self, db: DatabaseManager, entity_type: str) -> None:
+        name = f"{entity_type}/proj" if entity_type == "project" else f"{entity_type}/jdoe"
+        db.create_entities(
+            "proj", [{"name": name, "entityType": entity_type, "observations": ["x"]}]
+        )
+        self._downvote(db, "proj", name, 10)
+        assert db.gc_downvoted_orphans() == 0
+        assert db.get_entity("proj", name).observations == ["x"]
+
+    def test_already_soft_deleted_is_untouched(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        self._downvote(db, "proj", "e1", 10)
+        db.soft_delete_entity("proj", "e1")
+        project_id = db._get_or_create_project_id("proj")
+        assert db.gc_downvoted_orphans() == 0
+        assert db._get_entity_id("e1", project_id, include_deleted=True) is not None
+
+    def test_returns_count_reaped(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "o1", "entityType": "task", "observations": ["a"]},
+                {"name": "o2", "entityType": "task", "observations": ["b"]},
+                {"name": "fresh", "entityType": "task", "observations": ["c"]},
+            ],
+        )
+        self._downvote(db, "proj", "o1", 10)
+        self._downvote(db, "proj", "o2", 10)
+        self._downvote(db, "proj", "fresh", 9)
+        assert db.gc_downvoted_orphans() == 2
+        assert db.get_entity("proj", "fresh").observations == ["c"]
+
+    def test_gc_disabled_by_default_on_boot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MCP_MEMORY_GC_ENABLED", raising=False)
+        db_path = tmp_path / "boot.db"
+        seed = DatabaseManager(db_path)
+        seed.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        self._downvote(seed, "proj", "e1", 10)
+        seed.close()
+        reopened = DatabaseManager(db_path)
+        assert reopened.get_entity("proj", "e1").observations == ["x"]
+
+    def test_gc_runs_on_boot_when_enabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MCP_MEMORY_GC_ENABLED", raising=False)
+        db_path = tmp_path / "boot.db"
+        seed = DatabaseManager(db_path)
+        seed.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        self._downvote(seed, "proj", "e1", 10)
+        seed.close()
+        monkeypatch.setenv("MCP_MEMORY_GC_ENABLED", "true")
+        reopened = DatabaseManager(db_path)
+        assert self._is_reaped(reopened, "proj", "e1")
+
+
 class TestGetEntityWithRelations:
     def test_returns_related_entities(self, db: DatabaseManager) -> None:
         db.create_entities(

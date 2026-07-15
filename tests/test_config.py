@@ -104,6 +104,22 @@ class TestPurgeConfig:
         assert config.get_purge_grace_days() == 7
 
 
+class TestGcConfig:
+    def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_GC_ENABLED", raising=False)
+        assert config.get_gc_enabled() is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
+    def test_enabled_by_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_GC_ENABLED", value)
+        assert config.get_gc_enabled() is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "nonsense"])
+    def test_disabled_by_non_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_GC_ENABLED", value)
+        assert config.get_gc_enabled() is False
+
+
 class TestDetectServicePort:
     def test_reads_launchd_plist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         plist = tmp_path / "com.mcp-memory.plist"

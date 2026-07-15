@@ -52,6 +52,11 @@ class TestMemorySpec:
         assert spec.env["MCP_MEMORY_DB_PATH"] == "/data/memory.db"
         assert spec.log_path.name == "mcp-memory.log"
 
+    def test_propagates_gc_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_GC_ENABLED", "true")
+        spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
+        assert spec.env["MCP_MEMORY_GC_ENABLED"] == "true"
+
 
 class TestAgentSpec:
     def test_carries_agent_port(self) -> None:
