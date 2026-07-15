@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from .config import get_purge_enabled, get_purge_grace_days
 from .migrations.runner import run_migrations
 from .models import VALID_STATUSES, VALID_VOTES, Entity, EntityStatus, Relation
 from .path_resolver import match_project_for_path, normalize_path
@@ -71,6 +72,8 @@ class DatabaseManager:
 
         run_migrations(self._db)
         self.prune_surfaced_entities(_SURFACED_RETENTION_DAYS)
+        if get_purge_enabled():
+            self.purge_soft_deleted(get_purge_grace_days())
 
     def list_projects(self) -> list[str]:
         """Return all project names from the database."""
@@ -129,7 +132,7 @@ class DatabaseManager:
             "FROM entities e "
             "JOIN projects p ON e.project_id = p.id "
             "LEFT JOIN project_paths pp ON pp.project_id = p.id "
-            "WHERE e.name = ? "
+            "WHERE e.name = ? AND e.deleted_at IS NULL "
             "ORDER BY p.name, pp.path",
             (name,),
         ).fetchall()
@@ -243,18 +246,30 @@ class DatabaseManager:
         ).fetchone()
         return int(row["id"])
 
-    def _get_entity_id(self, name: str, project_id: int) -> int | None:
-        row = self._db.execute(
-            "SELECT id FROM entities WHERE name = ? AND project_id = ?",
-            (name, project_id),
-        ).fetchone()
+    def _get_entity_id(
+        self, name: str, project_id: int, *, include_deleted: bool = False
+    ) -> int | None:
+        sql = "SELECT id FROM entities WHERE name = ? AND project_id = ?"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        row = self._db.execute(sql, (name, project_id)).fetchone()
         return row["id"] if row else None
+
+    def _purge_tombstone(self, name: str, project: str, project_id: int) -> None:
+        """Hard-remove a soft-deleted row holding the (name, project) slot before a re-create.
+
+        The UNIQUE(name, project_id) constraint means a tombstone would otherwise block
+        inserting a fresh entity with the same name. Runs within the caller's transaction.
+        """
+        tombstone_id = self._get_entity_id(name, project_id, include_deleted=True)
+        if tombstone_id is not None:
+            self._delete_entity_row(tombstone_id, project, name)
 
     def entity_exists_in_project(self, name: str, project: str) -> bool:
         """Check if an entity name exists in a specific project scope."""
         row = self._db.execute(
             "SELECT 1 FROM entities e JOIN projects p ON e.project_id = p.id "
-            "WHERE e.name = ? AND p.name = ?",
+            "WHERE e.name = ? AND p.name = ? AND e.deleted_at IS NULL",
             (name, project),
         ).fetchone()
         return row is not None
@@ -263,7 +278,7 @@ class DatabaseManager:
         """Return the first project where this entity exists, excluding the given project."""
         row = self._db.execute(
             "SELECT p.name FROM entities e JOIN projects p ON e.project_id = p.id "
-            "WHERE e.name = ? AND p.name != ?",
+            "WHERE e.name = ? AND p.name != ? AND e.deleted_at IS NULL",
             (name, project),
         ).fetchone()
         return row["name"] if row else None
@@ -336,6 +351,7 @@ class DatabaseManager:
             f"JOIN entities e_tgt ON r.target_id = e_tgt.id "
             f"JOIN relation_types rt ON r.relation_type_id = rt.id "
             f"WHERE e_src.project_id = ? "
+            f"AND e_src.deleted_at IS NULL AND e_tgt.deleted_at IS NULL "
             f"AND (r.source_id IN ({placeholders}) "
             f"OR r.target_id IN ({placeholders}))",
             [project_id, *entity_ids, *entity_ids],
@@ -357,8 +373,9 @@ class DatabaseManager:
             f"JOIN entities e_src ON r.source_id = e_src.id "
             f"JOIN entities e_tgt ON r.target_id = e_tgt.id "
             f"JOIN relation_types rt ON r.relation_type_id = rt.id "
-            f"WHERE r.source_id IN ({placeholders}) "
-            f"OR r.target_id IN ({placeholders})",
+            f"WHERE e_src.deleted_at IS NULL AND e_tgt.deleted_at IS NULL "
+            f"AND (r.source_id IN ({placeholders}) "
+            f"OR r.target_id IN ({placeholders}))",
             [*entity_ids, *entity_ids],
         ).fetchall()
         return [
@@ -404,6 +421,9 @@ class DatabaseManager:
 
                 entity_type_id = self._get_or_create_entity_type_id(str(entity_type))
                 existing_id = self._get_entity_id(str(name), project_id)
+
+                if existing_id is None:
+                    self._purge_tombstone(str(name), project, project_id)
 
                 if existing_id is not None:
                     self._db.execute(
@@ -638,6 +658,24 @@ class DatabaseManager:
 
         self._db.commit()
 
+    def _delete_entity_row(self, entity_id: int, project: str, name: str) -> None:
+        """Hard-delete an entity and its observations, outgoing relations and telemetry.
+
+        Executes within the caller's transaction (no commit of its own), so it is safe
+        to call from inside another ``with self._db:`` block. Deletes relations in both
+        directions so a force-delete (e.g. the purge of a merged-away entity that still
+        holds an incoming edge) cannot orphan a relation row against the foreign key.
+        """
+        self._db.execute("DELETE FROM observations WHERE entity_id = ?", (entity_id,))
+        self._db.execute(
+            "DELETE FROM relations WHERE source_id = ? OR target_id = ?", (entity_id, entity_id)
+        )
+        self._db.execute(
+            "DELETE FROM surfaced_entities WHERE project = ? AND entity_name = ?",
+            (project, name),
+        )
+        self._db.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+
     def delete_entity(self, project: str, name: str) -> None:
         """Delete an entity, cascading outgoing relations but blocking on incoming."""
         project_id = self._get_or_create_project_id(project)
@@ -659,13 +697,92 @@ class DatabaseManager:
             )
 
         with self._db:
-            self._db.execute("DELETE FROM observations WHERE entity_id = ?", (entity_id,))
-            self._db.execute("DELETE FROM relations WHERE source_id = ?", (entity_id,))
-            self._db.execute(
-                "DELETE FROM surfaced_entities WHERE project = ? AND entity_name = ?",
-                (project, name),
+            self._delete_entity_row(entity_id, project, name)
+
+    def soft_delete_entity(self, project: str, name: str) -> None:
+        """Hide an entity from all reads by marking it deleted, keeping its rows intact."""
+        project_id = self._get_or_create_project_id(project)
+        entity_id = self._get_entity_id(name, project_id)
+        if entity_id is None:
+            raise ValueError(f"Entity '{name}' not found in project '{project}'")
+        self._db.execute(
+            "UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?", (entity_id,)
+        )
+        self._db.commit()
+
+    def restore_entity(self, project: str, name: str) -> None:
+        """Clear an entity's soft-deleted mark, making it visible to reads again."""
+        project_id = self._get_or_create_project_id(project)
+        entity_id = self._get_entity_id(name, project_id, include_deleted=True)
+        if entity_id is None:
+            raise ValueError(f"Entity '{name}' not found in project '{project}'")
+        self._db.execute("UPDATE entities SET deleted_at = NULL WHERE id = ?", (entity_id,))
+        self._db.commit()
+
+    def merge_entities(self, project: str, source: str, target: str) -> dict[str, int]:
+        """Fold a source entity into a target, then soft-delete the source.
+
+        Additive on the target: the source's observations are copied over (deduped by
+        exact content, keeping their votes and timestamps), and equivalent relations are
+        recreated on the target (skipping any that would become a target->target
+        self-loop). The target keeps the higher of the two vote scores. The source is
+        soft-deleted rather than removed, so the merge is reversible via restore_entity.
+        """
+        if source == target:
+            raise ValueError("Cannot merge an entity into itself")
+        project_id = self._get_or_create_project_id(project)
+        source_id = self._get_entity_id(source, project_id)
+        if source_id is None:
+            raise ValueError(f"Source entity '{source}' not found in project '{project}'")
+        target_id = self._get_entity_id(target, project_id)
+        if target_id is None:
+            raise ValueError(f"Target entity '{target}' not found in project '{project}'")
+
+        with self._db:
+            obs = self._db.execute(
+                "INSERT INTO observations (entity_id, content, vote_score, created_at) "
+                "SELECT ?, content, vote_score, created_at FROM observations "
+                "WHERE entity_id = ? AND content NOT IN "
+                "(SELECT content FROM observations WHERE entity_id = ?)",
+                (target_id, source_id, target_id),
             )
-            self._db.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+            outgoing = self._db.execute(
+                "INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) "
+                "SELECT ?, target_id, relation_type_id FROM relations "
+                "WHERE source_id = ? AND target_id != ?",
+                (target_id, source_id, target_id),
+            )
+            incoming = self._db.execute(
+                "INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) "
+                "SELECT source_id, ?, relation_type_id FROM relations "
+                "WHERE target_id = ? AND source_id != ?",
+                (target_id, source_id, target_id),
+            )
+            self._db.execute(
+                "UPDATE entities SET vote_score = "
+                "MAX(vote_score, (SELECT vote_score FROM entities WHERE id = ?)) WHERE id = ?",
+                (source_id, target_id),
+            )
+            self._db.execute(
+                "UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?", (source_id,)
+            )
+        return {
+            "observations_merged": obs.rowcount,
+            "relations_repointed": outgoing.rowcount + incoming.rowcount,
+        }
+
+    def purge_soft_deleted(self, grace_days: int) -> int:
+        """Hard-delete entities soft-deleted longer than the grace window, returning the count."""
+        rows = self._db.execute(
+            "SELECT e.id, e.name, p.name AS project FROM entities e "
+            "JOIN projects p ON e.project_id = p.id "
+            "WHERE e.deleted_at IS NOT NULL AND e.deleted_at < datetime('now', ?)",
+            (f"-{grace_days} days",),
+        ).fetchall()
+        with self._db:
+            for row in rows:
+                self._delete_entity_row(row["id"], row["project"], row["name"])
+        return len(rows)
 
     def delete_relation(self, project: str, source: str, target: str, relation_type: str) -> None:
         """Delete a specific relation between two entities."""
@@ -702,7 +819,7 @@ class DatabaseManager:
             "e.vote_score "
             "FROM entities e "
             "JOIN entity_types et ON e.entity_type_id = et.id "
-            "WHERE e.name = ? AND e.project_id = ?",
+            "WHERE e.name = ? AND e.project_id = ? AND e.deleted_at IS NULL",
             (name, project_id),
         ).fetchone()
         if row is None:
@@ -797,7 +914,7 @@ class DatabaseManager:
             "JOIN entities e ON fts.rowid = e.id "
             "JOIN entity_types et ON e.entity_type_id = et.id "
             "JOIN projects p ON e.project_id = p.id "
-            "WHERE entities_fts MATCH ?"
+            "WHERE entities_fts MATCH ? AND e.deleted_at IS NULL"
         )
         params: list[str | int] = [sanitized]
 
@@ -856,7 +973,7 @@ class DatabaseManager:
             "e.vote_score "
             "FROM entities e "
             "JOIN entity_types et ON e.entity_type_id = et.id "
-            "WHERE e.project_id = ?"
+            "WHERE e.project_id = ? AND e.deleted_at IS NULL"
         )
         params: list[str | int] = [project_id]
 

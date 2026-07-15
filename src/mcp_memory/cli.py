@@ -45,13 +45,17 @@ class _ServiceSpec:
 
 def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
     """Service spec for the mcp-memory data server."""
+    env = {"MCP_MEMORY_DB_PATH": str(db_path), "MCP_MEMORY_PORT": port}
+    # Carry any soft-delete purge settings through so `MCP_MEMORY_PURGE_*
+    # mcp-memory setup-service` sticks in the installed service.
+    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_PURGE_")})
     return _ServiceSpec(
         name="memory",
         binary_name="mcp-memory",
         label=_LAUNCHD_LABEL,
         description="mcp-memory server",
         port=port,
-        env={"MCP_MEMORY_DB_PATH": str(db_path), "MCP_MEMORY_PORT": port},
+        env=env,
         log_path=db_path.parent / "mcp-memory.log",
         plist_path=_LAUNCHD_PLIST,
         systemd_unit=_SYSTEMD_UNIT,

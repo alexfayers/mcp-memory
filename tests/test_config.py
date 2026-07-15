@@ -87,6 +87,23 @@ class TestDreamConfig:
         assert config.get_dream_max_votes() == 3
 
 
+class TestPurgeConfig:
+    def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_PURGE_ENABLED", raising=False)
+        assert config.get_purge_enabled() is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
+    def test_enabled_by_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_PURGE_ENABLED", value)
+        assert config.get_purge_enabled() is True
+
+    def test_grace_days_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_PURGE_GRACE_DAYS", raising=False)
+        assert config.get_purge_grace_days() == 30
+        monkeypatch.setenv("MCP_MEMORY_PURGE_GRACE_DAYS", "7")
+        assert config.get_purge_grace_days() == 7
+
+
 class TestDetectServicePort:
     def test_reads_launchd_plist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         plist = tmp_path / "com.mcp-memory.plist"

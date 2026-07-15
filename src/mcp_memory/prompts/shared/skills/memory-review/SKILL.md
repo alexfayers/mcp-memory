@@ -17,6 +17,8 @@ Work through this checklist to audit and clean up the memory graph. The `/visual
 
 **Verify before every destructive op.** `delete_observations` requires an EXACT string match - re-read the live entity and copy the exact text; paraphrased/truncated strings silently no-op. For `delete_entity`, confirm the entity is genuinely empty/scratch or that its content is preserved elsewhere before deleting. `delete_entity` is blocked while an entity still has incoming relations - delete or re-point those edges first. To remove an empty "ghost" scope, delete its remaining entities then call `delete_project(project)` (it refuses to delete `global` or any scope that still has entities).
 
+**To consolidate duplicates, prefer `merge_entities(project, source, target)` over hand-merging.** It copies the source's observations onto the target (deduped, keeping votes), repoints all the source's relations to the target, keeps the higher vote score, and **soft-deletes** the source - reversibly, so a wrong merge can be undone with `restore_entity(project, source)` until a grace-window purge. This is safer and more complete than the manual "copy observations, re-point relations, delete the loser" sequence, and it sidesteps the incoming-relation delete block.
+
 **Focus on structural hygiene the autonomous "dream" cannot do.** An opt-in background curation pass may already be casting `-1` votes on obvious stale/superseded/duplicate entities during idle windows - but downvoting is *all* it can do. It cannot re-link orphans, rename, split bloated entities, move scopes, fix relations, or delete anything. So do not spend a review re-downvoting obvious noise; concentrate on the structural work below (orphans, naming, bloat/splitting, relations, scope errors) that only a human/agent can perform. Treat a strongly negative `vote_score` as a review prompt (see step 5), not as work already finished.
 
 ## 1. Find orphans and naming violations
@@ -36,7 +38,7 @@ Fix: rename with proper prefix (delete + recreate with relations), link orphans,
 
 Look for:
 - Same entity in multiple project scopes (e.g. `user-preferences/` in a project scope that belongs in `global`)
-- Unprefixed duplicates of prefixed entities (merge observations, re-point relations, delete the unprefixed one)
+- Unprefixed duplicates of prefixed entities within one project - use `merge_entities(project, source=unprefixed, target=prefixed)` to fold the unprefixed copy into the canonical one in a single reversible step
 - `user-preferences` entities scattered across project scopes - extract useful observations into the main global preferences, then delete the project-scoped copy
 - **Near-duplicate observations** within the same entity (same fact phrased two ways) - keep the more precise one
 - **Observations that contradict each other** - resolve the contradiction, keep the correct one

@@ -79,10 +79,10 @@ def get_all_graph_data(
 ) -> dict[str, list[dict[str, object]]]:
     """Return all entities and relations for a project (or all projects) as serialisable dicts."""
     if project:
-        where_clause = "WHERE e.project_id = ?"
+        where_clause = "WHERE e.deleted_at IS NULL AND e.project_id = ?"
         params: tuple[object, ...] = (db._get_or_create_project_id(project),)
     else:
-        where_clause = ""
+        where_clause = "WHERE e.deleted_at IS NULL"
         params = ()
 
     entity_rows = db._db.execute(

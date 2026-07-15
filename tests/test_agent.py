@@ -92,6 +92,8 @@ class TestBuildRecallCommand:
         denied = set(command[deny_index + 1 :])
         assert "mcp__memory__create_entities" in denied
         assert "mcp__memory__vote_entity" in denied
+        assert "mcp__memory__restore_entity" in denied
+        assert "mcp__memory__merge_entities" in denied
         assert "Bash" in denied
 
     def test_allows_memory_read_tools_by_not_denying_them(self) -> None:

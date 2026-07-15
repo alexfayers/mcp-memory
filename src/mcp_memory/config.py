@@ -17,6 +17,7 @@ _DEFAULT_DREAM_IDLE_SECONDS = "7200"
 _DEFAULT_DREAM_POLL_SECONDS = "1800"
 _DEFAULT_DREAM_TIMEOUT = "300"
 _DEFAULT_DREAM_MAX_VOTES = "15"
+_DEFAULT_PURGE_GRACE_DAYS = "30"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / "com.mcp-memory.plist"
@@ -131,3 +132,17 @@ def get_dream_timeout() -> float:
 def get_dream_max_votes() -> int:
     """Return the advisory cap on how many entities a single dream pass may demote."""
     return int(os.environ.get("MCP_DREAM_MAX_VOTES", _DEFAULT_DREAM_MAX_VOTES))
+
+
+def get_purge_enabled() -> bool:
+    """Return whether soft-deleted entities are hard-purged past the grace window.
+
+    Off by default so a normal boot (and every test database) never silently
+    hard-deletes a soft-deleted entity.
+    """
+    return os.environ.get("MCP_MEMORY_PURGE_ENABLED", "false").strip().lower() in _TRUTHY
+
+
+def get_purge_grace_days() -> int:
+    """Return how long a soft-deleted entity is retained before it may be purged."""
+    return int(os.environ.get("MCP_MEMORY_PURGE_GRACE_DAYS", _DEFAULT_PURGE_GRACE_DAYS))

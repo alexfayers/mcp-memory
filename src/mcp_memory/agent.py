@@ -77,6 +77,8 @@ _MUTATING_MEMORY_TOOLS = (
     "set_entity_status",
     "set_project_paths",
     "move_project_entities",
+    "merge_entities",
+    "restore_entity",
     "vote_entity",
 )
 # --strict-mcp-config isolates MCP servers but not built-ins. Deny the write/exec

@@ -136,7 +136,7 @@ enforcement is a **deny-list, not an allow-list**, for a verified reason:
   live-verified: with the mutating tools denied, an attempt to call
   `create_entities` was blocked and no row was written.
 
-Deny for **v1 recall** (read-only): all 10 mutating memory tools **plus**
+Deny for **v1 recall** (read-only): all 12 mutating memory tools **plus**
 `vote_entity`, plus built-in write/exec tools (`Bash`, `Write`, `Edit`,
 `NotebookEdit`, `Agent`) **plus** built-in read/web tools (`Read`, `Grep`,
 `Glob`, `WebFetch`, `WebSearch`). The read tools must be denied too: otherwise
@@ -144,10 +144,13 @@ the agent answers from files on disk and cites file paths instead of the
 `[project/entity]` graph slugs the return contract requires (live-observed - it
 read this very design doc off disk on the first run).
 
-The 10 mutating memory tools to deny (6 are hard-destructive, no undo exists):
-`create_entities`, `set_project_paths`, `move_project_entities`,
-`delete_project`, `create_relations`, `delete_entity`, `delete_relation`,
-`add_observations`, `delete_observations`, `set_entity_status`.
+The 12 mutating memory tools to deny: `create_entities`, `set_project_paths`,
+`move_project_entities`, `merge_entities`, `delete_project`, `create_relations`,
+`delete_entity`, `delete_relation`, `add_observations`, `delete_observations`,
+`set_entity_status`, `restore_entity`. Of these, `delete_entity`,
+`delete_relation`, `delete_project` and the overwriting `create_entities` are
+hard-destructive; `merge_entities` removes its source only by *soft-delete*, so
+that removal is reversible via `restore_entity` until a grace-window purge.
 
 **Recursion guard:** `--strict-mcp-config` points the spawned agent's MCP config
 *only* at mcp-memory, so it never sees the memory-agent server and physically
@@ -190,9 +193,11 @@ A pass that grooms the graph while it is idle. Off by default (opt-in via
   recall deny-list **minus** `vote_entity`). It demotes stale, superseded, or
   duplicated entities and never casts a positive vote or deletes anything.
   Downvoting sinks an entity in ranking but never removes it - functionally
-  equivalent to deletion from the reader's perspective, but reversible. Deletion
-  stays a rare manual operation, because mcp-memory has no soft-delete/history/
-  undo of any kind.
+  equivalent to deletion from the reader's perspective, but reversible. Hard
+  deletion stays a rare manual operation. (Entities can now also be *soft*-deleted
+  - hidden from reads but kept intact and restorable until a grace-window purge -
+  which is how `merge_entities` removes a folded-away duplicate; the light dream
+  does not do this, it only votes.)
 - **Scope: all projects.** A pass searches and votes across every project scope.
 - **Voting is ±1 only.** No graded/weighted votes: the ranking multiplier
   already saturates via `tanh`, and letting the model choose magnitude

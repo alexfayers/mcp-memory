@@ -820,6 +820,229 @@ class TestDeleteEntity:
             db.delete_entity("proj", "b")
 
 
+class TestSoftDelete:
+    def test_soft_deleted_entity_hidden_from_get(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.soft_delete_entity("proj", "e1")
+        with pytest.raises(ValueError, match="not found"):
+            db.get_entity("proj", "e1")
+
+    def test_restore_brings_entity_back(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.soft_delete_entity("proj", "e1")
+        db.restore_entity("proj", "e1")
+        assert db.get_entity("proj", "e1").observations == ["x"]
+
+    def test_soft_delete_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.soft_delete_entity("proj", "missing")
+
+    def test_restore_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.restore_entity("proj", "missing")
+
+    def test_soft_deleted_entity_hidden_from_search(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "findme", "entityType": "task", "observations": ["needle"]}]
+        )
+        db.soft_delete_entity("proj", "findme")
+        assert db.search_nodes("proj", "needle")["entities"] == []
+
+    def test_soft_deleted_entity_hidden_from_read_graph(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.soft_delete_entity("proj", "e1")
+        assert db.read_graph("proj")["entities"] == []
+
+    def test_soft_deleted_entity_edges_hidden(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "feature", "observations": ["y"]},
+            ],
+        )
+        db.create_relations("proj", [Relation(source="a", target="b", relation_type="implements")])
+        db.soft_delete_entity("proj", "a")
+        assert db.get_entity_with_relations("proj", "b")["relations"] == []
+
+    def test_soft_deleted_hidden_from_exists_checks(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.soft_delete_entity("proj", "e1")
+        assert db.entity_exists_in_project("e1", "proj") is False
+        assert db.entity_exists_outside_project("e1", "other") is None
+
+    def test_soft_deleted_hidden_from_paths_for_entity(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.soft_delete_entity("proj", "e1")
+        assert db.paths_for_entity_name("e1") == []
+
+    def test_soft_deleted_hidden_from_observation_scores(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.soft_delete_entity("proj", "e1")
+        assert db.observation_scores("proj", "e1") == []
+
+    def test_create_replaces_soft_deleted_tombstone(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["old"]}])
+        db.soft_delete_entity("proj", "e1")
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["new"]}])
+        assert db.get_entity("proj", "e1").observations == ["new"]
+
+    def test_purge_removes_only_past_grace(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.soft_delete_entity("proj", "e1")
+        project_id = db._get_or_create_project_id("proj")
+        assert db.purge_soft_deleted(grace_days=30) == 0
+        entity_id = db._get_entity_id("e1", project_id, include_deleted=True)
+        db._db.execute(
+            "UPDATE entities SET deleted_at = datetime('now', '-40 days') WHERE id = ?",
+            (entity_id,),
+        )
+        db._db.commit()
+        assert db.purge_soft_deleted(grace_days=30) == 1
+        assert db._get_entity_id("e1", project_id, include_deleted=True) is None
+
+
+class TestMergeEntities:
+    def test_observations_merged_and_deduped(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["shared", "only-source"]},
+                {"name": "canon", "entityType": "task", "observations": ["shared", "only-target"]},
+            ],
+        )
+        db.merge_entities("proj", "dup", "canon")
+        obs = set(db.get_entity("proj", "canon").observations)
+        assert obs == {"shared", "only-source", "only-target"}
+
+    def test_source_is_soft_deleted_not_gone(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["a"]},
+                {"name": "canon", "entityType": "task", "observations": ["b"]},
+            ],
+        )
+        db.merge_entities("proj", "dup", "canon")
+        with pytest.raises(ValueError, match="not found"):
+            db.get_entity("proj", "dup")
+        project_id = db._get_or_create_project_id("proj")
+        assert db._get_entity_id("dup", project_id, include_deleted=True) is not None
+
+    def test_outgoing_relations_repointed(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["a"]},
+                {"name": "canon", "entityType": "task", "observations": ["b"]},
+                {"name": "feat", "entityType": "feature", "observations": ["c"]},
+            ],
+        )
+        db.create_relations(
+            "proj", [Relation(source="dup", target="feat", relation_type="implements")]
+        )
+        db.merge_entities("proj", "dup", "canon")
+        rels = db.get_entity_with_relations("proj", "canon")["relations"]
+        assert any(r.source == "canon" and r.target == "feat" for r in rels)
+
+    def test_incoming_relations_repointed(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "dup", "entityType": "feature", "observations": ["a"]},
+                {"name": "canon", "entityType": "feature", "observations": ["b"]},
+                {"name": "task1", "entityType": "task", "observations": ["c"]},
+            ],
+        )
+        db.create_relations(
+            "proj", [Relation(source="task1", target="dup", relation_type="implements")]
+        )
+        db.merge_entities("proj", "dup", "canon")
+        rels = db.get_entity_with_relations("proj", "canon")["relations"]
+        assert any(r.source == "task1" and r.target == "canon" for r in rels)
+
+    def test_relation_between_source_and_target_does_not_create_self_loop(
+        self, db: DatabaseManager
+    ) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["a"]},
+                {"name": "canon", "entityType": "feature", "observations": ["b"]},
+            ],
+        )
+        db.create_relations(
+            "proj", [Relation(source="dup", target="canon", relation_type="implements")]
+        )
+        db.merge_entities("proj", "dup", "canon")
+        rels = db.get_entity_with_relations("proj", "canon")["relations"]
+        assert all(not (r.source == "canon" and r.target == "canon") for r in rels)
+
+    def test_vote_score_carried_as_max(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["a"]},
+                {"name": "canon", "entityType": "task", "observations": ["b"]},
+            ],
+        )
+        db.vote_entity("proj", "dup", 1)
+        db.vote_entity("proj", "dup", 1)
+        db.vote_entity("proj", "canon", 1)
+        db.merge_entities("proj", "dup", "canon")
+        assert db.get_entity("proj", "canon").vote_score == 2
+
+    def test_target_searchable_on_merged_text(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["needle"]},
+                {"name": "canon", "entityType": "task", "observations": ["hay"]},
+            ],
+        )
+        db.merge_entities("proj", "dup", "canon")
+        hits = db.search_nodes("proj", "needle")["entities"]
+        assert [e.name for e in hits] == ["canon"]
+
+    def test_merge_into_self_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        with pytest.raises(ValueError, match="itself"):
+            db.merge_entities("proj", "e1", "e1")
+
+    def test_missing_source_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "canon", "entityType": "task", "observations": ["b"]}])
+        with pytest.raises(ValueError, match="not found"):
+            db.merge_entities("proj", "nope", "canon")
+
+    def test_missing_target_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "dup", "entityType": "task", "observations": ["a"]}])
+        with pytest.raises(ValueError, match="not found"):
+            db.merge_entities("proj", "dup", "nope")
+
+    def test_purge_after_merge_with_incoming_edge_succeeds(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "dup", "entityType": "feature", "observations": ["a"]},
+                {"name": "canon", "entityType": "feature", "observations": ["b"]},
+                {"name": "task1", "entityType": "task", "observations": ["c"]},
+            ],
+        )
+        db.create_relations(
+            "proj", [Relation(source="task1", target="dup", relation_type="implements")]
+        )
+        db.merge_entities("proj", "dup", "canon")
+        project_id = db._get_or_create_project_id("proj")
+        entity_id = db._get_entity_id("dup", project_id, include_deleted=True)
+        db._db.execute(
+            "UPDATE entities SET deleted_at = datetime('now', '-40 days') WHERE id = ?",
+            (entity_id,),
+        )
+        db._db.commit()
+        assert db.purge_soft_deleted(grace_days=30) == 1
+        assert db._get_entity_id("dup", project_id, include_deleted=True) is None
+
+
 class TestGetEntityWithRelations:
     def test_returns_related_entities(self, db: DatabaseManager) -> None:
         db.create_entities(

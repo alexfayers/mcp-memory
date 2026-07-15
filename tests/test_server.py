@@ -432,6 +432,49 @@ class TestVoteObservationTool:
         assert "error" in server.vote_observation("proj", "e1", "nope", 1)
 
 
+class TestRestoreEntityTool:
+    def test_restore_makes_soft_deleted_entity_visible(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        server_db.soft_delete_entity("proj", "e1")
+        result = server.restore_entity("proj", "e1")
+        assert result == {"message": "Restored entity 'e1' in project 'proj'."}
+        assert server_db.get_entity("proj", "e1").observations == ["x"]
+
+    def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
+        assert "error" in server.restore_entity("proj", "nope")
+
+
+class TestMergeEntitiesTool:
+    def test_merge_reports_counts_and_folds_source(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["from-source"]},
+                {"name": "canon", "entityType": "task", "observations": ["from-target"]},
+            ],
+        )
+        result = server.merge_entities("proj", "dup", "canon")
+        assert result["message"] == "Merged 'dup' into 'canon' in project 'proj'."
+        assert result["observations_merged"] == 1
+        assert "from-source" in server_db.get_entity("proj", "canon").observations
+        with pytest.raises(ValueError, match="not found"):
+            server_db.get_entity("proj", "dup")
+
+    def test_merge_into_self_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}]
+        )
+        assert "error" in server.merge_entities("proj", "e1", "e1")
+
+    def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "canon", "entityType": "task", "observations": ["b"]}]
+        )
+        assert "error" in server.merge_entities("proj", "nope", "canon")
+
+
 class TestProjectPathTools:
     def test_set_project_paths_registers_and_creates_root(
         self, server_db: DatabaseManager, tmp_path: Path
