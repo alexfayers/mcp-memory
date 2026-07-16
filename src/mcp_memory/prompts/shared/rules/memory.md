@@ -222,6 +222,7 @@ You should:
 
 - When creating an implementation plan, always include memory updates in the plan
 - Always share these rules with any subagents
+- **Subagents are read-only for memory.** A subagent (Explore, Plan, general-purpose, Task) MAY read the graph (`read_graph`, `search_nodes`, `get_entity_with_relations`, `search_related_nodes`) but MUST NOT mutate it (`create_entities`, `add_observations`, `set_entity_status`, `create_relations`, votes). A subagent returns facts-worth-persisting to its caller; the **main thread** performs every write, after verifying against a fresh read. This keeps mutation in one place - subagent writes tend to create entities without the paired `create_relations` (orphans) and scatter scratch observations into whatever scope is active - and stops plan-mode subagents from tripping write-approval prompts. The "persist as you go" rule above binds the main thread; a subagent persists nothing itself.
 - Query memory before starting a task
 - Update memory as you go - don't just wait until the end of a task
 - **ALL knowledge not stored in memory or prompt files is permanently lost at the end of each session.** This includes things told to you mid-session (e.g. user preferences, model config, tool behaviour). Always persist this kind of information immediately to `project="global"`.
