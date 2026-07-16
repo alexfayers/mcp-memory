@@ -195,10 +195,84 @@ class TestBuildDreamCommand:
         assert "[project/entity-name] - reason" in prompt
         assert "nothing demoted" in prompt
 
-    def test_ritual_example_line_round_trips_through_parse_demotions(self) -> None:
-        demotions = dream_status.parse_demotions("[myproj/task/old-thing] - superseded")
-        assert demotions == [
-            {"project": "myproj", "name": "task/old-thing", "reason": "superseded"}
+    def test_ritual_example_line_round_trips_through_parse_operations(self) -> None:
+        operations = dream_status.parse_operations("[myproj/task/old-thing] - superseded")
+        assert operations == [
+            {
+                "project": "myproj",
+                "name": "task/old-thing",
+                "reason": "superseded",
+                "action": "demote",
+            }
+        ]
+
+    def test_light_denies_merge_entities(self) -> None:
+        command = agent.build_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_votes=15
+        )
+        deny_index = command.index("--disallowedTools")
+        denied = set(command[deny_index + 1 :])
+        assert "mcp__memory__merge_entities" in denied
+
+
+class TestBuildHeavyDreamCommand:
+    def test_allows_vote_and_merge_but_denies_other_mutations(self) -> None:
+        command = agent.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+        )
+        deny_index = command.index("--disallowedTools")
+        denied = set(command[deny_index + 1 :])
+        assert "mcp__memory__vote_entity" not in denied
+        assert "mcp__memory__merge_entities" not in denied
+        assert "mcp__memory__delete_entity" in denied
+        assert "mcp__memory__create_entities" in denied
+        assert "mcp__memory__restore_entity" in denied
+
+    def test_still_denies_filesystem_and_web_read_builtins(self) -> None:
+        command = agent.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+        )
+        deny_index = command.index("--disallowedTools")
+        denied = set(command[deny_index + 1 :])
+        for tool in ("Bash", "Write", "Read", "Grep", "Glob", "WebFetch", "WebSearch"):
+            assert tool in denied
+
+    def test_isolates_and_pins_the_spawn(self) -> None:
+        command = agent.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+        )
+        assert "--strict-mcp-config" in command
+        assert command[command.index("--model") + 1] == _MODEL
+        assert command[command.index("--mcp-config") + 1] == "/tmp/cfg.json"
+        assert command[command.index("--output-format") + 1] == "json"
+
+    def test_prompt_covers_merge_and_downvote_and_embeds_the_cap(self) -> None:
+        command = agent.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+        )
+        prompt = command[command.index("-p") + 1]
+        assert "4" in prompt
+        assert "merge_entities" in prompt
+        assert "same project" in prompt
+        assert "vote_entity" in prompt
+
+    def test_prompt_specifies_a_parseable_audit_format(self) -> None:
+        command = agent.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+        )
+        prompt = command[command.index("-p") + 1]
+        assert "[project/entity-name] - action reason" in prompt
+        assert "nothing changed" in prompt
+
+    def test_merge_audit_line_round_trips_through_parse_operations(self) -> None:
+        operations = dream_status.parse_operations("[myproj/task/old] - merged into task/new")
+        assert operations == [
+            {
+                "project": "myproj",
+                "name": "task/old",
+                "reason": "merged into task/new",
+                "action": "merge",
+            }
         ]
 
 
@@ -232,6 +306,92 @@ class TestFetchIdleSeconds:
         assert asyncio.run(agent.fetch_idle_seconds()) is None
 
 
+class TestTierTick:
+    @staticmethod
+    def _spec(
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        idle: float | None,
+        now: float,
+        idle_gate: float,
+        interval_gate: float,
+        passes: list[str],
+        recorded: list[tuple[str, bool, str]],
+    ) -> agent.TierSpec:
+        monkeypatch.setattr(agent, "fetch_idle_seconds", _acoro(idle))
+        monkeypatch.setattr(agent.time, "monotonic", lambda: now)
+
+        async def fake_pass() -> str:
+            passes.append("ran")
+            return "[p/task/x] - merged into task/y"
+
+        def fake_record(audit_text: str, *, ok: bool, tier: str = "light") -> None:
+            recorded.append((audit_text, ok, tier))
+
+        monkeypatch.setattr(agent.dream_status, "record_pass", fake_record)
+        return agent.TierSpec(
+            name="heavy",
+            enabled_getter=lambda: True,
+            idle_getter=lambda: idle_gate,
+            interval_getter=lambda: interval_gate,
+            poll_getter=lambda: 1.0,
+            run_pass=fake_pass,
+        )
+
+    def test_runs_pass_and_tags_tier_when_both_gates_pass(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        passes: list[str] = []
+        recorded: list[tuple[str, bool, str]] = []
+        spec = self._spec(
+            monkeypatch,
+            idle=8000.0,
+            now=100_000.0,
+            idle_gate=7200.0,
+            interval_gate=86400.0,
+            passes=passes,
+            recorded=recorded,
+        )
+        new_last_pass = asyncio.run(agent._tier_tick(0.0, spec))
+        assert passes == ["ran"]
+        assert new_last_pass == 100_000.0
+        assert recorded == [("[p/task/x] - merged into task/y", True, "heavy")]
+
+    def test_skips_when_idle_gate_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        passes: list[str] = []
+        recorded: list[tuple[str, bool, str]] = []
+        spec = self._spec(
+            monkeypatch,
+            idle=100.0,
+            now=100_000.0,
+            idle_gate=7200.0,
+            interval_gate=1.0,
+            passes=passes,
+            recorded=recorded,
+        )
+        assert asyncio.run(agent._tier_tick(42.0, spec)) == 42.0
+        assert passes == []
+
+    def test_skips_when_interval_gate_fails_though_idle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Idle window is wide open, but not enough time has passed since this
+        # tier's own last pass - the interval gate holds it off.
+        passes: list[str] = []
+        recorded: list[tuple[str, bool, str]] = []
+        spec = self._spec(
+            monkeypatch,
+            idle=999_999.0,
+            now=100_000.0,
+            idle_gate=7200.0,
+            interval_gate=86400.0,
+            passes=passes,
+            recorded=recorded,
+        )
+        assert asyncio.run(agent._tier_tick(99_000.0, spec)) == 99_000.0
+        assert passes == []
+
+
 class TestDreamTick:
     @staticmethod
     def _wire(
@@ -241,7 +401,7 @@ class TestDreamTick:
         now: float,
         passes: list[str],
         outcome: str | Exception = "audit",
-        recorded: list[tuple[str, bool]] | None = None,
+        recorded: list[tuple[str, bool, str]] | None = None,
     ) -> None:
         monkeypatch.setattr(agent, "get_dream_idle_seconds", lambda: 7200.0)
         monkeypatch.setattr(agent, "fetch_idle_seconds", _acoro(idle))
@@ -255,9 +415,9 @@ class TestDreamTick:
 
         monkeypatch.setattr(agent, "run_dream_pass", fake_pass)
 
-        def fake_record(audit_text: str, *, ok: bool) -> None:
+        def fake_record(audit_text: str, *, ok: bool, tier: str = "light") -> None:
             if recorded is not None:
-                recorded.append((audit_text, ok))
+                recorded.append((audit_text, ok, tier))
 
         monkeypatch.setattr(agent.dream_status, "record_pass", fake_record)
 
@@ -306,7 +466,7 @@ class TestDreamTick:
         assert new_last_pass == 100_000.0
 
     def test_records_a_successful_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        recorded: list[tuple[str, bool]] = []
+        recorded: list[tuple[str, bool, str]] = []
         self._wire(
             monkeypatch,
             idle=8000.0,
@@ -316,10 +476,10 @@ class TestDreamTick:
             recorded=recorded,
         )
         asyncio.run(agent._dream_tick(0.0))
-        assert recorded == [("[p/task/x] - stale", True)]
+        assert recorded == [("[p/task/x] - stale", True, "light")]
 
     def test_records_a_handled_failure_as_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        recorded: list[tuple[str, bool]] = []
+        recorded: list[tuple[str, bool, str]] = []
         self._wire(
             monkeypatch,
             idle=8000.0,
@@ -329,10 +489,10 @@ class TestDreamTick:
             recorded=recorded,
         )
         asyncio.run(agent._dream_tick(0.0))
-        assert recorded == [("recall unavailable: claude CLI not found", False)]
+        assert recorded == [("recall unavailable: claude CLI not found", False, "light")]
 
     def test_records_a_raising_pass_as_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        recorded: list[tuple[str, bool]] = []
+        recorded: list[tuple[str, bool, str]] = []
         self._wire(
             monkeypatch,
             idle=8000.0,
@@ -357,13 +517,13 @@ class TestIdleWatchLoop:
             "record_startup",
             lambda **_kwargs: starts.append(True),
         )
-        ticks: list[float] = []
+        ticks: list[agent.TierSpec] = []
 
-        async def fake_tick(last_pass: float) -> float:
-            ticks.append(last_pass)
+        async def fake_tick(last_pass: float, spec: agent.TierSpec) -> float:
+            ticks.append(spec)
             return last_pass
 
-        monkeypatch.setattr(agent, "_dream_tick", fake_tick)
+        monkeypatch.setattr(agent, "_tier_tick", fake_tick)
 
         async def drive() -> None:
             task = asyncio.create_task(agent._idle_watch_loop())
@@ -374,7 +534,41 @@ class TestIdleWatchLoop:
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(drive())
         assert ticks  # the loop ran at least one tick before cancellation
+        assert ticks[0].name == "light"  # the light tier drives this loop
         assert starts == [True]  # config snapshotted once before the loop
+
+    def test_heavy_loop_records_its_own_startup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_heavy_poll_seconds", lambda: 3600.0)
+        monkeypatch.setattr(agent, "get_dream_heavy_idle_seconds", lambda: 7200.0)
+        monkeypatch.setattr(agent, "get_dream_heavy_interval_seconds", lambda: 86400.0)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
+        recorded: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            agent.dream_status, "record_startup", lambda **kwargs: recorded.append(kwargs)
+        )
+
+        async def fake_tick(last_pass: float, spec: agent.TierSpec) -> float:
+            return last_pass
+
+        monkeypatch.setattr(agent, "_tier_tick", fake_tick)
+
+        async def drive() -> None:
+            task = asyncio.create_task(agent._heavy_watch_loop())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(drive())
+        assert recorded == [
+            {
+                "tier": "heavy",
+                "enabled": True,
+                "idle_threshold_seconds": 7200.0,
+                "interval_seconds": 86400.0,
+                "poll_seconds": 3600.0,
+            }
+        ]
 
 
 class TestAgentCli:
@@ -457,6 +651,59 @@ class TestServe:
         status = recall_status.read_status()
         assert status is not None
         assert status["active"] == 0
+
+    @staticmethod
+    def _wire_watchers(monkeypatch: pytest.MonkeyPatch, started: list[str]) -> None:
+        async def fake_light() -> None:
+            started.append("light")
+            await asyncio.sleep(3600)
+
+        async def fake_heavy() -> None:
+            started.append("heavy")
+            await asyncio.sleep(3600)
+
+        async def fake_serve_http() -> None:
+            await asyncio.sleep(0.02)
+
+        monkeypatch.setattr(agent, "_idle_watch_loop", fake_light)
+        monkeypatch.setattr(agent, "_heavy_watch_loop", fake_heavy)
+        monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
+
+    def test_starts_heavy_watcher_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        started: list[str] = []
+        self._wire_watchers(monkeypatch, started)
+        asyncio.run(agent._serve())
+        assert started == ["heavy"]
+
+    def test_no_heavy_watcher_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        started: list[str] = []
+        self._wire_watchers(monkeypatch, started)
+        asyncio.run(agent._serve())
+        assert started == []
+
+    def test_no_heavy_watcher_when_claude_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: None)
+        started: list[str] = []
+        self._wire_watchers(monkeypatch, started)
+        asyncio.run(agent._serve())
+        assert started == []
+
+    def test_runs_both_watchers_when_both_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        started: list[str] = []
+        self._wire_watchers(monkeypatch, started)
+        asyncio.run(agent._serve())
+        assert sorted(started) == ["heavy", "light"]
 
 
 class TestSpawnEnv:
@@ -641,6 +888,73 @@ class TestRunDreamPass:
 
         monkeypatch.setattr(agent, "_spawn_recall", fake_spawn)
         result = asyncio.run(agent.run_dream_pass())
+        assert "unexpected model" in result
+
+
+class TestRunHeavyDreamPass:
+    def test_returns_audit_summary_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(agent, "get_dream_heavy_model", lambda: _MODEL)
+        monkeypatch.setattr(agent, "get_preflight_command", lambda: None)
+
+        captured: dict[str, object] = {}
+
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+        ) -> str:
+            captured["command"] = command
+            return _recall_payload("[mcp-memory/task/old] - merged into task/new")
+
+        monkeypatch.setattr(agent, "_spawn_recall", fake_spawn)
+        result = asyncio.run(agent.run_heavy_dream_pass())
+        assert result == "[mcp-memory/task/old] - merged into task/new"
+        command = captured["command"]
+        assert isinstance(command, list)
+        assert "mcp__memory__merge_entities" not in command
+        assert "mcp__memory__vote_entity" not in command
+
+    def test_reports_missing_claude_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: None)
+        result = asyncio.run(agent.run_heavy_dream_pass())
+        assert "claude CLI not found" in result
+
+    def test_preflight_failure_blocks_spawn(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(agent, "get_preflight_command", lambda: "false")
+
+        async def fail_if_called(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+        ) -> str:
+            msg = "spawn must not run when pre-flight fails"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(agent, "_spawn_recall", fail_if_called)
+        result = asyncio.run(agent.run_heavy_dream_pass())
+        assert "pre-flight check failed" in result
+
+    def test_rejects_unexpected_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(agent, "get_dream_heavy_model", lambda: _MODEL)
+        monkeypatch.setattr(agent, "get_preflight_command", lambda: None)
+
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+        ) -> str:
+            return _recall_payload(
+                "[p/task/x] - merged", model="global.anthropic.claude-opus-4-8-v1:0"
+            )
+
+        monkeypatch.setattr(agent, "_spawn_recall", fake_spawn)
+        result = asyncio.run(agent.run_heavy_dream_pass())
         assert "unexpected model" in result
 
 

@@ -148,6 +148,15 @@ class TestVisualisePage:
         assert "demoted (downvoted)" in resp.text
 
     @pytest.mark.anyio
+    async def test_dream_card_renders_both_tiers_and_merge_ops(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        resp = await client.get("/visualise")
+        assert "tierLine" in resp.text  # per-tier status line helper
+        assert "d.tiers" in resp.text  # renderDream reads the per-tier configs
+        assert 'op.action === "merge"' in resp.text  # merge vs demote glyph branch
+
+    @pytest.mark.anyio
     async def test_includes_the_recall_panel(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert 'id="recall"' in resp.text
@@ -266,27 +275,41 @@ class TestApiDream:
         assert resp.status_code == 200
         data = resp.json()
         assert data["available"] is False
-        assert data["enabled"] is False
-        assert data["idle_threshold_seconds"] is None
+        assert data["tiers"] == {}
         assert data["last_pass"] is None
         assert data["idle_seconds"] == 42.0
         assert data["last_activity"] == 1000.0
 
     @pytest.mark.anyio
-    async def test_reports_config_and_last_pass(self, client: httpx.AsyncClient) -> None:
+    async def test_reports_both_tiers_and_last_pass(self, client: httpx.AsyncClient) -> None:
         dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=7200.0, poll_seconds=1800.0
+            tier="light",
+            enabled=True,
+            idle_threshold_seconds=7200.0,
+            interval_seconds=7200.0,
+            poll_seconds=1800.0,
         )
-        dream_status.record_pass("[scratch/task/old] - stale", ok=True)
+        dream_status.record_startup(
+            tier="heavy",
+            enabled=True,
+            idle_threshold_seconds=7200.0,
+            interval_seconds=86400.0,
+            poll_seconds=3600.0,
+        )
+        dream_status.record_pass("[scratch/task/old] - merged into task/new", ok=True, tier="heavy")
         resp = await client.get("/api/dream")
         data = resp.json()
         assert data["available"] is True
-        assert data["enabled"] is True
-        assert data["idle_threshold_seconds"] == 7200.0
-        assert data["poll_seconds"] == 1800.0
-        assert data["last_pass"]["ok"] is True
-        assert data["last_pass"]["demotions"] == [
-            {"project": "scratch", "name": "task/old", "reason": "stale"}
+        assert data["tiers"]["light"]["idle_threshold_seconds"] == 7200.0
+        assert data["tiers"]["heavy"]["interval_seconds"] == 86400.0
+        assert data["last_pass"]["tier"] == "heavy"
+        assert data["last_pass"]["operations"] == [
+            {
+                "project": "scratch",
+                "name": "task/old",
+                "reason": "merged into task/new",
+                "action": "merge",
+            }
         ]
 
     @pytest.mark.anyio

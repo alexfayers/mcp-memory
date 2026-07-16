@@ -1,8 +1,9 @@
 # memory-agent: an LLM curation/recall service in front of mcp-memory
 
-Status: **v1 + v2 built** (`recall` and the autonomous `dream` curation pass
-shipped and live-verified), plus an in-process GC that soft-deletes downvoted
-orphan entities on startup (opt-in; see [Autonomous curation](#autonomous-dream-curation-pass-v2))
+Status: **v1 + v2 + v3 built** (`recall`, the autonomous light `dream` curation
+pass, and a heavy structural tier that also merges duplicates - all shipped and
+live-verified), plus an in-process GC that soft-deletes downvoted orphan entities
+on startup (opt-in; see [Autonomous curation](#v2---dream-autonomous-curation))
 
 A dedicated MCP server that puts an LLM "brain" in front of the mcp-memory
 data store. A caller delegates heavy memory recall to it and receives distilled
@@ -23,9 +24,10 @@ finding, and the measured numbers live in the memory graph (see
 - **Autonomous grooming.** A periodic pass re-ranks stale/duplicate memories
   with no human in the loop.
 
-Non-goals for v1: writing synthesised observations, autonomous *hard* deletion by
-the agent, team hosting. (The agent still never deletes; a separate in-process GC
-may reversibly *soft*-delete downvoted orphans - see below.)
+Non-goals: writing synthesised observations, autonomous *hard* deletion by the
+agent, team hosting. The agent still never hard-deletes; the heavy tier may merge
+duplicates, which only *soft*-deletes the folded-away source (reversible), and a
+separate in-process GC may reversibly *soft*-delete downvoted orphans - see below.
 
 ## Architecture
 
@@ -277,21 +279,28 @@ same pattern as the last-activity marker):
 
 - The agent writes `dream-status.json` next to the database - its config
   snapshot at watcher startup, and the latest pass (wall-clock timestamp,
-  success flag, raw audit text, and a best-effort parse of the audit's
-  `[project/entity-name] - reason` lines) after each `_dream_tick`. Only the
-  most recent pass is kept; the graph's current `vote_score` state is the ground
-  truth for what remains demoted, so no history is retained. The dream ritual
-  pins the audit to that one-line-per-demotion format so the parse is reliable.
+  success flag, raw audit text, tier, and a best-effort parse of the audit's
+  `[project/entity-name] - reason` lines into **operations**) after each
+  `_dream_tick`. Each operation is tagged `merge` (a heavy-tier reason starting
+  with "merged") or `demote`, so the card can tell a structural merge from a
+  downvote. Only the most recent pass is kept; the graph's current `vote_score`
+  state is the ground truth for what remains demoted, so no history is retained.
+  The dream ritual pins the audit to that one-line-per-operation format so the
+  parse is reliable. Each watcher also records its own tier config
+  (enabled/idle-threshold/interval/poll), keyed by tier, so the marker holds both
+  the light and heavy tiers side by side.
 - mcp-memory reads that marker and pairs it with its own live idle time at
   `GET /api/dream`, so the browser gets everything same-origin in one poll (a
   plain route, so polling it records no activity). When the marker is absent
-  (disabled or never run), the config fields report as unavailable but live idle
-  is still returned.
-- The visualiser shows a **dream status card** (enabled/idle/estimated
-  time-to-next-pass/last-ran and the last pass's reported demotions, each row
-  linking to the entity's inspector) and rings every node with a negative
-  `vote_score` in amber as **demoted** - the ground-truth demoted state,
-  including manual downvotes. Undo is the inspector's existing `+1` vote button.
+  (disabled or never run), `tiers` is empty but live idle is still returned.
+- The visualiser shows a **dream status card**: a per-tier line (light and heavy)
+  with each tier's idle-window state, the heavy tier annotated with its static
+  cadence (the interval gate is in-process, so no exact next-pass ETA is
+  computable), the last pass labelled with the tier that ran it, and that pass's
+  operations - merges rendered distinctly from demotes, each row linking to the
+  entity's inspector. It also rings every node with a negative `vote_score` in
+  amber as **demoted** - the ground-truth demoted state, including manual
+  downvotes. Undo is the inspector's existing `+1` vote button.
 
 ### Surfacing recall activity in the visualiser
 
@@ -323,19 +332,63 @@ recall did, and a single latest-only entry is not enough:
   (time, query, duration/turns/cost, coloured by success). When the marker is
   absent the feed reports empty.
 
-### Deferred beyond v2
+## v3 - heavy structural dream tier
+
+A second, less-frequent curation pass on a larger model that does the structural
+work the light tier cannot: it **merges duplicate entities** as well as demoting
+stale ones. Off by default (opt-in via `MCP_DREAM_HEAVY_ENABLED=true`),
+independent of the light tier's `MCP_DREAM_ENABLED`.
+
+- **Mutation surface: `vote_entity` + `merge_entities` only.** Its deny-list is
+  the light-tier deny-list minus `merge_entities` as well as `vote_entity`. Every
+  `delete_*` (and `restore_entity`) stays denied, so the "agent never
+  hard-deletes" guarantee holds: `merge_entities` removes the folded-away source
+  by *soft*-delete only, reversible via `restore_entity` until the grace-window
+  purge. It merges duplicates **within a single project** (never across projects),
+  folding the worse duplicate into the canonical keeper, and downvotes clearly
+  stale/superseded non-duplicates (skipping the saturated `-10` floor). Fully
+  autonomous - it merges unattended in idle windows, which is safe precisely
+  because every merge is a reversible soft-delete.
+- **Model: a stronger one.** Structural merge decisions warrant more capable
+  judgement than the light tier's demotions, so `MCP_DREAM_HEAVY_MODEL` should be
+  a fully-qualified stronger id (a Sonnet id); it defaults to the light dream
+  model only as a safe fallback. Pinning applies as in v1 - a bare alias silently
+  remaps to Opus, and `parse_recall_result` asserts the reported model family.
+- **Two gates, not one longer idle window.** The tier reuses the light idle gate
+  (`MCP_DREAM_HEAVY_IDLE_SECONDS`, default the same 7200s "genuine idle" window)
+  but is spaced out by its **own** interval gate (`MCP_DREAM_HEAVY_INTERVAL_SECONDS`,
+  default 86400s = once/day). A longer idle *threshold* would not work: the light
+  tier's own reads reset the shared `/api/idle` marker, so the idle clock rarely
+  climbs far past the light window - the per-tier interval, tracked from the heavy
+  tier's own last pass, is what makes it infrequent.
+- **Host: a second in-process watcher.** `agent._serve()` starts a `_heavy_watch_loop`
+  alongside the light `_idle_watch_loop`, each gated on its own enabled flag and on
+  the `claude` CLI being present, both cancelled cleanly on shutdown. Both watchers
+  drive the same generic `_tier_tick(last_pass, spec)` via a per-tier `TierSpec`
+  (its getters are thunks resolved at call time), so the tiers share the idle
+  fetch, spawn stack, and pass-recording while differing only in gates, model,
+  ritual, and deny-list.
+- **Sole-writer safety is unchanged.** The heavy tier mutates only by spawning
+  `claude -p`, which calls `mcp__memory__*` over HTTP into the single mcp-memory
+  process - so both tiers firing in one idle window is safe (a light `-1` on an
+  entity a heavy pass folds away is harmless; the merge keeps the higher score and
+  soft-deletes regardless). Each tier's own monotonic interval guard prevents
+  self-spin; no cross-tier coordination is needed.
+- **Marker surfacing.** Each pass records its `tier` ("light"/"heavy") on the
+  shared latest-pass marker, so `/api/dream` and the visualiser can show which tier
+  last ran. Only the light watcher snapshots the config block, so the card's
+  enabled/next-pass fields reflect the light tier; heavy activity is visible via
+  the tagged last pass.
+
+### Deferred beyond v3
 
 - **Synthesised-observation append.** Gated behind observation-level voting
   shipping first: entity-level voting cannot down-rank a single bad observation,
   so auto-append could poison a good entity and compound the model's own
   guesses. See the observation-level-voting task in the memory graph.
-- **Heavy autonomous dream tier.** A second, less-frequent pass on a larger model
-  doing structural curation (merges, relinking) with a mutation set of
-  `vote_entity` + `merge_entities` only - all hard-`delete_*` still denied. See the
-  full-curation task in the memory graph.
 - **Team / cross-device HTTP hosting** with authentication.
 
-## Pre-flight gate (both phases)
+## Pre-flight gate (all phases)
 
 Some environments require a readiness/credential check to pass before an agent
 can be spawned (and spawning when that check would fail risks a hang). This is

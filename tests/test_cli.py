@@ -80,6 +80,13 @@ class TestAgentSpec:
         assert spec.env["MCP_DREAM_IDLE_SECONDS"] == "60"
         assert "MCP_MEMORY_DB_PATH" not in spec.env
 
+    def test_propagates_dream_heavy_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_DREAM_HEAVY_ENABLED", "true")
+        monkeypatch.setenv("MCP_DREAM_HEAVY_INTERVAL_SECONDS", "90")
+        spec = cli._agent_spec("8100")
+        assert spec.env["MCP_DREAM_HEAVY_ENABLED"] == "true"
+        assert spec.env["MCP_DREAM_HEAVY_INTERVAL_SECONDS"] == "90"
+
 
 class TestRenderPlist:
     def test_includes_label_binary_and_every_env_key(self) -> None:

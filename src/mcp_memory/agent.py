@@ -18,6 +18,7 @@ import re
 import shutil
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
@@ -30,6 +31,13 @@ from .cli import _agent_spec, _setup_service_from_spec
 from .config import (
     get_agent_port,
     get_dream_enabled,
+    get_dream_heavy_enabled,
+    get_dream_heavy_idle_seconds,
+    get_dream_heavy_interval_seconds,
+    get_dream_heavy_max_ops,
+    get_dream_heavy_model,
+    get_dream_heavy_poll_seconds,
+    get_dream_heavy_timeout,
     get_dream_idle_seconds,
     get_dream_max_votes,
     get_dream_model,
@@ -44,7 +52,7 @@ from .config import (
 logger = logging.getLogger("memory-agent")
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 
 class SpawnResult(TypedDict):
@@ -109,6 +117,15 @@ DISALLOWED_TOOLS: tuple[str, ...] = (
 # denied, keeping grooming to demote-never-delete.
 DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
     *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS if tool != "vote_entity"),
+    *_DISALLOWED_BUILTINS,
+)
+
+# The heavy tier may also merge duplicates, so vote_entity and merge_entities are
+# the two memory tools it is NOT denied; every delete_* (and restore_entity) stays
+# denied, so removal is never hard - merge only soft-deletes the folded-away source.
+_HEAVY_TIER_ALLOWED = {"vote_entity", "merge_entities"}
+HEAVY_DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
+    *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS if tool not in _HEAVY_TIER_ALLOWED),
     *_DISALLOWED_BUILTINS,
 )
 
@@ -180,6 +197,37 @@ DREAM_RITUAL = (
     "found no clear candidates."
 )
 
+HEAVY_DREAM_RITUAL = (
+    "You are a memory curation agent doing structural grooming of a knowledge graph "
+    "while it is idle, with access to the mcp__memory__* tools. "
+    "The mcp__memory server may report as 'still connecting' on your very first "
+    "turn; ignore that and CALL a memory tool anyway - the connection completes "
+    "before the call runs. "
+    "Your ONLY permitted mutations are: merge_entities (to fold a duplicate entity "
+    "into its canonical twin) and vote_entity with a vote of -1 (to DEMOTE a stale "
+    "entity in ranking). You must NEVER delete anything, NEVER create entities, and "
+    "NEVER cast a positive vote. "
+    "Search broadly ACROSS ALL PROJECTS (search_all_projects, then search_nodes and "
+    "get_entity_with_relations / search_related_nodes to confirm). "
+    "When you find two entities in the same project that describe the same thing, "
+    "merge them: merge_entities(project, source, target) where source is the worse "
+    "duplicate to fold away and target is the canonical keeper. Only merge entities "
+    "you are confident are genuine duplicates, and only within a single project - "
+    "never merge across projects. "
+    "Also demote (vote_entity, -1) entities that are clearly stale or superseded but "
+    "not duplicates, skipping any already at or below a score of -10 (the ranking "
+    "penalty has saturated there). "
+    "Do at most {max_ops} operations (merges plus demotions) this pass - be "
+    "conservative and prefer clear cases over borderline calls. "
+    "When you act, pass each entity's exact project and name slug VERBATIM from the "
+    "tool results. "
+    "Finish with a terse audit summary: exactly one line per operation in the form "
+    "'[project/entity-name] - action reason' (the affected slug in square brackets, "
+    "then a hyphen, then the action and a few words of why, e.g. "
+    "'[proj/task/old] - merged into task/new: duplicate'), or the single line "
+    "'nothing changed' if you found no clear candidates."
+)
+
 RECALL_DESC = (
     "Delegate a HEAVY, multi-step memory recall to a throwaway agent and get back "
     "distilled findings, each tagged with its source [project/entity] slug so you "
@@ -240,6 +288,31 @@ def build_recall_command(
     ]
 
 
+def _build_curation_command(
+    *,
+    claude_bin: str,
+    model: str,
+    mcp_config_path: str,
+    prompt: str,
+    disallowed: tuple[str, ...],
+) -> list[str]:
+    """Build the headless ``claude -p`` argv shared by both dream curation tiers."""
+    return [
+        claude_bin,
+        "-p",
+        prompt,
+        "--model",
+        model,
+        "--mcp-config",
+        mcp_config_path,
+        "--strict-mcp-config",
+        "--disallowedTools",
+        *disallowed,
+        "--output-format",
+        "json",
+    ]
+
+
 def build_dream_command(
     *,
     claude_bin: str,
@@ -248,20 +321,30 @@ def build_dream_command(
     max_votes: int,
 ) -> list[str]:
     """Build the headless ``claude -p`` argv for a downvote-only dream curation spawn."""
-    return [
-        claude_bin,
-        "-p",
-        DREAM_RITUAL.format(max_votes=max_votes),
-        "--model",
-        model,
-        "--mcp-config",
-        mcp_config_path,
-        "--strict-mcp-config",
-        "--disallowedTools",
-        *DREAM_DISALLOWED_TOOLS,
-        "--output-format",
-        "json",
-    ]
+    return _build_curation_command(
+        claude_bin=claude_bin,
+        model=model,
+        mcp_config_path=mcp_config_path,
+        prompt=DREAM_RITUAL.format(max_votes=max_votes),
+        disallowed=DREAM_DISALLOWED_TOOLS,
+    )
+
+
+def build_heavy_dream_command(
+    *,
+    claude_bin: str,
+    model: str,
+    mcp_config_path: str,
+    max_ops: int,
+) -> list[str]:
+    """Build the headless ``claude -p`` argv for a merge-and-downvote heavy curation spawn."""
+    return _build_curation_command(
+        claude_bin=claude_bin,
+        model=model,
+        mcp_config_path=mcp_config_path,
+        prompt=HEAVY_DREAM_RITUAL.format(max_ops=max_ops),
+        disallowed=HEAVY_DREAM_DISALLOWED_TOOLS,
+    )
 
 
 def build_spawn_env(config_dir: str, *, base_env: dict[str, str] | None = None) -> dict[str, str]:
@@ -498,6 +581,22 @@ async def run_dream_pass() -> str:
     return result["text"]
 
 
+async def run_heavy_dream_pass() -> str:
+    """Run one merge-and-downvote heavy curation pass in a throwaway agent, returning its audit."""
+    model = get_dream_heavy_model()
+    result = await _run_isolated_agent(
+        lambda claude_bin, config_path: build_heavy_dream_command(
+            claude_bin=claude_bin,
+            model=model,
+            mcp_config_path=config_path,
+            max_ops=get_dream_heavy_max_ops(),
+        ),
+        model=model,
+        timeout=get_dream_heavy_timeout(),
+    )
+    return result["text"]
+
+
 async def fetch_idle_seconds() -> float | None:
     """Return the mcp-memory server's idle seconds, or None if it cannot be reached.
 
@@ -517,30 +616,21 @@ async def fetch_idle_seconds() -> float | None:
     return float(idle) if isinstance(idle, (int, float)) else None
 
 
-async def _dream_tick(last_pass: float) -> float:
-    """Run a dream pass if memory has been idle long enough, returning the new last-pass time.
+@dataclass(frozen=True)
+class TierSpec:
+    """What varies between the light and heavy dream tiers.
 
-    Requires BOTH the reported memory idle window AND the time since the previous
-    pass to exceed the threshold. The second guard prevents a degenerate pass that
-    makes no tool calls (so it never resets the idle marker) from re-firing every
-    poll. Returns ``last_pass`` unchanged when no pass runs.
+    Each getter is a thunk so it resolves the underlying config at call time,
+    which keeps the two gates live-configurable and keeps tests able to
+    monkeypatch the config functions the thunks call.
     """
-    threshold = get_dream_idle_seconds()
-    idle = await fetch_idle_seconds()
-    if idle is None or idle < threshold:
-        return last_pass
-    now = time.monotonic()
-    if now - last_pass < threshold:
-        return last_pass
-    try:
-        audit = await run_dream_pass()
-    except Exception as exc:
-        logger.exception("dream pass failed")
-        dream_status.record_pass(str(exc), ok=False)
-    else:
-        logger.info("dream: %s", audit)
-        dream_status.record_pass(audit, ok=_pass_succeeded(audit))
-    return now
+
+    name: str
+    enabled_getter: Callable[[], bool]
+    idle_getter: Callable[[], float]
+    interval_getter: Callable[[], float]
+    poll_getter: Callable[[], float]
+    run_pass: Callable[[], Awaitable[str]]
 
 
 def _pass_succeeded(audit: str) -> bool:
@@ -552,37 +642,116 @@ def _pass_succeeded(audit: str) -> bool:
     return not audit.startswith("recall ")
 
 
-async def _idle_watch_loop() -> None:
-    """Poll for a memory-idle window and run a dream curation pass when one opens."""
+async def _tier_tick(last_pass: float, spec: TierSpec) -> float:
+    """Run one tier's pass if both its gates are open, returning the new last-pass time.
+
+    The idle gate checks the reported memory-inactivity window; the interval gate
+    checks the time since this tier's own previous pass. The interval gate both
+    controls a tier's cadence and prevents a degenerate pass that makes no tool
+    calls (so it never resets the shared idle marker) from re-firing every poll.
+    Returns ``last_pass`` unchanged when no pass runs.
+    """
+    idle = await fetch_idle_seconds()
+    if idle is None or idle < spec.idle_getter():
+        return last_pass
+    now = time.monotonic()
+    if now - last_pass < spec.interval_getter():
+        return last_pass
+    try:
+        audit = await spec.run_pass()
+    except Exception as exc:
+        logger.exception("%s dream pass failed", spec.name)
+        dream_status.record_pass(str(exc), ok=False, tier=spec.name)
+    else:
+        logger.info("%s dream: %s", spec.name, audit)
+        dream_status.record_pass(audit, ok=_pass_succeeded(audit), tier=spec.name)
+    return now
+
+
+# Every field is wrapped in a lambda (not passed as a direct reference) so the
+# module-level name resolves at call time. A direct reference would freeze the
+# original function object, defeating the runtime config the getters read and the
+# monkeypatching the tests rely on. The light tier reuses one idle threshold for
+# both gates, matching the single-threshold behaviour before the split.
+_LIGHT_TIER = TierSpec(
+    name="light",
+    enabled_getter=lambda: get_dream_enabled(),  # noqa: PLW0108
+    idle_getter=lambda: get_dream_idle_seconds(),  # noqa: PLW0108
+    interval_getter=lambda: get_dream_idle_seconds(),  # noqa: PLW0108
+    poll_getter=lambda: get_dream_poll_seconds(),  # noqa: PLW0108
+    run_pass=lambda: run_dream_pass(),  # noqa: PLW0108
+)
+
+# The heavy tier shares the light tier's idle gate (same "is memory idle" window)
+# but is spaced out by its own interval gate: the light tier's own reads reset the
+# shared idle marker, so a longer idle threshold would starve it - the interval is
+# what makes it infrequent instead.
+_HEAVY_TIER = TierSpec(
+    name="heavy",
+    enabled_getter=lambda: get_dream_heavy_enabled(),  # noqa: PLW0108
+    idle_getter=lambda: get_dream_heavy_idle_seconds(),  # noqa: PLW0108
+    interval_getter=lambda: get_dream_heavy_interval_seconds(),  # noqa: PLW0108
+    poll_getter=lambda: get_dream_heavy_poll_seconds(),  # noqa: PLW0108
+    run_pass=lambda: run_heavy_dream_pass(),  # noqa: PLW0108
+)
+
+
+async def _dream_tick(last_pass: float) -> float:
+    """Run one light-tier tick (kept as a named wrapper for the watch loop and tests)."""
+    return await _tier_tick(last_pass, _LIGHT_TIER)
+
+
+async def _tier_watch_loop(spec: TierSpec) -> None:
+    """Snapshot this tier's config for the visualiser, then poll and run its passes."""
     dream_status.record_startup(
-        enabled=get_dream_enabled(),
-        idle_threshold_seconds=get_dream_idle_seconds(),
-        poll_seconds=get_dream_poll_seconds(),
+        tier=spec.name,
+        enabled=spec.enabled_getter(),
+        idle_threshold_seconds=spec.idle_getter(),
+        interval_seconds=spec.interval_getter(),
+        poll_seconds=spec.poll_getter(),
     )
     last_pass = 0.0
     while True:
-        await asyncio.sleep(get_dream_poll_seconds())
-        last_pass = await _dream_tick(last_pass)
+        await asyncio.sleep(spec.poll_getter())
+        last_pass = await _tier_tick(last_pass, spec)
+
+
+async def _idle_watch_loop() -> None:
+    """Run the light-tier watch loop."""
+    await _tier_watch_loop(_LIGHT_TIER)
+
+
+async def _heavy_watch_loop() -> None:
+    """Run the heavy-tier watch loop."""
+    await _tier_watch_loop(_HEAVY_TIER)
 
 
 async def _serve() -> None:
-    """Serve over streamable HTTP, running the idle-watcher alongside if enabled.
+    """Serve over streamable HTTP, running the enabled dream-tier watchers alongside.
 
-    The watcher starts only when the dream is enabled AND the claude CLI it would
-    spawn is present; otherwise it would poll forever with every pass no-opping. It
-    is an explicit background task rather than a FastMCP ``lifespan``: in
-    stateless_http mode the low-level server runs per request, so a lifespan task
-    would be spawned and cancelled on every request. Cancelled cleanly on shutdown.
+    Each tier's watcher starts only when that tier is enabled AND the claude CLI it
+    would spawn is present; otherwise it would poll forever with every pass
+    no-opping. They are explicit background tasks rather than a FastMCP
+    ``lifespan``: in stateless_http mode the low-level server runs per request, so a
+    lifespan task would be spawned and cancelled on every request. Cancelled cleanly
+    on shutdown.
     """
     recall_status.record_startup()
-    watcher = (
-        asyncio.create_task(_idle_watch_loop()) if get_dream_enabled() and _claude_bin() else None
-    )
+    claude_present = _claude_bin() is not None
+    watchers = [
+        asyncio.create_task(loop())
+        for loop, enabled in (
+            (_idle_watch_loop, get_dream_enabled),
+            (_heavy_watch_loop, get_dream_heavy_enabled),
+        )
+        if claude_present and enabled()
+    ]
     try:
         await mcp.run_streamable_http_async()
     finally:
-        if watcher is not None:
+        for watcher in watchers:
             watcher.cancel()
+        for watcher in watchers:
             with contextlib.suppress(asyncio.CancelledError):
                 await watcher
 

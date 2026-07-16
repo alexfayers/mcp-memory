@@ -45,6 +45,19 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_MEMORY_GC_ENABLED` | On startup, soft-delete downvoted orphan entities (score at/below `-10` with no live incoming relation). Reversible; the purge below is the only permanent removal. | off |
 | `MCP_MEMORY_PURGE_ENABLED` | On startup, hard-delete soft-deleted entities older than the grace window | off |
 | `MCP_MEMORY_PURGE_GRACE_DAYS` | How long a soft-deleted entity is retained before it may be purged | `30` |
+| `MCP_DREAM_ENABLED` | Run the autonomous light dream tier (downvotes stale/duplicate entities in idle windows) | off |
+| `MCP_DREAM_IDLE_SECONDS` | Memory-inactivity window before a light dream pass may run | `7200` |
+| `MCP_DREAM_POLL_SECONDS` | How often the light-tier watcher checks whether a pass is due | `1800` |
+| `MCP_DREAM_MODEL` | Fully-qualified model id for light dream spawns | recall model |
+| `MCP_DREAM_TIMEOUT` | Timeout for a single light dream spawn (seconds) | `300` |
+| `MCP_DREAM_MAX_VOTES` | Advisory cap on entities a light pass may demote | `15` |
+| `MCP_DREAM_HEAVY_ENABLED` | Run the heavy dream tier (also merges duplicate entities via reversible soft-delete) | off |
+| `MCP_DREAM_HEAVY_IDLE_SECONDS` | Memory-inactivity window before a heavy pass may run | `7200` |
+| `MCP_DREAM_HEAVY_INTERVAL_SECONDS` | Minimum time between successive heavy passes (its cadence control) | `86400` |
+| `MCP_DREAM_HEAVY_POLL_SECONDS` | How often the heavy-tier watcher checks whether a pass is due | `3600` |
+| `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id for heavy spawns (set a stronger model, e.g. a Sonnet id) | light dream model |
+| `MCP_DREAM_HEAVY_TIMEOUT` | Timeout for a single heavy dream spawn (seconds) | `600` |
+| `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges + demotions a heavy pass may do | `10` |
 
 ### MCP client config
 

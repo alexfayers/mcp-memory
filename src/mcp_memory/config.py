@@ -17,6 +17,11 @@ _DEFAULT_DREAM_IDLE_SECONDS = "7200"
 _DEFAULT_DREAM_POLL_SECONDS = "1800"
 _DEFAULT_DREAM_TIMEOUT = "300"
 _DEFAULT_DREAM_MAX_VOTES = "15"
+_DEFAULT_DREAM_HEAVY_IDLE_SECONDS = "7200"
+_DEFAULT_DREAM_HEAVY_INTERVAL_SECONDS = "86400"
+_DEFAULT_DREAM_HEAVY_POLL_SECONDS = "3600"
+_DEFAULT_DREAM_HEAVY_TIMEOUT = "600"
+_DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
 _DEFAULT_PURGE_GRACE_DAYS = "30"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -132,6 +137,61 @@ def get_dream_timeout() -> float:
 def get_dream_max_votes() -> int:
     """Return the advisory cap on how many entities a single dream pass may demote."""
     return int(os.environ.get("MCP_DREAM_MAX_VOTES", _DEFAULT_DREAM_MAX_VOTES))
+
+
+def get_dream_heavy_enabled() -> bool:
+    """Return whether the heavy structural dream tier runs (opt-in, off by default).
+
+    Independent of the light tier's MCP_DREAM_ENABLED - the heavy tier merges
+    duplicates and downvotes, so it is enabled separately and defaults off.
+    """
+    return os.environ.get("MCP_DREAM_HEAVY_ENABLED", "false").strip().lower() in _TRUTHY
+
+
+def get_dream_heavy_idle_seconds() -> float:
+    """Return the memory-inactivity window before a heavy dream pass may run.
+
+    This is the "is memory idle right now" gate, kept the same as the light tier;
+    the heavy tier's rarity comes from its interval gate, not a longer idle window.
+    """
+    return float(os.environ.get("MCP_DREAM_HEAVY_IDLE_SECONDS", _DEFAULT_DREAM_HEAVY_IDLE_SECONDS))
+
+
+def get_dream_heavy_interval_seconds() -> float:
+    """Return the minimum time between successive heavy dream passes.
+
+    The light tier's own reads reset the shared idle marker, so a longer idle
+    window would starve the heavy tier; its cadence is controlled by this
+    per-tier interval instead.
+    """
+    return float(
+        os.environ.get("MCP_DREAM_HEAVY_INTERVAL_SECONDS", _DEFAULT_DREAM_HEAVY_INTERVAL_SECONDS)
+    )
+
+
+def get_dream_heavy_poll_seconds() -> float:
+    """Return how often the heavy-tier watcher checks whether a pass is due."""
+    return float(os.environ.get("MCP_DREAM_HEAVY_POLL_SECONDS", _DEFAULT_DREAM_HEAVY_POLL_SECONDS))
+
+
+def get_dream_heavy_model() -> str:
+    """Return the model id for heavy dream spawns, defaulting to the light dream model.
+
+    Structural curation (merges) benefits from a stronger model, so set
+    MCP_DREAM_HEAVY_MODEL to a fully-qualified id (e.g. a Sonnet id); a bare alias
+    silently remaps to Opus. The light-model default is only a safe fallback.
+    """
+    return os.environ.get("MCP_DREAM_HEAVY_MODEL") or get_dream_model()
+
+
+def get_dream_heavy_timeout() -> float:
+    """Return the overall timeout for a single heavy dream spawn."""
+    return float(os.environ.get("MCP_DREAM_HEAVY_TIMEOUT", _DEFAULT_DREAM_HEAVY_TIMEOUT))
+
+
+def get_dream_heavy_max_ops() -> int:
+    """Return the advisory cap on how many entities a single heavy pass may merge or demote."""
+    return int(os.environ.get("MCP_DREAM_HEAVY_MAX_OPS", _DEFAULT_DREAM_HEAVY_MAX_OPS))
 
 
 def get_purge_enabled() -> bool:

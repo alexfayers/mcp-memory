@@ -87,6 +87,58 @@ class TestDreamConfig:
         assert config.get_dream_max_votes() == 3
 
 
+class TestDreamHeavyConfig:
+    def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_ENABLED", raising=False)
+        assert config.get_dream_heavy_enabled() is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
+    def test_enabled_by_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_DREAM_HEAVY_ENABLED", value)
+        assert config.get_dream_heavy_enabled() is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "nonsense"])
+    def test_disabled_by_non_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_DREAM_HEAVY_ENABLED", value)
+        assert config.get_dream_heavy_enabled() is False
+
+    def test_idle_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_IDLE_SECONDS", raising=False)
+        assert config.get_dream_heavy_idle_seconds() == 7200.0
+        monkeypatch.setenv("MCP_DREAM_HEAVY_IDLE_SECONDS", "60")
+        assert config.get_dream_heavy_idle_seconds() == 60.0
+
+    def test_interval_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_INTERVAL_SECONDS", raising=False)
+        assert config.get_dream_heavy_interval_seconds() == 86400.0
+        monkeypatch.setenv("MCP_DREAM_HEAVY_INTERVAL_SECONDS", "120")
+        assert config.get_dream_heavy_interval_seconds() == 120.0
+
+    def test_poll_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_POLL_SECONDS", raising=False)
+        assert config.get_dream_heavy_poll_seconds() == 3600.0
+        monkeypatch.setenv("MCP_DREAM_HEAVY_POLL_SECONDS", "5")
+        assert config.get_dream_heavy_poll_seconds() == 5.0
+
+    def test_model_defaults_to_dream_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_MODEL", raising=False)
+        assert config.get_dream_heavy_model() == config.get_dream_model()
+        monkeypatch.setenv("MCP_DREAM_HEAVY_MODEL", "some-heavy-model")
+        assert config.get_dream_heavy_model() == "some-heavy-model"
+
+    def test_timeout_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_TIMEOUT", raising=False)
+        assert config.get_dream_heavy_timeout() == 600.0
+        monkeypatch.setenv("MCP_DREAM_HEAVY_TIMEOUT", "30")
+        assert config.get_dream_heavy_timeout() == 30.0
+
+    def test_max_ops_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_MAX_OPS", raising=False)
+        assert config.get_dream_heavy_max_ops() == 10
+        monkeypatch.setenv("MCP_DREAM_HEAVY_MAX_OPS", "2")
+        assert config.get_dream_heavy_max_ops() == 2
+
+
 class TestPurgeConfig:
     def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_MEMORY_PURGE_ENABLED", raising=False)

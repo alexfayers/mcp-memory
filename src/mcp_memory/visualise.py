@@ -39,19 +39,15 @@ def get_project_paths(db: DatabaseManager) -> dict[str, list[str]]:
 def get_dream_state() -> dict[str, object]:
     """Compose the persisted dream status with live idle so the UI polls it in one call.
 
-    The dream runs in the separate memory-agent process and persists its config and
-    latest pass to a shared marker; this reads that marker and pairs it with the
-    server's own live idle time. When the marker is absent (the dream never ran or
-    is disabled), the config fields report as unavailable but live idle is still
-    included.
+    The dream runs in the separate memory-agent process and persists each tier's
+    config and the latest pass to a shared marker; this reads that marker and pairs
+    it with the server's own live idle time. When the marker is absent (the dream
+    never ran or is disabled), ``tiers`` is empty but live idle is still included.
     """
     status = dream_status.read_status()
-    config = status["config"] if status else None
     return {
         "available": status is not None,
-        "enabled": bool(config["enabled"]) if config else False,
-        "idle_threshold_seconds": config["idle_threshold_seconds"] if config else None,
-        "poll_seconds": config["poll_seconds"] if config else None,
+        "tiers": status["configs"] if status else {},
         "last_pass": status["last_pass"] if status else None,
         "idle_seconds": activity.idle_seconds(),
         "last_activity": activity.last_activity(),
