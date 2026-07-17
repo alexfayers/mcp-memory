@@ -114,6 +114,26 @@ class DatabaseManager:
                         f"Path '{normalized}' is already registered to another project"
                     ) from exc
 
+    def add_project_path(self, project: str, path: str) -> None:
+        """Register one filesystem path for a project without replacing its existing paths.
+
+        Idempotent and additive: unlike set_project_paths (which replaces all of a
+        project's paths), this inserts a single path via INSERT OR IGNORE. Because
+        project_paths.path is globally UNIQUE, a path already registered to another
+        project is silently left untouched rather than raising - the intended
+        no-clobber behaviour for automatic registration, where a path another project
+        already owns means "already handled, do not steal it".
+        """
+        if not project or not isinstance(project, str):
+            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
+
+        with self._db:
+            project_id = self._get_or_create_project_id(project)
+            self._db.execute(
+                "INSERT OR IGNORE INTO project_paths (project_id, path) VALUES (?, ?)",
+                (project_id, normalize_path(path)),
+            )
+
     def list_project_paths(self, project: str | None = None) -> list[tuple[str, str]]:
         """Return (project_name, registered_path) mappings, optionally for one project."""
         sql = "SELECT p.name, pp.path FROM project_paths pp JOIN projects p ON pp.project_id = p.id"

@@ -172,6 +172,20 @@ class TestGcConfig:
         assert config.get_gc_enabled() is False
 
 
+class TestWorkspaceMarkers:
+    def test_empty_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_WORKSPACE_MARKERS", raising=False)
+        assert config.get_workspace_markers() == ()
+
+    def test_parses_comma_separated_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_WORKSPACE_MARKERS", ".marker, packageInfo")
+        assert config.get_workspace_markers() == (".marker", "packageInfo")
+
+    def test_ignores_blank_entries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_WORKSPACE_MARKERS", " , .marker ,,")
+        assert config.get_workspace_markers() == (".marker",)
+
+
 class TestDetectServicePort:
     def test_reads_launchd_plist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         plist = tmp_path / "com.mcp-memory.plist"

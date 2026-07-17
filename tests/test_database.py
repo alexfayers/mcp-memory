@@ -586,6 +586,43 @@ class TestProjectPaths:
         assert db.get_paths_for_project("ghost") == []
         assert "ghost" not in db.list_projects()
 
+    def test_add_project_path_registers_without_replacing(
+        self, db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        first.mkdir()
+        second.mkdir()
+        db.set_project_paths("platform", [str(first)])
+        db.add_project_path("platform", str(second))
+        assert db.get_project_for_path(str(first)) == "platform"
+        assert db.get_project_for_path(str(second)) == "platform"
+
+    def test_add_project_path_is_idempotent(self, db: DatabaseManager, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        db.add_project_path("platform", str(repo))
+        db.add_project_path("platform", str(repo))
+        assert db.get_paths_for_project("platform") == [normalize_path(str(repo))]
+
+    def test_add_project_path_creates_project_row(
+        self, db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        db.add_project_path("brand-new", str(repo))
+        assert "brand-new" in db.list_projects()
+
+    def test_add_project_path_ignores_path_owned_by_another_project(
+        self, db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        db.set_project_paths("platform", [str(repo)])
+        db.add_project_path("other", str(repo))
+        assert db.get_project_for_path(str(repo)) == "platform"
+        assert db.get_paths_for_project("other") == []
+
     def test_paths_for_entity_name_single_project(
         self, db: DatabaseManager, tmp_path: Path
     ) -> None:

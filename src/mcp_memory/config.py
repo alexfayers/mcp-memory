@@ -58,6 +58,18 @@ def get_data_dir() -> Path:
     return get_db_path().parent
 
 
+def get_workspace_markers() -> tuple[str, ...]:
+    """Return the directory names that mark a multi-package workspace root.
+
+    Read from MCP_MEMORY_WORKSPACE_MARKERS (comma-separated), empty by default so
+    the feature stays opt-in and build-system-agnostic. When a marker directory is
+    found above a package's own repository root, that outer directory is treated as
+    the workspace root so sibling packages share one project scope.
+    """
+    raw = os.environ.get("MCP_MEMORY_WORKSPACE_MARKERS", "")
+    return tuple(marker.strip() for marker in raw.split(",") if marker.strip())
+
+
 def get_agent_port() -> int:
     """Return the HTTP port for the memory-agent server."""
     return int(os.environ.get("MCP_AGENT_PORT", _DEFAULT_AGENT_PORT))

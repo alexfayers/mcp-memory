@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
+from mcp_memory.config import get_db_path
+from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.plugin import (
     _EDIT_TOOL_WEIGHT,
     MemoryPlugin,
@@ -14,8 +16,11 @@ from mcp_memory.hooks.plugin import (
     _is_file_edit,
     _is_memory_read,
     _parse_mcp_arguments,
+    _resolve_anchor,
+    _safe_project,
     _workspace_entity_note,
 )
+from mcp_memory.path_resolver import normalize_path
 
 _READ_TOOL_NAMES = [
     "search_nodes",
@@ -70,6 +75,160 @@ class TestFindProjectFromPath:
         assert _find_project_from_path(str(inner / "file.py")) == "inner"
 
 
+class TestResolveAnchor:
+    def test_returns_git_root_when_no_marker_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MCP_MEMORY_WORKSPACE_MARKERS", raising=False)
+        pkg = tmp_path / "workspace" / "src" / "PkgA"
+        (pkg / ".git").mkdir(parents=True)
+        assert _resolve_anchor(str(pkg / "lib" / "x.py")) == (pkg.resolve(), "PkgA")
+
+    def test_collapses_to_workspace_root_when_marker_found(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_WORKSPACE_MARKERS", ".marker")
+        workspace = tmp_path / "workspace"
+        (workspace / ".marker").mkdir(parents=True)
+        pkg = workspace / "src" / "PkgA"
+        (pkg / ".git").mkdir(parents=True)
+        assert _resolve_anchor(str(pkg / "lib" / "x.py")) == (workspace.resolve(), "PkgA")
+
+    def test_returns_none_when_no_git_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MCP_MEMORY_WORKSPACE_MARKERS", raising=False)
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        assert _resolve_anchor(str(plain)) is None
+
+
+class TestSafeProject:
+    def test_reuses_project_already_mapped_under_anchor(self, tmp_path: Path) -> None:
+        db = DatabaseManager(tmp_path / "memory.db")
+        workspace = tmp_path / "workspace"
+        (workspace / "src" / "PkgA").mkdir(parents=True)
+        db.set_project_paths("platform", [str(workspace)])
+        assert _safe_project(workspace, "PkgA", db) == "platform"
+
+    def test_pins_to_existing_project_matching_basename(self, tmp_path: Path) -> None:
+        db = DatabaseManager(tmp_path / "memory.db")
+        db.create_entities(
+            "PkgA", [{"name": "task/x", "entityType": "task", "observations": ["o"]}]
+        )
+        anchor = tmp_path / "PkgA"
+        anchor.mkdir()
+        assert _safe_project(anchor, "PkgA", db) == "PkgA"
+
+    def test_reuses_project_already_mapped_below_anchor(self, tmp_path: Path) -> None:
+        db = DatabaseManager(tmp_path / "memory.db")
+        workspace = tmp_path / "workspace"
+        (workspace / "src" / "PkgA").mkdir(parents=True)
+        db.set_project_paths("platform", [str(workspace / "src" / "PkgA")])
+        assert _safe_project(workspace, "workspace", db) == "platform"
+
+    def test_returns_none_when_name_is_unknown(self, tmp_path: Path) -> None:
+        db = DatabaseManager(tmp_path / "memory.db")
+        anchor = tmp_path / "BrandNew"
+        anchor.mkdir()
+        assert _safe_project(anchor, "BrandNew", db) is None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point every test at a throwaway database so none touches the real user memory DB."""
+    monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "hooks-test.db"))
+
+
+def _real_plugin() -> MemoryPlugin:
+    """A MemoryPlugin with only the tracker side-effects patched (auto-register left live)."""
+    with (
+        patch("mcp_memory.hooks.plugin.clear"),
+        patch("mcp_memory.hooks.plugin.reset"),
+    ):
+        return MemoryPlugin()
+
+
+class TestAutoRegister:
+    def _db(self) -> DatabaseManager:
+        return DatabaseManager(get_db_path())
+
+    def test_pins_to_existing_project_matching_basename(self, tmp_path: Path) -> None:
+        db = self._db()
+        db.create_entities(
+            "acme", [{"name": "project/acme", "entityType": "project", "observations": ["root"]}]
+        )
+        repo = tmp_path / "acme"
+        (repo / ".git").mkdir(parents=True)
+        result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+        assert self._db().get_project_for_path(str(repo)) == "acme"
+        assert any("acme" in note for note in result.notes)
+
+    def test_pins_via_existing_sibling_mapping(self, tmp_path: Path) -> None:
+        db = self._db()
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        db.set_project_paths("platform", [str(repo / "sub")])
+        _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+        assert self._db().get_project_for_path(str(repo)) == "platform"
+
+    def test_note_but_no_mint_when_unknown(self, tmp_path: Path) -> None:
+        repo = tmp_path / "weird"
+        (repo / ".git").mkdir(parents=True)
+        result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+        assert "weird" not in self._db().list_projects()
+        assert any("set_project_paths" in note for note in result.notes)
+
+    def test_no_clobber_when_already_mapped(self, tmp_path: Path) -> None:
+        db = self._db()
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        db.set_project_paths("platform", [str(repo)])
+        _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+        assert self._db().get_paths_for_project("platform") == [normalize_path(str(repo))]
+
+    def test_home_anchor_is_never_registered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".git").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        db = self._db()
+        db.create_entities(
+            "home", [{"name": "project/home", "entityType": "project", "observations": ["r"]}]
+        )
+        _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(home)])
+        assert self._db().get_project_for_path(str(home)) is None
+
+    def test_collapses_to_workspace_marker_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_WORKSPACE_MARKERS", ".marker")
+        workspace = tmp_path / "workspace"
+        (workspace / ".marker").mkdir(parents=True)
+        pkg = workspace / "src" / "PkgA"
+        (pkg / ".git").mkdir(parents=True)
+        db = self._db()
+        db.create_entities(
+            "PkgA", [{"name": "project/PkgA", "entityType": "project", "observations": ["r"]}]
+        )
+        _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(pkg)])
+        assert self._db().get_project_for_path(str(workspace / "src" / "PkgB")) == "PkgA"
+
+    def test_db_error_does_not_break_task_start(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = tmp_path / "acme"
+        (repo / ".git").mkdir(parents=True)
+
+        def _boom(_path: object) -> DatabaseManager:
+            raise OSError("db unavailable")
+
+        monkeypatch.setattr("mcp_memory.hooks.plugin.DatabaseManager", _boom)
+        result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+        assert result is not None
+
+
 @pytest.fixture
 def plugin() -> MemoryPlugin:
     """Create a fresh MemoryPlugin with tracker functions mocked out."""
@@ -88,6 +247,7 @@ def plugin() -> MemoryPlugin:
         patch("mcp_memory.hooks.plugin.has_scope_blocked", side_effect=_has_blocked),
         patch("mcp_memory.hooks.plugin.mark_scope_blocked", side_effect=_mark_blocked),
         patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value=None),
+        patch.object(MemoryPlugin, "_maybe_auto_register", return_value=None),
     ):
         yield MemoryPlugin()
 
