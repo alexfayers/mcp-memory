@@ -12,20 +12,21 @@ ground truth for what remains demoted, so no rolling history is needed.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import time
-from typing import TYPE_CHECKING, TypedDict, cast
+from pathlib import Path
+from typing import TypedDict, cast
 
 from .config import get_data_dir
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-_SCHEMA = 2
+_SCHEMA = 3
 _OPERATION_RE = re.compile(r"\[([^/\]]+)/([^\]]+)\]")
 
 _configs: dict[str, DreamConfig] = {}
 _last_pass: PassRecord | None = None
+_running: str | None = None
 
 
 class Operation(TypedDict):
@@ -56,16 +57,16 @@ class DreamConfig(TypedDict):
 
     enabled: bool
     idle_threshold_seconds: float
-    interval_seconds: float
     poll_seconds: float
 
 
 class DreamStatus(TypedDict):
-    """The persisted dream state: per-tier config plus the most recent pass."""
+    """The persisted dream state: per-tier config, the most recent pass, and any live run."""
 
     schema: int
     configs: dict[str, DreamConfig]
     last_pass: PassRecord | None
+    running: str | None
 
 
 def parse_operations(audit_text: str) -> list[Operation]:
@@ -93,34 +94,43 @@ def record_startup(
     tier: str = "light",
     enabled: bool,
     idle_threshold_seconds: float,
-    interval_seconds: float,
     poll_seconds: float,
 ) -> None:
     """Snapshot one tier's config to the marker, preserving any prior pass on disk.
 
-    ``tier`` keys the config so the light and heavy watchers each record their own
-    without clobbering the other - both are asyncio tasks in the one memory-agent
-    process, so the second call accumulates into the shared ``_configs`` dict.
+    ``tier`` keys the config so the light and heavy tiers each record their own
+    without clobbering the other - the coordinator records both at startup, so the
+    second call accumulates into the shared ``_configs`` dict.
+
+    Resets any ``running`` flag: on a fresh process nothing is truly in flight, so
+    this bounds a stale flag a crash may have left mid-pass (mirroring recall_status).
     """
-    global _last_pass  # noqa: PLW0603
+    global _last_pass, _running  # noqa: PLW0603
     _configs[tier] = {
         "enabled": enabled,
         "idle_threshold_seconds": idle_threshold_seconds,
-        "interval_seconds": interval_seconds,
         "poll_seconds": poll_seconds,
     }
     if _last_pass is None:
         _last_pass = _read_last_pass()
+    _running = None
+    _write()
+
+
+def record_pass_start(tier: str) -> None:
+    """Mark a curation pass of ``tier`` as in flight, for the visualiser's live indicator."""
+    global _running  # noqa: PLW0603
+    _running = tier
     _write()
 
 
 def record_pass(audit_text: str, *, ok: bool, tier: str = "light") -> None:
-    """Record the most recent dream pass (raw audit plus parsed operations).
+    """Record the most recent dream pass (raw audit plus parsed operations) and clear ``running``.
 
     ``tier`` names which curation tier ran the pass ("light" or "heavy"); the two
     tiers share this single latest-pass slot, so it disambiguates whichever ran last.
     """
-    global _last_pass  # noqa: PLW0603
+    global _last_pass, _running  # noqa: PLW0603
     _last_pass = {
         "ts": time.time(),
         "ok": ok,
@@ -128,6 +138,7 @@ def record_pass(audit_text: str, *, ok: bool, tier: str = "light") -> None:
         "audit_text": audit_text,
         "operations": parse_operations(audit_text),
     }
+    _running = None
     _write()
 
 
@@ -137,10 +148,11 @@ def read_status() -> DreamStatus | None:
 
 
 def clear() -> None:
-    """Reset the in-memory config and pass (for test isolation)."""
-    global _configs, _last_pass  # noqa: PLW0603
+    """Reset the in-memory config, pass, and running flag (for test isolation)."""
+    global _configs, _last_pass, _running  # noqa: PLW0603
     _configs = {}
     _last_pass = None
+    _running = None
 
 
 def _status_path() -> Path:
@@ -149,12 +161,30 @@ def _status_path() -> Path:
 
 
 def _write() -> None:
-    """Persist the current per-tier config and last pass to the marker file."""
-    status: DreamStatus = {"schema": _SCHEMA, "configs": _configs, "last_pass": _last_pass}
+    """Persist the current config, last pass, and running flag atomically (temp file + replace).
+
+    The running flag is written on every pass boundary and read by the separate
+    mcp-memory process, so a plain write could expose a torn file; ``replace`` swaps
+    it in atomically.
+    """
+    status: DreamStatus = {
+        "schema": _SCHEMA,
+        "configs": _configs,
+        "last_pass": _last_pass,
+        "running": _running,
+    }
     try:
         path = _status_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(status), encoding="utf-8")
+        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        tmp_path = Path(tmp)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(status, handle)
+            tmp_path.replace(path)
+        except OSError:
+            tmp_path.unlink()
+            raise
     except OSError:
         pass
 
@@ -162,10 +192,10 @@ def _write() -> None:
 def _read_file() -> DreamStatus | None:
     """Read and validate the marker file, tolerating a missing or malformed file.
 
-    A legacy schema-1 marker (a single flat ``config`` and ``demotions`` on the last
-    pass) is normalised on read: the flat config becomes ``configs["light"]`` and its
-    ``interval_seconds`` defaults to the idle threshold. The marker self-heals on the
-    next ``record_startup`` (which fires on the deploy restart), so this is a read-shim,
+    Legacy markers are normalised on read: a schema-1 marker's single flat ``config``
+    becomes ``configs["light"]``, and any tier config still carrying the removed
+    ``interval_seconds`` key has it dropped. The marker self-heals on the next
+    ``record_startup`` (which fires on the deploy restart), so this is a read-shim,
     not a persisted migration.
     """
     try:
@@ -174,10 +204,21 @@ def _read_file() -> DreamStatus | None:
         return None
     if not isinstance(raw, dict):
         return None
+    running = raw.get("running")
     return {
         "schema": _SCHEMA,
         "configs": _normalise_configs(raw),
         "last_pass": _normalise_last_pass(raw.get("last_pass")),
+        "running": running if isinstance(running, str) else None,
+    }
+
+
+def _tier_config(raw: dict[str, object]) -> DreamConfig:
+    """Project a raw config dict onto DreamConfig, dropping any extra (legacy) keys."""
+    return {
+        "enabled": bool(raw.get("enabled")),
+        "idle_threshold_seconds": float(cast("float", raw["idle_threshold_seconds"])),
+        "poll_seconds": float(cast("float", raw["poll_seconds"])),
     }
 
 
@@ -185,19 +226,11 @@ def _normalise_configs(raw: dict[str, object]) -> dict[str, DreamConfig]:
     """Return the per-tier configs, wrapping a legacy flat ``config`` as the light tier."""
     configs = raw.get("configs")
     if isinstance(configs, dict):
-        return cast("dict[str, DreamConfig]", configs)
+        return {tier: _tier_config(cfg) for tier, cfg in configs.items() if isinstance(cfg, dict)}
     legacy = raw.get("config")
     if not isinstance(legacy, dict):
         return {}
-    idle_threshold = float(legacy["idle_threshold_seconds"])
-    return {
-        "light": {
-            "enabled": bool(legacy.get("enabled")),
-            "idle_threshold_seconds": idle_threshold,
-            "interval_seconds": float(legacy.get("interval_seconds", idle_threshold)),
-            "poll_seconds": float(legacy["poll_seconds"]),
-        }
-    }
+    return {"light": _tier_config(legacy)}
 
 
 def _normalise_last_pass(last_pass: object) -> PassRecord | None:

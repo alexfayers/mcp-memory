@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp_memory import agent, cli, dream_status, recall_status
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
 _MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -20,10 +21,13 @@ _MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 @pytest.fixture(autouse=True)
 def _isolate_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Isolate the status markers on disk so recording never touches the real data dir."""
+    """Isolate the status markers on disk and reset the coordinator state per test."""
     monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     dream_status.clear()
     recall_status.clear()
+    agent._dream_running = False
+    agent._manual_tasks.clear()
+    agent._session = agent._SessionState()
 
 
 def _acoro(value: object) -> object:
@@ -306,227 +310,321 @@ class TestFetchIdleSeconds:
         assert asyncio.run(agent.fetch_idle_seconds()) is None
 
 
-class TestTierTick:
-    @staticmethod
-    def _spec(
-        monkeypatch: pytest.MonkeyPatch,
-        *,
-        idle: float | None,
-        now: float,
-        idle_gate: float,
-        interval_gate: float,
-        passes: list[str],
-        recorded: list[tuple[str, bool, str]],
-    ) -> agent.TierSpec:
-        monkeypatch.setattr(agent, "fetch_idle_seconds", _acoro(idle))
-        monkeypatch.setattr(agent.time, "monotonic", lambda: now)
+def _threshold_spec(name: str, threshold: float) -> agent.TierSpec:
+    """Build a TierSpec whose only meaningful field is its idle threshold."""
+    return agent.TierSpec(
+        name=name,
+        enabled_getter=lambda: True,
+        idle_getter=lambda: threshold,
+        poll_getter=lambda: 1.0,
+        run_pass=_acoro("audit"),  # type: ignore[arg-type]
+    )
 
-        async def fake_pass() -> str:
-            passes.append("ran")
-            return "[p/task/x] - merged into task/y"
 
-        def fake_record(audit_text: str, *, ok: bool, tier: str = "light") -> None:
-            recorded.append((audit_text, ok, tier))
+class TestDueTiers:
+    """The pure decision function: which tiers should fire for a (now, idle) sample."""
 
-        monkeypatch.setattr(agent.dream_status, "record_pass", fake_record)
-        return agent.TierSpec(
-            name="heavy",
-            enabled_getter=lambda: True,
-            idle_getter=lambda: idle_gate,
-            interval_getter=lambda: interval_gate,
-            poll_getter=lambda: 1.0,
-            run_pass=fake_pass,
+    _LIGHT = _threshold_spec("light", 1800.0)
+    _HEAVY = _threshold_spec("heavy", 5400.0)
+
+    def test_no_tier_is_due_below_the_smallest_threshold(self) -> None:
+        state = agent._SessionState()
+        due = agent._due_tiers(state, now=100_000.0, idle=100.0, tiers=[self._LIGHT, self._HEAVY])
+        assert due == []
+        assert state.anchor is None  # no session established while still active
+
+    def test_establishes_session_and_fires_light_at_its_threshold(self) -> None:
+        state = agent._SessionState()
+        due = agent._due_tiers(state, now=100_000.0, idle=1800.0, tiers=[self._LIGHT, self._HEAVY])
+        assert [spec.name for spec in due] == ["light"]
+        assert state.anchor == 100_000.0 - 1800.0  # back-dated to the true session start
+
+    def test_does_not_refire_a_tier_already_fired_this_session(self) -> None:
+        state = agent._SessionState(anchor=98_200.0, fired={"light"}, last_pass_end=100_000.0)
+        due = agent._due_tiers(state, now=101_800.0, idle=3600.0, tiers=[self._LIGHT, self._HEAVY])
+        assert due == []  # light fired; heavy not yet due (genuine idle 3600 < 5400)
+
+    def test_heavy_fires_later_in_the_same_session(self) -> None:
+        # Light already fired; the idle clock has climbed to the heavy threshold.
+        state = agent._SessionState(anchor=98_200.0, fired={"light"}, last_pass_end=100_000.0)
+        due = agent._due_tiers(state, now=103_600.0, idle=5400.0, tiers=[self._LIGHT, self._HEAVY])
+        assert [spec.name for spec in due] == ["heavy"]
+
+    def test_returns_due_tiers_ascending_by_threshold(self) -> None:
+        state = agent._SessionState()
+        due = agent._due_tiers(state, now=100_000.0, idle=9000.0, tiers=[self._HEAVY, self._LIGHT])
+        assert [spec.name for spec in due] == ["light", "heavy"]
+
+    def test_user_activity_ends_the_session_and_rearms(self) -> None:
+        # Both tiers fired; then a marker touch well after our last pass = the user
+        # returned. The session resets, so a fresh idle window can fire them again.
+        state = agent._SessionState(
+            anchor=98_200.0, fired={"light", "heavy"}, last_pass_end=100_000.0
         )
+        due = agent._due_tiers(state, now=200_000.0, idle=50.0, tiers=[self._LIGHT, self._HEAVY])
+        assert due == []  # just-active, nothing due yet
+        assert state.anchor is None
+        assert state.fired == set()
+        # The clock climbs again in the new session: light fires once more.
+        due = agent._due_tiers(state, now=205_000.0, idle=1800.0, tiers=[self._LIGHT, self._HEAVY])
+        assert [spec.name for spec in due] == ["light"]
 
-    def test_runs_pass_and_tags_tier_when_both_gates_pass(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        passes: list[str] = []
-        recorded: list[tuple[str, bool, str]] = []
-        spec = self._spec(
-            monkeypatch,
-            idle=8000.0,
-            now=100_000.0,
-            idle_gate=7200.0,
-            interval_gate=86400.0,
-            passes=passes,
-            recorded=recorded,
-        )
-        new_last_pass = asyncio.run(agent._tier_tick(0.0, spec))
-        assert passes == ["ran"]
-        assert new_last_pass == 100_000.0
-        assert recorded == [("[p/task/x] - merged into task/y", True, "heavy")]
-
-    def test_skips_when_idle_gate_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        passes: list[str] = []
-        recorded: list[tuple[str, bool, str]] = []
-        spec = self._spec(
-            monkeypatch,
-            idle=100.0,
-            now=100_000.0,
-            idle_gate=7200.0,
-            interval_gate=1.0,
-            passes=passes,
-            recorded=recorded,
-        )
-        assert asyncio.run(agent._tier_tick(42.0, spec)) == 42.0
-        assert passes == []
-
-    def test_skips_when_interval_gate_fails_though_idle(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Idle window is wide open, but not enough time has passed since this
-        # tier's own last pass - the interval gate holds it off.
-        passes: list[str] = []
-        recorded: list[tuple[str, bool, str]] = []
-        spec = self._spec(
-            monkeypatch,
-            idle=999_999.0,
-            now=100_000.0,
-            idle_gate=7200.0,
-            interval_gate=86400.0,
-            passes=passes,
-            recorded=recorded,
-        )
-        assert asyncio.run(agent._tier_tick(99_000.0, spec)) == 99_000.0
-        assert passes == []
+    def test_a_self_caused_marker_reset_does_not_end_the_session(self) -> None:
+        # The dream's own tool calls reset the marker, but its implied activity is at
+        # or before our last pass, so it must NOT be read as the user returning.
+        state = agent._SessionState(anchor=98_200.0, fired={"light"}, last_pass_end=100_050.0)
+        due = agent._due_tiers(state, now=103_600.0, idle=5400.0, tiers=[self._LIGHT, self._HEAVY])
+        assert state.anchor == 98_200.0  # session intact
+        assert [spec.name for spec in due] == ["heavy"]
 
 
-class TestDreamTick:
+class TestCoordinatorTick:
     @staticmethod
     def _wire(
         monkeypatch: pytest.MonkeyPatch,
         *,
         idle: float | None,
         now: float,
-        passes: list[str],
-        outcome: str | Exception = "audit",
-        recorded: list[tuple[str, bool, str]] | None = None,
+        tiers: list[agent.TierSpec],
     ) -> None:
-        monkeypatch.setattr(agent, "get_dream_idle_seconds", lambda: 7200.0)
         monkeypatch.setattr(agent, "fetch_idle_seconds", _acoro(idle))
         monkeypatch.setattr(agent.time, "monotonic", lambda: now)
+        monkeypatch.setattr(agent, "_enabled_tiers", lambda: tiers)
+        monkeypatch.setattr(agent.dream_status, "record_pass_start", lambda _tier: None)
+        monkeypatch.setattr(agent.dream_status, "record_pass", lambda *_a, **_k: None)
+
+    @staticmethod
+    def _run_spec(name: str, threshold: float, runs: list[str]) -> agent.TierSpec:
+        async def fake_pass() -> str:
+            runs.append(name)
+            return "nothing demoted"
+
+        return agent.TierSpec(
+            name=name,
+            enabled_getter=lambda: True,
+            idle_getter=lambda: threshold,
+            poll_getter=lambda: 1.0,
+            run_pass=fake_pass,
+        )
+
+    def test_light_fires_once_then_not_again_while_idle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runs: list[str] = []
+        light = self._run_spec("light", 1800.0, runs)
+        self._wire(monkeypatch, idle=1800.0, now=100_000.0, tiers=[light])
+        asyncio.run(agent._coordinator_tick())
+        assert runs == ["light"]
+        # Still idle a poll later - the tier has fired this session, so it holds off.
+        monkeypatch.setattr(agent, "fetch_idle_seconds", _acoro(2100.0))
+        monkeypatch.setattr(agent.time, "monotonic", lambda: 100_300.0)
+        asyncio.run(agent._coordinator_tick())
+        assert runs == ["light"]
+
+    def test_heavy_fires_once_at_its_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        runs: list[str] = []
+        heavy = self._run_spec("heavy", 5400.0, runs)
+        self._wire(monkeypatch, idle=5400.0, now=100_000.0, tiers=[heavy])
+        asyncio.run(agent._coordinator_tick())
+        assert runs == ["heavy"]
+
+    def test_light_then_heavy_fire_in_the_same_idle_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runs: list[str] = []
+        light = self._run_spec("light", 1800.0, runs)
+        heavy = self._run_spec("heavy", 5400.0, runs)
+        # Light fires first at 30 min idle.
+        self._wire(monkeypatch, idle=1800.0, now=100_000.0, tiers=[light, heavy])
+        asyncio.run(agent._coordinator_tick())
+        # The clock climbs to 90 min in the SAME session; heavy fires, light does not re-fire.
+        monkeypatch.setattr(agent, "fetch_idle_seconds", _acoro(5400.0))
+        monkeypatch.setattr(agent.time, "monotonic", lambda: 103_600.0)
+        asyncio.run(agent._coordinator_tick())
+        assert runs == ["light", "heavy"]
+
+    def test_returns_without_firing_when_idle_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runs: list[str] = []
+        light = self._run_spec("light", 1800.0, runs)
+        self._wire(monkeypatch, idle=None, now=100_000.0, tiers=[light])
+        asyncio.run(agent._coordinator_tick())
+        assert runs == []
+        assert agent._session.anchor is None  # a missing sample establishes nothing
+
+    def test_does_not_fire_when_the_guard_is_held(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        runs: list[str] = []
+        light = self._run_spec("light", 1800.0, runs)
+        self._wire(monkeypatch, idle=1800.0, now=100_000.0, tiers=[light])
+        monkeypatch.setattr(agent, "_dream_running", True)
+        asyncio.run(agent._coordinator_tick())
+        assert runs == []
+        assert "light" not in agent._session.fired  # unclaimed tier retries next poll
+
+    def test_user_activity_rearms_a_fired_tier(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        runs: list[str] = []
+        light = self._run_spec("light", 1800.0, runs)
+        self._wire(monkeypatch, idle=1800.0, now=100_000.0, tiers=[light])
+        asyncio.run(agent._coordinator_tick())
+        assert runs == ["light"]
+        # The user returns (marker touched well after our pass), then goes idle again.
+        monkeypatch.setattr(agent, "fetch_idle_seconds", _acoro(50.0))
+        monkeypatch.setattr(agent.time, "monotonic", lambda: 200_000.0)
+        asyncio.run(agent._coordinator_tick())
+        monkeypatch.setattr(agent, "fetch_idle_seconds", _acoro(1800.0))
+        monkeypatch.setattr(agent.time, "monotonic", lambda: 205_000.0)
+        asyncio.run(agent._coordinator_tick())
+        assert runs == ["light", "light"]
+
+
+def _tier_spec(name: str, run_pass: Callable[[], Awaitable[str]]) -> agent.TierSpec:
+    """Build a minimal TierSpec whose gates are irrelevant (guard tests call it directly)."""
+    return agent.TierSpec(
+        name=name,
+        enabled_getter=lambda: True,
+        idle_getter=lambda: 0.0,
+        poll_getter=lambda: 0.0,
+        run_pass=run_pass,
+    )
+
+
+class TestRunGuarded:
+    def test_runs_and_records_when_free(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        recorded: list[tuple[str, bool, str]] = []
+        monkeypatch.setattr(
+            agent.dream_status,
+            "record_pass",
+            lambda audit, *, ok, tier="light": recorded.append((audit, ok, tier)),
+        )
+        spec = _tier_spec("light", _acoro("[p/task/x] - stale"))  # type: ignore[arg-type]
+        assert asyncio.run(agent._run_guarded(spec)) is True
+        assert recorded == [("[p/task/x] - stale", True, "light")]
+        assert agent._dream_running is False  # slot released after the run
+
+    def test_skips_when_already_running(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        passes: list[str] = []
 
         async def fake_pass() -> str:
             passes.append("ran")
-            if isinstance(outcome, Exception):
-                raise outcome
-            return outcome
+            return "audit"
 
-        monkeypatch.setattr(agent, "run_dream_pass", fake_pass)
-
-        def fake_record(audit_text: str, *, ok: bool, tier: str = "light") -> None:
-            if recorded is not None:
-                recorded.append((audit_text, ok, tier))
-
-        monkeypatch.setattr(agent.dream_status, "record_pass", fake_record)
-
-    def test_runs_pass_when_idle_exceeds_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        passes: list[str] = []
-        self._wire(monkeypatch, idle=8000.0, now=100_000.0, passes=passes)
-        new_last_pass = asyncio.run(agent._dream_tick(0.0))
-        assert passes == ["ran"]
-        assert new_last_pass == 100_000.0
-
-    def test_skips_when_below_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        passes: list[str] = []
-        self._wire(monkeypatch, idle=100.0, now=100_000.0, passes=passes)
-        new_last_pass = asyncio.run(agent._dream_tick(42.0))
-        assert passes == []
-        assert new_last_pass == 42.0
-
-    def test_skips_when_idle_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        passes: list[str] = []
-        self._wire(monkeypatch, idle=None, now=100_000.0, passes=passes)
-        assert asyncio.run(agent._dream_tick(42.0)) == 42.0
+        monkeypatch.setattr(agent, "_dream_running", True)
+        spec = _tier_spec("light", fake_pass)
+        assert asyncio.run(agent._run_guarded(spec)) is False
         assert passes == []
 
-    def test_anti_spin_holds_off_a_second_pass_too_soon(
+    def test_releases_the_slot_even_when_the_pass_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr(agent.dream_status, "record_pass", lambda *_args, **_kwargs: None)
+
+        async def boom() -> str:
+            raise RuntimeError("boom")
+
+        spec = _tier_spec("heavy", boom)
+        assert asyncio.run(agent._run_guarded(spec)) is True
+        assert agent._dream_running is False
+
+    def test_stamps_last_pass_end_on_the_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # last_pass_end is what lets the coordinator attribute a marker reset to the
+        # dream itself; it must be stamped at the end of every claimed pass.
+        monkeypatch.setattr(agent.dream_status, "record_pass", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(agent.time, "monotonic", lambda: 123_456.0)
+        spec = _tier_spec("light", _acoro("nothing demoted"))  # type: ignore[arg-type]
+        asyncio.run(agent._run_guarded(spec))
+        assert agent._session.last_pass_end == 123_456.0
+
+
+class TestTriggerDream:
+    def test_unknown_tier_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "_claude_bin", lambda: "/usr/bin/claude")
+        result = agent.trigger_dream("bogus")
+        assert result == {"started": False, "reason": "unknown tier"}
+
+    def test_missing_claude_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "_claude_bin", lambda: None)
+        result = agent.trigger_dream("light")
+        assert result == {"started": False, "reason": "claude CLI not found"}
+
+    def test_already_running_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "_claude_bin", lambda: "/usr/bin/claude")
+        monkeypatch.setattr(agent, "_dream_running", True)
+        result = agent.trigger_dream("light")
+        assert result == {"started": False, "reason": "already running"}
+
+    def test_starts_a_background_pass_regardless_of_enabled_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(agent, "_claude_bin", lambda: "/usr/bin/claude")
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
         passes: list[str] = []
-        self._wire(monkeypatch, idle=8000.0, now=100_000.0, passes=passes)
-        after_first = asyncio.run(agent._dream_tick(0.0))
+
+        async def fake_pass() -> str:
+            passes.append("ran")
+            return "nothing demoted"
+
+        monkeypatch.setattr(agent, "run_dream_pass", fake_pass)
+        monkeypatch.setattr(agent.dream_status, "record_pass", lambda *_a, **_k: None)
+        monkeypatch.setattr(agent.dream_status, "record_pass_start", lambda _tier: None)
+
+        async def drive() -> dict[str, object]:
+            result = agent.trigger_dream("light")
+            await asyncio.gather(*agent._manual_tasks)
+            return result
+
+        result = asyncio.run(drive())
+        assert result == {"started": True}
         assert passes == ["ran"]
-        second = asyncio.run(agent._dream_tick(after_first))
-        assert passes == ["ran"]
-        assert second == after_first
-
-    def test_survives_a_failing_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        passes: list[str] = []
-        self._wire(
-            monkeypatch,
-            idle=8000.0,
-            now=100_000.0,
-            passes=passes,
-            outcome=RuntimeError("boom"),
-        )
-        new_last_pass = asyncio.run(agent._dream_tick(0.0))
-        assert passes == ["ran"]
-        assert new_last_pass == 100_000.0
-
-    def test_records_a_successful_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        recorded: list[tuple[str, bool, str]] = []
-        self._wire(
-            monkeypatch,
-            idle=8000.0,
-            now=100_000.0,
-            passes=[],
-            outcome="[p/task/x] - stale",
-            recorded=recorded,
-        )
-        asyncio.run(agent._dream_tick(0.0))
-        assert recorded == [("[p/task/x] - stale", True, "light")]
-
-    def test_records_a_handled_failure_as_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        recorded: list[tuple[str, bool, str]] = []
-        self._wire(
-            monkeypatch,
-            idle=8000.0,
-            now=100_000.0,
-            passes=[],
-            outcome="recall unavailable: claude CLI not found",
-            recorded=recorded,
-        )
-        asyncio.run(agent._dream_tick(0.0))
-        assert recorded == [("recall unavailable: claude CLI not found", False, "light")]
-
-    def test_records_a_raising_pass_as_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        recorded: list[tuple[str, bool, str]] = []
-        self._wire(
-            monkeypatch,
-            idle=8000.0,
-            now=100_000.0,
-            passes=[],
-            outcome=RuntimeError("boom"),
-            recorded=recorded,
-        )
-        asyncio.run(agent._dream_tick(0.0))
-        assert len(recorded) == 1
-        assert recorded[0][1] is False
 
 
-class TestIdleWatchLoop:
-    def test_cancels_cleanly(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(agent, "get_dream_poll_seconds", lambda: 0.0)
-        monkeypatch.setattr(agent, "get_dream_idle_seconds", lambda: 7200.0)
-        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
-        starts: list[bool] = []
+class TestDreamTriggerRoute:
+    @staticmethod
+    def _client() -> httpx.AsyncClient:
+        transport = httpx.ASGITransport(app=agent.mcp.streamable_http_app())
+        return httpx.AsyncClient(transport=transport, base_url="http://test")
+
+    @pytest.mark.anyio
+    async def test_started_returns_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "trigger_dream", lambda _tier: {"started": True})
+        async with self._client() as client:
+            resp = await client.post("/api/dream/trigger", json={"tier": "light"})
+        assert resp.status_code == 200
+        assert resp.json() == {"started": True}
+
+    @pytest.mark.anyio
+    async def test_rejected_returns_409(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            agent.dream_status,
-            "record_startup",
-            lambda **_kwargs: starts.append(True),
+            agent, "trigger_dream", lambda _tier: {"started": False, "reason": "already running"}
         )
-        ticks: list[agent.TierSpec] = []
+        async with self._client() as client:
+            resp = await client.post("/api/dream/trigger", json={"tier": "light"})
+        assert resp.status_code == 409
+        assert resp.json()["reason"] == "already running"
 
-        async def fake_tick(last_pass: float, spec: agent.TierSpec) -> float:
-            ticks.append(spec)
-            return last_pass
+    @pytest.mark.anyio
+    async def test_missing_tier_returns_400(self) -> None:
+        async with self._client() as client:
+            resp = await client.post("/api/dream/trigger", json={})
+        assert resp.status_code == 400
+        assert resp.json()["started"] is False
 
-        monkeypatch.setattr(agent, "_tier_tick", fake_tick)
+
+class TestCoordinatorLoop:
+    def test_cancels_cleanly_and_ticks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
+        monkeypatch.setattr(agent, "get_dream_poll_seconds", lambda: 0.0)
+        monkeypatch.setattr(agent.dream_status, "record_startup", lambda **_kwargs: None)
+        ticks: list[bool] = []
+
+        async def fake_tick() -> None:
+            ticks.append(True)
+
+        monkeypatch.setattr(agent, "_coordinator_tick", fake_tick)
 
         async def drive() -> None:
-            task = asyncio.create_task(agent._idle_watch_loop())
+            task = asyncio.create_task(agent._coordinator_loop())
             await asyncio.sleep(0.05)
             task.cancel()
             await task
@@ -534,26 +632,26 @@ class TestIdleWatchLoop:
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(drive())
         assert ticks  # the loop ran at least one tick before cancellation
-        assert ticks[0].name == "light"  # the light tier drives this loop
-        assert starts == [True]  # config snapshotted once before the loop
 
-    def test_heavy_loop_records_its_own_startup(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(agent, "get_dream_heavy_poll_seconds", lambda: 3600.0)
-        monkeypatch.setattr(agent, "get_dream_heavy_idle_seconds", lambda: 7200.0)
-        monkeypatch.setattr(agent, "get_dream_heavy_interval_seconds", lambda: 86400.0)
+    def test_records_startup_for_each_enabled_tier(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
         monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
+        monkeypatch.setattr(agent, "get_dream_idle_seconds", lambda: 1800.0)
+        monkeypatch.setattr(agent, "get_dream_poll_seconds", lambda: 300.0)
+        monkeypatch.setattr(agent, "get_dream_heavy_idle_seconds", lambda: 5400.0)
+        monkeypatch.setattr(agent, "get_dream_heavy_poll_seconds", lambda: 900.0)
         recorded: list[dict[str, object]] = []
         monkeypatch.setattr(
             agent.dream_status, "record_startup", lambda **kwargs: recorded.append(kwargs)
         )
 
-        async def fake_tick(last_pass: float, spec: agent.TierSpec) -> float:
-            return last_pass
+        async def fake_tick() -> None:
+            pass
 
-        monkeypatch.setattr(agent, "_tier_tick", fake_tick)
+        monkeypatch.setattr(agent, "_coordinator_tick", fake_tick)
 
         async def drive() -> None:
-            task = asyncio.create_task(agent._heavy_watch_loop())
+            task = asyncio.create_task(agent._coordinator_loop())
             await asyncio.sleep(0.05)
             task.cancel()
             await task
@@ -562,12 +660,17 @@ class TestIdleWatchLoop:
             asyncio.run(drive())
         assert recorded == [
             {
+                "tier": "light",
+                "enabled": True,
+                "idle_threshold_seconds": 1800.0,
+                "poll_seconds": 300.0,
+            },
+            {
                 "tier": "heavy",
                 "enabled": True,
-                "idle_threshold_seconds": 7200.0,
-                "interval_seconds": 86400.0,
-                "poll_seconds": 3600.0,
-            }
+                "idle_threshold_seconds": 5400.0,
+                "poll_seconds": 900.0,
+            },
         ]
 
 
@@ -591,56 +694,61 @@ class TestAgentCli:
 
 
 class TestServe:
-    def test_starts_watcher_when_dream_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
-        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
-        started: list[str] = []
-
+    @staticmethod
+    def _wire_coordinator(monkeypatch: pytest.MonkeyPatch, started: list[str]) -> None:
         async def fake_loop() -> None:
-            started.append("watching")
+            started.append("coordinating")
             await asyncio.sleep(3600)
 
         async def fake_serve_http() -> None:
             await asyncio.sleep(0.02)
 
-        monkeypatch.setattr(agent, "_idle_watch_loop", fake_loop)
+        monkeypatch.setattr(agent, "_coordinator_loop", fake_loop)
         monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
-        asyncio.run(agent._serve())
-        assert started == ["watching"]
 
-    def test_no_watcher_when_dream_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
+    def test_starts_coordinator_when_a_tier_is_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
         started: list[str] = []
+        self._wire_coordinator(monkeypatch, started)
+        asyncio.run(agent._serve())
+        assert started == ["coordinating"]
 
-        async def fake_loop() -> None:
-            started.append("watching")
+    def test_starts_coordinator_when_only_heavy_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        started: list[str] = []
+        self._wire_coordinator(monkeypatch, started)
+        asyncio.run(agent._serve())
+        assert started == ["coordinating"]
 
-        async def fake_serve_http() -> None:
-            await asyncio.sleep(0.02)
-
-        monkeypatch.setattr(agent, "_idle_watch_loop", fake_loop)
-        monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
+    def test_no_coordinator_when_all_tiers_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
+        started: list[str] = []
+        self._wire_coordinator(monkeypatch, started)
         asyncio.run(agent._serve())
         assert started == []
 
-    def test_no_watcher_when_claude_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_no_coordinator_when_claude_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
         monkeypatch.setattr(agent.shutil, "which", lambda _: None)
         started: list[str] = []
-
-        async def fake_loop() -> None:
-            started.append("watching")
-
-        async def fake_serve_http() -> None:
-            await asyncio.sleep(0.02)
-
-        monkeypatch.setattr(agent, "_idle_watch_loop", fake_loop)
-        monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
+        self._wire_coordinator(monkeypatch, started)
         asyncio.run(agent._serve())
         assert started == []
 
     def test_resets_recall_active_at_boot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
         recall_status.record_start()  # a stale in-flight count a crash could leave
 
         async def fake_serve_http() -> None:
@@ -651,59 +759,6 @@ class TestServe:
         status = recall_status.read_status()
         assert status is not None
         assert status["active"] == 0
-
-    @staticmethod
-    def _wire_watchers(monkeypatch: pytest.MonkeyPatch, started: list[str]) -> None:
-        async def fake_light() -> None:
-            started.append("light")
-            await asyncio.sleep(3600)
-
-        async def fake_heavy() -> None:
-            started.append("heavy")
-            await asyncio.sleep(3600)
-
-        async def fake_serve_http() -> None:
-            await asyncio.sleep(0.02)
-
-        monkeypatch.setattr(agent, "_idle_watch_loop", fake_light)
-        monkeypatch.setattr(agent, "_heavy_watch_loop", fake_heavy)
-        monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
-
-    def test_starts_heavy_watcher_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
-        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
-        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
-        started: list[str] = []
-        self._wire_watchers(monkeypatch, started)
-        asyncio.run(agent._serve())
-        assert started == ["heavy"]
-
-    def test_no_heavy_watcher_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
-        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
-        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
-        started: list[str] = []
-        self._wire_watchers(monkeypatch, started)
-        asyncio.run(agent._serve())
-        assert started == []
-
-    def test_no_heavy_watcher_when_claude_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
-        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
-        monkeypatch.setattr(agent.shutil, "which", lambda _: None)
-        started: list[str] = []
-        self._wire_watchers(monkeypatch, started)
-        asyncio.run(agent._serve())
-        assert started == []
-
-    def test_runs_both_watchers_when_both_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
-        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
-        monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
-        started: list[str] = []
-        self._wire_watchers(monkeypatch, started)
-        asyncio.run(agent._serve())
-        assert sorted(started) == ["heavy", "light"]
 
 
 class TestSpawnEnv:

@@ -105,8 +105,14 @@ svg { width: 100vw; height: 100vh; }
 #dream-head .pill { display: inline-flex; align-items: center; gap: 6px; color: #8b949e; }
 #dream-head .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #484f58; flex-shrink: 0; }
 #dream-head.on .pill .dot { background: #bc8cff; box-shadow: 0 0 6px #bc8cff; }
+#dream-head.running .pill .dot { background: #bc8cff; box-shadow: 0 0 6px #bc8cff; animation: glowpulse 1.6s ease-in-out infinite; }
 #dream-head .idle { margin-left: auto; color: #6e7681; font-variant-numeric: tabular-nums; }
+#dream-head.running .idle { color: #bc8cff; }
 #dream-body { padding: 6px 12px; }
+#dream-actions { display: flex; align-items: center; gap: 6px; padding: 4px 12px 8px; border-top: 1px solid #21262d; }
+#dream-actions button { padding: 2px 10px; font-size: 11px; }
+#dream-actions button:disabled { opacity: 0.5; cursor: default; }
+#dream-action-msg { color: #6e7681; font-size: 11px; }
 #dream-body .line { color: #8b949e; padding: 2px 0; }
 #dream-body .line .em { color: #c9d1d9; font-variant-numeric: tabular-nums; }
 #dream-body .line .why { color: #6e7681; }
@@ -170,6 +176,11 @@ svg { width: 100vw; height: 100vh; }
       <span class="idle" id="dream-idle"></span>
     </div>
     <div id="dream-body"></div>
+    <div id="dream-actions">
+      <button id="dream-run-light" data-tier="light">Run light</button>
+      <button id="dream-run-heavy" data-tier="heavy">Run heavy</button>
+      <span id="dream-action-msg"></span>
+    </div>
   </div>
 </div>
 <div id="panel">
@@ -653,17 +664,13 @@ function formatDuration(seconds) {
 }
 
 function tierLine(name, cfg, idleSeconds) {
-  // A tier's live status line, showing only what the marker can know: the idle-window
-  // state. The heavy tier's interval gate is in-process (not persisted), so its cadence
-  // is shown as a static note, never a fabricated countdown to the next pass.
+  // A tier's live status line: each tier fires once per idle session when genuine
+  // idle reaches its threshold, so the line shows only the idle-window state.
   if (!cfg || !cfg.enabled) return "";
   const label = name.charAt(0).toUpperCase() + name.slice(1);
   const remaining = cfg.idle_threshold_seconds - idleSeconds;
   const idleState = remaining <= 0 ? "idle window open" : `~${formatDuration(remaining)} to idle`;
-  const cadence = name === "heavy"
-    ? ` <span class="why">· runs at most every ${formatDuration(cfg.interval_seconds)}</span>`
-    : "";
-  return `<div class="line">${label}: <span class="em">${idleState}</span>${cadence}</div>`;
+  return `<div class="line">${label}: <span class="em">${idleState}</span></div>`;
 }
 
 function renderDream(d) {
@@ -671,9 +678,11 @@ function renderDream(d) {
   const anyEnabled = d.available && Object.values(tiers).some(c => c && c.enabled);
   const head = document.getElementById("dream-head");
   head.classList.toggle("on", !!anyEnabled);
+  head.classList.toggle("running", !!d.running);
   document.getElementById("dream-state").textContent =
     !d.available ? "dream · unknown" : anyEnabled ? "dream · on" : "dream · off";
-  document.getElementById("dream-idle").textContent = `idle ${formatDuration(d.idle_seconds)}`;
+  document.getElementById("dream-idle").textContent =
+    d.running ? `${d.running} running` : `idle ${formatDuration(d.idle_seconds)}`;
 
   const body = document.getElementById("dream-body");
   const lines = [];
@@ -726,6 +735,22 @@ document.getElementById("dream-body").onclick = (e) => {
   const node = nodes.find(n => n.id === row.dataset.name && n.project === row.dataset.project);
   if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
 };
+
+const dreamButtons = [...document.querySelectorAll("#dream-actions button")];
+async function triggerDream(tier) {
+  const msg = document.getElementById("dream-action-msg");
+  msg.textContent = "";
+  dreamButtons.forEach(b => b.disabled = true);
+  try {
+    const res = await fetch("/api/dream/trigger", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier }) });
+    const data = await res.json().catch(() => ({}));
+    if (!data.started) msg.textContent = data.reason || "could not start";
+    await fetchDream();  // reflect the running state immediately
+  } catch (e) { msg.textContent = "could not start"; }
+  finally { dreamButtons.forEach(b => b.disabled = false); }
+}
+dreamButtons.forEach(b => b.onclick = () => triggerDream(b.dataset.tier));
+
 fetchDream();
 setInterval(fetchDream, 5000);
 

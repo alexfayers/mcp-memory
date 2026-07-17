@@ -74,18 +74,16 @@ class TestRecordAndRead:
     def test_startup_records_light_config_by_default(self) -> None:
         dream_status.record_startup(
             enabled=True,
-            idle_threshold_seconds=7200.0,
-            interval_seconds=7200.0,
-            poll_seconds=1800.0,
+            idle_threshold_seconds=1800.0,
+            poll_seconds=300.0,
         )
         status = dream_status.read_status()
         assert status is not None
         assert status["configs"] == {
             "light": {
                 "enabled": True,
-                "idle_threshold_seconds": 7200.0,
-                "interval_seconds": 7200.0,
-                "poll_seconds": 1800.0,
+                "idle_threshold_seconds": 1800.0,
+                "poll_seconds": 300.0,
             }
         }
         assert status["last_pass"] is None
@@ -94,33 +92,29 @@ class TestRecordAndRead:
         dream_status.record_startup(
             tier="heavy",
             enabled=True,
-            idle_threshold_seconds=7200.0,
-            interval_seconds=86400.0,
-            poll_seconds=3600.0,
+            idle_threshold_seconds=5400.0,
+            poll_seconds=900.0,
         )
         status = dream_status.read_status()
         assert status is not None
         assert status["configs"]["heavy"] == {
             "enabled": True,
-            "idle_threshold_seconds": 7200.0,
-            "interval_seconds": 86400.0,
-            "poll_seconds": 3600.0,
+            "idle_threshold_seconds": 5400.0,
+            "poll_seconds": 900.0,
         }
 
     def test_both_tiers_coexist_in_the_marker(self) -> None:
         dream_status.record_startup(
             tier="light",
             enabled=True,
-            idle_threshold_seconds=7200.0,
-            interval_seconds=7200.0,
-            poll_seconds=1800.0,
+            idle_threshold_seconds=1800.0,
+            poll_seconds=300.0,
         )
         dream_status.record_startup(
             tier="heavy",
             enabled=False,
-            idle_threshold_seconds=7200.0,
-            interval_seconds=86400.0,
-            poll_seconds=3600.0,
+            idle_threshold_seconds=5400.0,
+            poll_seconds=900.0,
         )
         status = dream_status.read_status()
         assert status is not None
@@ -153,11 +147,43 @@ class TestRecordAndRead:
         )
         status = dream_status.read_status()
         assert status is not None
-        assert status["configs"]["light"]["interval_seconds"] == 3600.0
+        assert status["configs"]["light"] == {
+            "enabled": True,
+            "idle_threshold_seconds": 3600.0,
+            "poll_seconds": 900.0,
+        }
         assert status["last_pass"] is not None
         assert status["last_pass"]["operations"] == [
             {"project": "p", "name": "task/x", "reason": "stale", "action": "demote"}
         ]
+
+    def test_drops_legacy_interval_seconds_from_a_config_on_read(self) -> None:
+        path = dream_status._status_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": 2,
+                    "configs": {
+                        "heavy": {
+                            "enabled": True,
+                            "idle_threshold_seconds": 1800.0,
+                            "interval_seconds": 86400.0,
+                            "poll_seconds": 900.0,
+                        }
+                    },
+                    "last_pass": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["configs"]["heavy"] == {
+            "enabled": True,
+            "idle_threshold_seconds": 1800.0,
+            "poll_seconds": 900.0,
+        }
 
     def test_record_pass_sets_last_pass_with_operations(
         self, monkeypatch: pytest.MonkeyPatch
@@ -165,9 +191,8 @@ class TestRecordAndRead:
         monkeypatch.setattr(dream_status.time, "time", lambda: 5000.0)
         dream_status.record_startup(
             enabled=True,
-            idle_threshold_seconds=7200.0,
-            interval_seconds=7200.0,
-            poll_seconds=1800.0,
+            idle_threshold_seconds=1800.0,
+            poll_seconds=300.0,
         )
         dream_status.record_pass("[scratch/task/old] - stale", ok=True)
         status = dream_status.read_status()
@@ -182,9 +207,7 @@ class TestRecordAndRead:
         ]
 
     def test_record_pass_retains_raw_text_when_unparseable(self) -> None:
-        dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=1.0, interval_seconds=1.0, poll_seconds=1.0
-        )
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
         dream_status.record_pass("nothing demoted", ok=True)
         status = dream_status.read_status()
         assert status is not None
@@ -193,9 +216,7 @@ class TestRecordAndRead:
         assert status["last_pass"]["operations"] == []
 
     def test_failed_pass_records_ok_false(self) -> None:
-        dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=1.0, interval_seconds=1.0, poll_seconds=1.0
-        )
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
         dream_status.record_pass("recall timed out", ok=False)
         status = dream_status.read_status()
         assert status is not None
@@ -203,9 +224,7 @@ class TestRecordAndRead:
         assert status["last_pass"]["ok"] is False
 
     def test_pass_defaults_to_light_tier(self) -> None:
-        dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=1.0, interval_seconds=1.0, poll_seconds=1.0
-        )
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
         dream_status.record_pass("[p/task/x] - stale", ok=True)
         status = dream_status.read_status()
         assert status is not None
@@ -213,9 +232,7 @@ class TestRecordAndRead:
         assert status["last_pass"]["tier"] == "light"
 
     def test_pass_records_heavy_tier(self) -> None:
-        dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=1.0, interval_seconds=1.0, poll_seconds=1.0
-        )
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
         dream_status.record_pass("[p/task/old] - merged into task/new", ok=True, tier="heavy")
         status = dream_status.read_status()
         assert status is not None
@@ -223,28 +240,20 @@ class TestRecordAndRead:
         assert status["last_pass"]["tier"] == "heavy"
 
     def test_tier_survives_restart(self) -> None:
-        dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=1.0, interval_seconds=1.0, poll_seconds=1.0
-        )
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
         dream_status.record_pass("[p/task/old] - merged", ok=True, tier="heavy")
         dream_status.clear()  # simulate a restart: in-memory state lost, disk retained
-        dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=1.0, interval_seconds=1.0, poll_seconds=1.0
-        )
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
         status = dream_status.read_status()
         assert status is not None
         assert status["last_pass"] is not None
         assert status["last_pass"]["tier"] == "heavy"
 
     def test_startup_preserves_prior_last_pass_across_restart(self) -> None:
-        dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=1.0, interval_seconds=1.0, poll_seconds=1.0
-        )
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
         dream_status.record_pass("[p/task/x] - gone", ok=True)
         dream_status.clear()  # simulate a restart: in-memory state lost, disk retained
-        dream_status.record_startup(
-            enabled=False, idle_threshold_seconds=2.0, interval_seconds=2.0, poll_seconds=2.0
-        )
+        dream_status.record_startup(enabled=False, idle_threshold_seconds=2.0, poll_seconds=2.0)
         status = dream_status.read_status()
         assert status is not None
         assert status["configs"]["light"]["enabled"] is False
@@ -258,9 +267,57 @@ class TestRecordAndRead:
         assert dream_status.read_status() is None
 
     def test_clear_resets_in_memory_state(self) -> None:
-        dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=1.0, interval_seconds=1.0, poll_seconds=1.0
-        )
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
         dream_status.clear()
         assert dream_status._configs == {}
         assert dream_status._last_pass is None
+
+
+class TestRunning:
+    def test_absent_marker_has_no_running_tier(self) -> None:
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["running"] is None
+
+    def test_pass_start_marks_the_running_tier(self) -> None:
+        dream_status.record_pass_start("heavy")
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["running"] == "heavy"
+
+    def test_pass_clears_the_running_tier(self) -> None:
+        dream_status.record_pass_start("light")
+        dream_status.record_pass("nothing demoted", ok=True)
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["running"] is None
+
+    def test_startup_resets_a_stale_running_tier(self) -> None:
+        dream_status.record_pass_start("light")  # a phantom left by a crash mid-pass
+        dream_status.clear()  # simulate a restart: in-memory state lost, disk retained
+        dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["running"] is None
+
+    def test_legacy_marker_without_running_reads_as_none(self) -> None:
+        path = dream_status._status_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"schema": 2, "configs": {}, "last_pass": None}), encoding="utf-8"
+        )
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["running"] is None
+
+    def test_write_leaves_no_temp_file(self) -> None:
+        dream_status.record_pass_start("light")
+        dream_status.record_pass("nothing demoted", ok=True)
+        leftovers = list(dream_status._status_path().parent.glob("*.tmp"))
+        assert leftovers == []
+
+    def test_clear_resets_running(self) -> None:
+        dream_status.record_pass_start("light")
+        dream_status.clear()
+        assert dream_status._running is None

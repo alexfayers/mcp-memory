@@ -18,13 +18,14 @@ import re
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
 import anyio
 import httpx
 from mcp.server.fastmcp import FastMCP
+from starlette.responses import JSONResponse
 
 from . import dream_status, recall_status
 from .cli import _agent_spec, _setup_service_from_spec
@@ -33,7 +34,6 @@ from .config import (
     get_dream_enabled,
     get_dream_heavy_enabled,
     get_dream_heavy_idle_seconds,
-    get_dream_heavy_interval_seconds,
     get_dream_heavy_max_ops,
     get_dream_heavy_model,
     get_dream_heavy_poll_seconds,
@@ -53,6 +53,8 @@ logger = logging.getLogger("memory-agent")
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    from starlette.requests import Request
 
 
 class SpawnResult(TypedDict):
@@ -621,14 +623,13 @@ class TierSpec:
     """What varies between the light and heavy dream tiers.
 
     Each getter is a thunk so it resolves the underlying config at call time,
-    which keeps the two gates live-configurable and keeps tests able to
+    which keeps the idle threshold live-configurable and keeps tests able to
     monkeypatch the config functions the thunks call.
     """
 
     name: str
     enabled_getter: Callable[[], bool]
     idle_getter: Callable[[], float]
-    interval_getter: Callable[[], float]
     poll_getter: Callable[[], float]
     run_pass: Callable[[], Awaitable[str]]
 
@@ -642,21 +643,64 @@ def _pass_succeeded(audit: str) -> bool:
     return not audit.startswith("recall ")
 
 
-async def _tier_tick(last_pass: float, spec: TierSpec) -> float:
-    """Run one tier's pass if both its gates are open, returning the new last-pass time.
+# Global single-flight guard: at most one dream (light OR heavy, scheduled OR
+# manual) runs at a time. A plain bool suffices because every tier watcher and
+# every manual trigger runs in the one memory-agent event loop, so a check-and-set
+# with no await in between is atomic - and unlike a module-level asyncio.Lock it
+# does not bind to a single event loop (tests each run on a fresh loop).
+_dream_running = False
+# Manual triggers spawn a background task; hold a reference so it is not garbage
+# collected mid-run (asyncio only holds a weak reference to running tasks).
+_manual_tasks: set[asyncio.Task[None]] = set()
 
-    The idle gate checks the reported memory-inactivity window; the interval gate
-    checks the time since this tier's own previous pass. The interval gate both
-    controls a tier's cadence and prevents a degenerate pass that makes no tool
-    calls (so it never resets the shared idle marker) from re-firing every poll.
-    Returns ``last_pass`` unchanged when no pass runs.
+# Slack (seconds) allowed between a dream pass's own marker reset and when we
+# observe it, before an idle-marker touch counts as real user activity. Tied to
+# activity._MARKER_THROTTLE_SECONDS (60.0): a self-caused reset can surface up to
+# ~60s stale due to the throttled marker write, plus fetch latency. Err large -
+# too small a margin misreads the dream's own delayed reset as the user returning,
+# re-arming the session early and re-creating the sawtooth that starves the heavy tier.
+_SESSION_END_MARGIN_SECONDS = 60.0
+
+
+@dataclass
+class _SessionState:
+    """Mutable state of the current idle session, shared across coordinator ticks.
+
+    ``anchor`` is the monotonic instant the current idle session began (None when
+    no session is active). ``fired`` names the tiers already fired this session.
+    ``last_pass_end`` is the monotonic instant our last pass finished, used to
+    attribute a marker reset to the dream itself rather than to the user.
     """
-    idle = await fetch_idle_seconds()
-    if idle is None or idle < spec.idle_getter():
-        return last_pass
-    now = time.monotonic()
-    if now - last_pass < spec.interval_getter():
-        return last_pass
+
+    anchor: float | None = None
+    fired: set[str] = field(default_factory=set)
+    last_pass_end: float = 0.0
+
+
+# Single coordinator session state; reset in tests via ``agent._session = _SessionState()``.
+_session = _SessionState()
+
+
+def _claim_dream() -> bool:
+    """Claim the single-flight slot, returning False if a dream is already running."""
+    global _dream_running  # noqa: PLW0603
+    if _dream_running:
+        return False
+    _dream_running = True
+    return True
+
+
+async def _run_claimed(spec: TierSpec) -> None:
+    """Run one already-claimed pass: record start, run, record outcome, release the slot.
+
+    The caller MUST have claimed the slot via ``_claim_dream`` first; this always
+    releases it. ``record_pass_start`` / ``record_pass`` bracket the run so the
+    visualiser can show the pass as in flight. Stamping ``_session.last_pass_end``
+    here - the single chokepoint shared by the scheduled and manual paths - is what
+    lets the coordinator tell the dream's own marker reset from real user activity.
+    """
+    global _dream_running  # noqa: PLW0603
+    dream_status.record_pass_start(spec.name)
     try:
         audit = await spec.run_pass()
     except Exception as exc:
@@ -665,95 +709,178 @@ async def _tier_tick(last_pass: float, spec: TierSpec) -> float:
     else:
         logger.info("%s dream: %s", spec.name, audit)
         dream_status.record_pass(audit, ok=_pass_succeeded(audit), tier=spec.name)
-    return now
+    finally:
+        _dream_running = False
+        _session.last_pass_end = time.monotonic()
+
+
+async def _run_guarded(spec: TierSpec) -> bool:
+    """Run one pass under the single-flight guard, returning whether it actually ran."""
+    if not _claim_dream():
+        return False
+    await _run_claimed(spec)
+    return True
+
+
+def _due_tiers(
+    state: _SessionState, now: float, idle: float, tiers: list[TierSpec]
+) -> list[TierSpec]:
+    """Observe one (now, idle) sample: update the session and return the tiers due to fire.
+
+    A pure, synchronous decision function - the tricky session-detection logic lives
+    here, driven only by explicit inputs, so it is trivially unit-testable.
+
+    ``idle`` is a wall-clock duration; ``now`` and ``state.last_pass_end`` are
+    monotonic instants, so ``implied_activity = now - idle`` is a monotonic instant -
+    only monotonic-vs-monotonic comparisons, no wall/monotonic mix. ``tiers`` must be
+    the enabled tiers; the smallest idle threshold establishes the session.
+    """
+    implied_activity = now - idle
+    session_ended = implied_activity > state.last_pass_end + _SESSION_END_MARGIN_SECONDS
+    if state.anchor is not None and session_ended:
+        state.anchor = None
+        state.fired.clear()
+    if state.anchor is None:
+        if not tiers or idle < min(spec.idle_getter() for spec in tiers):
+            return []
+        state.anchor = now - idle
+    genuine_idle = now - state.anchor
+    return sorted(
+        (
+            spec
+            for spec in tiers
+            if spec.name not in state.fired and genuine_idle >= spec.idle_getter()
+        ),
+        key=lambda spec: spec.idle_getter(),
+    )
+
+
+async def _coordinator_tick() -> None:
+    """Fetch idle once, then run every tier the session says is due, at most once each.
+
+    A tier is added to ``_session.fired`` only after a successful guard claim, so a
+    tick blocked by the single-flight guard simply retries the tier next poll.
+    """
+    idle = await fetch_idle_seconds()
+    if idle is None:
+        return
+    now = time.monotonic()
+    for spec in _due_tiers(_session, now, idle, _enabled_tiers()):
+        if await _run_guarded(spec):
+            _session.fired.add(spec.name)
 
 
 # Every field is wrapped in a lambda (not passed as a direct reference) so the
 # module-level name resolves at call time. A direct reference would freeze the
 # original function object, defeating the runtime config the getters read and the
-# monkeypatching the tests rely on. The light tier reuses one idle threshold for
-# both gates, matching the single-threshold behaviour before the split.
+# monkeypatching the tests rely on.
 _LIGHT_TIER = TierSpec(
     name="light",
     enabled_getter=lambda: get_dream_enabled(),  # noqa: PLW0108
     idle_getter=lambda: get_dream_idle_seconds(),  # noqa: PLW0108
-    interval_getter=lambda: get_dream_idle_seconds(),  # noqa: PLW0108
     poll_getter=lambda: get_dream_poll_seconds(),  # noqa: PLW0108
     run_pass=lambda: run_dream_pass(),  # noqa: PLW0108
 )
 
-# The heavy tier shares the light tier's idle gate (same "is memory idle" window)
-# but is spaced out by its own interval gate: the light tier's own reads reset the
-# shared idle marker, so a longer idle threshold would starve it - the interval is
-# what makes it infrequent instead.
+# The heavy tier fires once per idle session at a longer genuine-idle threshold,
+# measured from the session's true start. Because the light tier now fires only
+# once per session, its own marker reset no longer caps the idle clock, so the
+# clock climbs freely to the heavy threshold.
 _HEAVY_TIER = TierSpec(
     name="heavy",
     enabled_getter=lambda: get_dream_heavy_enabled(),  # noqa: PLW0108
     idle_getter=lambda: get_dream_heavy_idle_seconds(),  # noqa: PLW0108
-    interval_getter=lambda: get_dream_heavy_interval_seconds(),  # noqa: PLW0108
     poll_getter=lambda: get_dream_heavy_poll_seconds(),  # noqa: PLW0108
     run_pass=lambda: run_heavy_dream_pass(),  # noqa: PLW0108
 )
 
-
-async def _dream_tick(last_pass: float) -> float:
-    """Run one light-tier tick (kept as a named wrapper for the watch loop and tests)."""
-    return await _tier_tick(last_pass, _LIGHT_TIER)
+_ALL_TIERS = (_LIGHT_TIER, _HEAVY_TIER)
 
 
-async def _tier_watch_loop(spec: TierSpec) -> None:
-    """Snapshot this tier's config for the visualiser, then poll and run its passes."""
-    dream_status.record_startup(
-        tier=spec.name,
-        enabled=spec.enabled_getter(),
-        idle_threshold_seconds=spec.idle_getter(),
-        interval_seconds=spec.interval_getter(),
-        poll_seconds=spec.poll_getter(),
-    )
-    last_pass = 0.0
+def _enabled_tiers() -> list[TierSpec]:
+    """Return the dream tiers whose enabled flag is currently set."""
+    return [spec for spec in _ALL_TIERS if spec.enabled_getter()]
+
+
+_TIERS_BY_NAME = {_LIGHT_TIER.name: _LIGHT_TIER, _HEAVY_TIER.name: _HEAVY_TIER}
+
+
+def trigger_dream(tier: str) -> dict[str, object]:
+    """Kick off a manual dream pass of ``tier`` as a background task.
+
+    Runs regardless of the tier's enabled flag (that flag only gates the autonomous
+    scheduler), but still requires the claude CLI and respects the single-flight
+    guard. Returns ``{"started": bool, "reason": str}`` immediately - the pass itself
+    runs in the background and the visualiser reflects it via the running indicator.
+    """
+    spec = _TIERS_BY_NAME.get(tier)
+    if spec is None:
+        return {"started": False, "reason": "unknown tier"}
+    if _claude_bin() is None:
+        return {"started": False, "reason": "claude CLI not found"}
+    if not _claim_dream():
+        return {"started": False, "reason": "already running"}
+    task = asyncio.create_task(_run_claimed(spec))
+    _manual_tasks.add(task)
+    task.add_done_callback(_manual_tasks.discard)
+    return {"started": True}
+
+
+@mcp.custom_route("/api/dream/trigger", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
+async def _dream_trigger_route(request: Request) -> JSONResponse:
+    """Trigger a manual dream pass. Body: ``{"tier": "light"|"heavy"}``."""
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"started": False, "reason": "invalid JSON body"}, status_code=400)
+    tier = body.get("tier") if isinstance(body, dict) else None
+    if not isinstance(tier, str):
+        return JSONResponse({"started": False, "reason": "tier is required"}, status_code=400)
+    result = trigger_dream(tier)
+    status = 200 if result["started"] else 409
+    return JSONResponse(result, status_code=status)
+
+
+async def _coordinator_loop() -> None:
+    """Snapshot each enabled tier's config, then poll and coordinate their passes.
+
+    One loop drives both tiers, so it polls at the finest enabled cadence and the
+    per-session decision (which tier is due, when the session ended) is made by
+    ``_due_tiers`` each tick.
+    """
+    tiers = _enabled_tiers()
+    for spec in tiers:
+        dream_status.record_startup(
+            tier=spec.name,
+            enabled=spec.enabled_getter(),
+            idle_threshold_seconds=spec.idle_getter(),
+            poll_seconds=spec.poll_getter(),
+        )
+    poll = min(spec.poll_getter() for spec in tiers)
     while True:
-        await asyncio.sleep(spec.poll_getter())
-        last_pass = await _tier_tick(last_pass, spec)
-
-
-async def _idle_watch_loop() -> None:
-    """Run the light-tier watch loop."""
-    await _tier_watch_loop(_LIGHT_TIER)
-
-
-async def _heavy_watch_loop() -> None:
-    """Run the heavy-tier watch loop."""
-    await _tier_watch_loop(_HEAVY_TIER)
+        await asyncio.sleep(poll)
+        await _coordinator_tick()
 
 
 async def _serve() -> None:
-    """Serve over streamable HTTP, running the enabled dream-tier watchers alongside.
+    """Serve over streamable HTTP, running the single dream coordinator alongside.
 
-    Each tier's watcher starts only when that tier is enabled AND the claude CLI it
-    would spawn is present; otherwise it would poll forever with every pass
-    no-opping. They are explicit background tasks rather than a FastMCP
-    ``lifespan``: in stateless_http mode the low-level server runs per request, so a
-    lifespan task would be spawned and cancelled on every request. Cancelled cleanly
-    on shutdown.
+    The coordinator starts only when the claude CLI it would spawn is present AND at
+    least one tier is enabled; otherwise it would poll forever with every pass
+    no-opping. It is an explicit background task rather than a FastMCP ``lifespan``:
+    in stateless_http mode the low-level server runs per request, so a lifespan task
+    would be spawned and cancelled on every request. Cancelled cleanly on shutdown.
     """
     recall_status.record_startup()
-    claude_present = _claude_bin() is not None
-    watchers = [
-        asyncio.create_task(loop())
-        for loop, enabled in (
-            (_idle_watch_loop, get_dream_enabled),
-            (_heavy_watch_loop, get_dream_heavy_enabled),
-        )
-        if claude_present and enabled()
-    ]
+    run_coordinator = _claude_bin() is not None and bool(_enabled_tiers())
+    coordinator = asyncio.create_task(_coordinator_loop()) if run_coordinator else None
     try:
         await mcp.run_streamable_http_async()
     finally:
-        for watcher in watchers:
-            watcher.cancel()
-        for watcher in watchers:
+        if coordinator is not None:
+            coordinator.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await watcher
+                await coordinator
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -189,10 +189,11 @@ the expected model or you may silently pay Opus rates.
 A pass that grooms the graph while it is idle. Off by default (opt-in via
 `MCP_DREAM_ENABLED=true`).
 
-- **Trigger: 2 hours of memory inactivity**, where "activity" is *any* memory
-  tool call (reads included). Active use resets the timer; grooming only runs in
-  a genuine idle window. The dream's own reads/votes count as activity, so it
-  cannot spin.
+- **Trigger: fires once per idle session** when genuine idle reaches the tier's
+  threshold (light 1800s, heavy 5400s), where "activity" is *any* memory tool
+  call (reads included). Active use resets the idle marker; grooming only runs in
+  a genuine idle window. Each tier fires at most once per session, so the dream's
+  own reads/votes cannot re-arm it and it cannot spin.
 - **Mutation surface: demote-never-delete, downvote-only.** The dream's only
   mutation is `vote_entity` with a vote of `-1` (so its deny-list is the v1
   recall deny-list **minus** `vote_entity`). It demotes stale, superseded, or
@@ -251,7 +252,7 @@ over HTTP - exactly like v1 recall reads. That vote executes *inside* the
 mcp-memory process on its single shared connection; the memory-agent process
 never opens the DB. So mcp-memory remains the sole writer, and even a user
 returning mid-dream shares the same connection on the same event loop - no lock
-contention is possible. The 2h-idle window is a cost/quality knob, not the
+contention is possible. The idle window is a cost/quality knob, not the
 safety mechanism.
 
 `PRAGMA busy_timeout` is set on the DB connection as cheap insurance (it guards
@@ -262,7 +263,7 @@ dream, which never writes the file directly.
 
 mcp-memory persists a single last-activity timestamp to a marker file next to
 the database (throttled, so read-heavy traffic does not hammer the disk) and
-exposes it at `GET /api/idle` -> `{last_activity, idle_seconds}`. The watcher
+exposes it at `GET /api/idle` -> `{last_activity, idle_seconds}`. The coordinator
 GETs that endpoint using the same resolved memory URL recall uses (with the
 `/mcp` suffix stripped, since the route is app-root-mounted). A plain GET does
 not go through the activity tracker, so polling does not reset the idle timer;
@@ -278,29 +279,47 @@ two processes share a data directory, so the bridge is a small marker file (the
 same pattern as the last-activity marker):
 
 - The agent writes `dream-status.json` next to the database - its config
-  snapshot at watcher startup, and the latest pass (wall-clock timestamp,
+  snapshot at coordinator startup, and the latest pass (wall-clock timestamp,
   success flag, raw audit text, tier, and a best-effort parse of the audit's
-  `[project/entity-name] - reason` lines into **operations**) after each
-  `_dream_tick`. Each operation is tagged `merge` (a heavy-tier reason starting
+  `[project/entity-name] - reason` lines into **operations**) after each pass.
+  Each operation is tagged `merge` (a heavy-tier reason starting
   with "merged") or `demote`, so the card can tell a structural merge from a
   downvote. Only the most recent pass is kept; the graph's current `vote_score`
   state is the ground truth for what remains demoted, so no history is retained.
   The dream ritual pins the audit to that one-line-per-operation format so the
-  parse is reliable. Each watcher also records its own tier config
-  (enabled/idle-threshold/interval/poll), keyed by tier, so the marker holds both
+  parse is reliable. The coordinator records each enabled tier's config
+  (enabled/idle-threshold/poll), keyed by tier, so the marker holds both
   the light and heavy tiers side by side.
 - mcp-memory reads that marker and pairs it with its own live idle time at
   `GET /api/dream`, so the browser gets everything same-origin in one poll (a
   plain route, so polling it records no activity). When the marker is absent
   (disabled or never run), `tiers` is empty but live idle is still returned.
 - The visualiser shows a **dream status card**: a per-tier line (light and heavy)
-  with each tier's idle-window state, the heavy tier annotated with its static
-  cadence (the interval gate is in-process, so no exact next-pass ETA is
-  computable), the last pass labelled with the tier that ran it, and that pass's
+  with each tier's idle-window state (each fires once per idle session at its
+  threshold), the last pass labelled with the tier that ran it, and that pass's
   operations - merges rendered distinctly from demotes, each row linking to the
   entity's inspector. It also rings every node with a negative `vote_score` in
   amber as **demoted** - the ground-truth demoted state, including manual
   downvotes. Undo is the inspector's existing `+1` vote button.
+- The marker also carries a `running` flag (the tier of an in-flight pass, or
+  `null`), set by `record_pass_start` and cleared by `record_pass`, so the card
+  can show a pass as **running now** - a pulsing head, not just the last completed
+  pass. The marker is written atomically (temp file + replace) because it is now
+  written on every pass boundary and read by the separate mcp-memory process.
+
+### Triggering the dream on demand
+
+The card also has **Run light** / **Run heavy** buttons. The dream runs in the
+memory-agent process, but the browser is same-origin only with mcp-memory, so the
+button POSTs to mcp-memory's `/api/dream/trigger`, which proxies to the agent's own
+`/api/dream/trigger` (resolved via `get_agent_url()` - `MCP_AGENT_URL` / `MCP_AGENT_PORT`
+/ default 8100; a non-default agent port must be set for the mcp-memory process too).
+The agent kicks off the pass as a background task and returns at once; the button relies
+on the `running` flag plus the 5s poll for live feedback. Every entry point - both tier
+watchers and every manual trigger - shares one in-process single-flight guard
+(`_dream_running`, a plain bool: the whole agent is one event loop), so at most one dream
+runs at a time. A manual trigger runs regardless of the tier's enabled flag (that flag
+gates only the autonomous scheduler) but still needs the `claude` CLI.
 
 ### Surfacing recall activity in the visualiser
 
@@ -354,31 +373,40 @@ independent of the light tier's `MCP_DREAM_ENABLED`.
   a fully-qualified stronger id (a Sonnet id); it defaults to the light dream
   model only as a safe fallback. Pinning applies as in v1 - a bare alias silently
   remaps to Opus, and `parse_recall_result` asserts the reported model family.
-- **Two gates, not one longer idle window.** The tier reuses the light idle gate
-  (`MCP_DREAM_HEAVY_IDLE_SECONDS`, default the same 7200s "genuine idle" window)
-  but is spaced out by its **own** interval gate (`MCP_DREAM_HEAVY_INTERVAL_SECONDS`,
-  default 86400s = once/day). A longer idle *threshold* would not work: the light
-  tier's own reads reset the shared `/api/idle` marker, so the idle clock rarely
-  climbs far past the light window - the per-tier interval, tracked from the heavy
-  tier's own last pass, is what makes it infrequent.
-- **Host: a second in-process watcher.** `agent._serve()` starts a `_heavy_watch_loop`
-  alongside the light `_idle_watch_loop`, each gated on its own enabled flag and on
-  the `claude` CLI being present, both cancelled cleanly on shutdown. Both watchers
-  drive the same generic `_tier_tick(last_pass, spec)` via a per-tier `TierSpec`
-  (its getters are thunks resolved at call time), so the tiers share the idle
-  fetch, spawn stack, and pass-recording while differing only in gates, model,
-  ritual, and deny-list.
+- **A longer idle threshold, fired once per session.** The heavy tier fires once
+  per idle session at a longer genuine-idle threshold (`MCP_DREAM_HEAVY_IDLE_SECONDS`,
+  default 5400s = 1.5h), measured from the true start of the idle session. A naive
+  longer *threshold* alone would starve: the light tier's own reads reset the shared
+  `/api/idle` marker, so if light re-fired every 30 min the idle clock would sawtooth
+  and never climb past ~35 min. Firing each tier **at most once per session** is what
+  makes it work - light resets the marker only once, then the clock climbs freely to
+  the heavy threshold. Because the anchor is the session's true start, light's 30-min
+  fire is the first part of the heavy 90-min window.
+- **Host: one coordinator loop.** `agent._serve()` starts a single
+  `_coordinator_loop` (gated on the `claude` CLI being present AND at least one tier
+  enabled, cancelled cleanly on shutdown). It polls at the finest enabled cadence and
+  calls `_coordinator_tick` each cycle; the tricky per-session decision (which tier is
+  due, when the session ended and re-arms) lives in the pure sync `_due_tiers(state,
+  now, idle, tiers)`. All session state is one `_SessionState` (`anchor`, `fired`,
+  `last_pass_end`). A tier is a per-tier `TierSpec` (thunk getters resolved at call
+  time), so the tiers share the idle fetch, spawn stack, and pass-recording while
+  differing only in idle threshold, model, ritual, and deny-list.
+- **Session-end attribution.** The dream's own `mcp__memory__*` calls reset the idle
+  marker, so `_due_tiers` must not misread that as the user returning. Every claimed
+  pass stamps `_session.last_pass_end`; a marker touch whose implied activity is more
+  than `_SESSION_END_MARGIN_SECONDS` (60s, tied to the marker write throttle) after
+  `last_pass_end` is real user activity and ends the session (re-arming both tiers).
+  A self-caused reset is always at or before `last_pass_end`, so it never re-arms.
 - **Sole-writer safety is unchanged.** The heavy tier mutates only by spawning
   `claude -p`, which calls `mcp__memory__*` over HTTP into the single mcp-memory
-  process - so both tiers firing in one idle window is safe (a light `-1` on an
+  process - so both tiers firing in one idle session is safe (a light `-1` on an
   entity a heavy pass folds away is harmless; the merge keeps the higher score and
-  soft-deletes regardless). Each tier's own monotonic interval guard prevents
-  self-spin; no cross-tier coordination is needed.
+  soft-deletes regardless). The global single-flight guard prevents overlap; the
+  once-per-session rule prevents self-spin.
 - **Marker surfacing.** Each pass records its `tier` ("light"/"heavy") on the
   shared latest-pass marker, so `/api/dream` and the visualiser can show which tier
-  last ran. Only the light watcher snapshots the config block, so the card's
-  enabled/next-pass fields reflect the light tier; heavy activity is visible via
-  the tagged last pass.
+  last ran. The coordinator snapshots each enabled tier's config block, so the card
+  shows both tiers' idle-window state side by side.
 
 ### Deferred beyond v3
 

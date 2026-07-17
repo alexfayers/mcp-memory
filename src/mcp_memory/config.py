@@ -13,13 +13,12 @@ _DEFAULT_RECALL_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 _DEFAULT_RECALL_MAX_TURNS = "12"
 _DEFAULT_AUTO_VOTE_WINDOW_SECONDS = "1800"
 _DEFAULT_AUTO_VOTE_MAX_PER_DAY = "3"
-_DEFAULT_DREAM_IDLE_SECONDS = "7200"
-_DEFAULT_DREAM_POLL_SECONDS = "1800"
+_DEFAULT_DREAM_IDLE_SECONDS = "1800"
+_DEFAULT_DREAM_POLL_SECONDS = "300"
 _DEFAULT_DREAM_TIMEOUT = "300"
 _DEFAULT_DREAM_MAX_VOTES = "15"
-_DEFAULT_DREAM_HEAVY_IDLE_SECONDS = "7200"
-_DEFAULT_DREAM_HEAVY_INTERVAL_SECONDS = "86400"
-_DEFAULT_DREAM_HEAVY_POLL_SECONDS = "3600"
+_DEFAULT_DREAM_HEAVY_IDLE_SECONDS = "5400"
+_DEFAULT_DREAM_HEAVY_POLL_SECONDS = "900"
 _DEFAULT_DREAM_HEAVY_TIMEOUT = "600"
 _DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
 _DEFAULT_PURGE_GRACE_DAYS = "30"
@@ -75,6 +74,19 @@ def get_agent_port() -> int:
     return int(os.environ.get("MCP_AGENT_PORT", _DEFAULT_AGENT_PORT))
 
 
+def get_agent_url() -> str:
+    """Return the base URL of the memory-agent server that the visualiser proxies to.
+
+    Prefers an explicit MCP_AGENT_URL, then MCP_AGENT_PORT, then the default agent
+    port. The mcp-memory process does not otherwise know the agent's port, so a
+    non-default port must be set for the memory server too (see cli._memory_spec).
+    """
+    explicit = os.environ.get("MCP_AGENT_URL")
+    if explicit:
+        return explicit
+    return f"http://localhost:{get_agent_port()}"
+
+
 def get_memory_url() -> str:
     """Return the URL of the mcp-memory server that recall queries.
 
@@ -127,7 +139,7 @@ def get_dream_enabled() -> bool:
 
 
 def get_dream_idle_seconds() -> float:
-    """Return the memory-inactivity window before a dream pass may run."""
+    """Return the genuine-idle window before the light dream pass fires (once per session)."""
     return float(os.environ.get("MCP_DREAM_IDLE_SECONDS", _DEFAULT_DREAM_IDLE_SECONDS))
 
 
@@ -161,24 +173,13 @@ def get_dream_heavy_enabled() -> bool:
 
 
 def get_dream_heavy_idle_seconds() -> float:
-    """Return the memory-inactivity window before a heavy dream pass may run.
+    """Return the genuine-idle window before the heavy dream pass fires (once per session).
 
-    This is the "is memory idle right now" gate, kept the same as the light tier;
-    the heavy tier's rarity comes from its interval gate, not a longer idle window.
+    Measured from the true start of the idle session; the heavy tier fires once
+    when the session's genuine idle reaches this threshold. Larger than the light
+    threshold so the heavy pass covers the whole quiet period.
     """
     return float(os.environ.get("MCP_DREAM_HEAVY_IDLE_SECONDS", _DEFAULT_DREAM_HEAVY_IDLE_SECONDS))
-
-
-def get_dream_heavy_interval_seconds() -> float:
-    """Return the minimum time between successive heavy dream passes.
-
-    The light tier's own reads reset the shared idle marker, so a longer idle
-    window would starve the heavy tier; its cadence is controlled by this
-    per-tier interval instead.
-    """
-    return float(
-        os.environ.get("MCP_DREAM_HEAVY_INTERVAL_SECONDS", _DEFAULT_DREAM_HEAVY_INTERVAL_SECONDS)
-    )
 
 
 def get_dream_heavy_poll_seconds() -> float:

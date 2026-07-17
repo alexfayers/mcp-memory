@@ -33,6 +33,22 @@ class TestMemoryUrl:
         assert config.get_memory_url() == "http://localhost:8000/mcp"
 
 
+class TestAgentUrl:
+    def test_explicit_url_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_AGENT_URL", "http://example:9")
+        assert config.get_agent_url() == "http://example:9"
+
+    def test_uses_agent_port_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_AGENT_URL", raising=False)
+        monkeypatch.setenv("MCP_AGENT_PORT", "9100")
+        assert config.get_agent_url() == "http://localhost:9100"
+
+    def test_falls_back_to_default_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_AGENT_URL", raising=False)
+        monkeypatch.delenv("MCP_AGENT_PORT", raising=False)
+        assert config.get_agent_url() == "http://localhost:8100"
+
+
 class TestRecallConfig:
     def test_max_turns_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_RECALL_MAX_TURNS", raising=False)
@@ -58,13 +74,13 @@ class TestDreamConfig:
 
     def test_idle_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_IDLE_SECONDS", raising=False)
-        assert config.get_dream_idle_seconds() == 7200.0
+        assert config.get_dream_idle_seconds() == 1800.0
         monkeypatch.setenv("MCP_DREAM_IDLE_SECONDS", "60")
         assert config.get_dream_idle_seconds() == 60.0
 
     def test_poll_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_POLL_SECONDS", raising=False)
-        assert config.get_dream_poll_seconds() == 1800.0
+        assert config.get_dream_poll_seconds() == 300.0
         monkeypatch.setenv("MCP_DREAM_POLL_SECONDS", "5")
         assert config.get_dream_poll_seconds() == 5.0
 
@@ -104,19 +120,13 @@ class TestDreamHeavyConfig:
 
     def test_idle_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_HEAVY_IDLE_SECONDS", raising=False)
-        assert config.get_dream_heavy_idle_seconds() == 7200.0
+        assert config.get_dream_heavy_idle_seconds() == 5400.0
         monkeypatch.setenv("MCP_DREAM_HEAVY_IDLE_SECONDS", "60")
         assert config.get_dream_heavy_idle_seconds() == 60.0
 
-    def test_interval_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MCP_DREAM_HEAVY_INTERVAL_SECONDS", raising=False)
-        assert config.get_dream_heavy_interval_seconds() == 86400.0
-        monkeypatch.setenv("MCP_DREAM_HEAVY_INTERVAL_SECONDS", "120")
-        assert config.get_dream_heavy_interval_seconds() == 120.0
-
     def test_poll_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_HEAVY_POLL_SECONDS", raising=False)
-        assert config.get_dream_heavy_poll_seconds() == 3600.0
+        assert config.get_dream_heavy_poll_seconds() == 900.0
         monkeypatch.setenv("MCP_DREAM_HEAVY_POLL_SECONDS", "5")
         assert config.get_dream_heavy_poll_seconds() == 5.0
 

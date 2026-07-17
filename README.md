@@ -46,18 +46,26 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_MEMORY_PURGE_ENABLED` | On startup, hard-delete soft-deleted entities older than the grace window | off |
 | `MCP_MEMORY_PURGE_GRACE_DAYS` | How long a soft-deleted entity is retained before it may be purged | `30` |
 | `MCP_DREAM_ENABLED` | Run the autonomous light dream tier (downvotes stale/duplicate entities in idle windows) | off |
-| `MCP_DREAM_IDLE_SECONDS` | Memory-inactivity window before a light dream pass may run | `7200` |
-| `MCP_DREAM_POLL_SECONDS` | How often the light-tier watcher checks whether a pass is due | `1800` |
+| `MCP_DREAM_IDLE_SECONDS` | Genuine-idle window before the light dream pass fires (once per idle session) | `1800` |
+| `MCP_DREAM_POLL_SECONDS` | How often the coordinator checks whether the light pass is due | `300` |
 | `MCP_DREAM_MODEL` | Fully-qualified model id for light dream spawns | recall model |
 | `MCP_DREAM_TIMEOUT` | Timeout for a single light dream spawn (seconds) | `300` |
 | `MCP_DREAM_MAX_VOTES` | Advisory cap on entities a light pass may demote | `15` |
 | `MCP_DREAM_HEAVY_ENABLED` | Run the heavy dream tier (also merges duplicate entities via reversible soft-delete) | off |
-| `MCP_DREAM_HEAVY_IDLE_SECONDS` | Memory-inactivity window before a heavy pass may run | `7200` |
-| `MCP_DREAM_HEAVY_INTERVAL_SECONDS` | Minimum time between successive heavy passes (its cadence control) | `86400` |
-| `MCP_DREAM_HEAVY_POLL_SECONDS` | How often the heavy-tier watcher checks whether a pass is due | `3600` |
+| `MCP_DREAM_HEAVY_IDLE_SECONDS` | Genuine-idle window before the heavy pass fires (once per idle session) | `5400` |
+| `MCP_DREAM_HEAVY_POLL_SECONDS` | How often the coordinator checks whether the heavy pass is due | `900` |
 | `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id for heavy spawns (set a stronger model, e.g. a Sonnet id) | light dream model |
 | `MCP_DREAM_HEAVY_TIMEOUT` | Timeout for a single heavy dream spawn (seconds) | `600` |
 | `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges + demotions a heavy pass may do | `10` |
+| `MCP_AGENT_PORT` | Port of the memory-agent server | `8100` |
+| `MCP_AGENT_URL` | Explicit memory-agent base URL, overriding `MCP_AGENT_PORT` | (from port) |
+
+The visualiser's dream card has **Run light** / **Run heavy** buttons that trigger a
+pass on demand (regardless of the tier's enabled flag). A manual trigger obeys the same
+single-flight guard as the scheduler, so at most one dream runs at a time. The dream runs
+in the memory-agent process, so the mcp-memory server proxies the trigger to it: if the
+agent runs on a non-default port, set `MCP_AGENT_PORT` (or `MCP_AGENT_URL`) for the
+mcp-memory process too, otherwise the proxy cannot find it.
 
 ### MCP client config
 
