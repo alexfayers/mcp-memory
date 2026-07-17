@@ -8,7 +8,7 @@ import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
 
-from mcp_memory import activity, dream_status, recall_status
+from mcp_memory import activity, dream_status, recall_status, visualise
 from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
 from mcp_memory.visualise import (
@@ -142,10 +142,27 @@ class TestVisualisePage:
         assert "/api/dream" in resp.text
 
     @pytest.mark.anyio
+    async def test_includes_manual_trigger_buttons(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert 'id="dream-run-light"' in resp.text
+        assert 'id="dream-run-heavy"' in resp.text
+        assert "triggerDream" in resp.text
+        assert "/api/dream/trigger" in resp.text
+
+    @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert "applyDemotedRings" in resp.text
         assert "demoted (downvoted)" in resp.text
+
+    @pytest.mark.anyio
+    async def test_dream_card_renders_both_tiers_and_merge_ops(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        resp = await client.get("/visualise")
+        assert "tierLine" in resp.text  # per-tier status line helper
+        assert "d.tiers" in resp.text  # renderDream reads the per-tier configs
+        assert 'op.action === "merge"' in resp.text  # merge vs demote glyph branch
 
     @pytest.mark.anyio
     async def test_includes_the_recall_panel(self, client: httpx.AsyncClient) -> None:
@@ -266,33 +283,119 @@ class TestApiDream:
         assert resp.status_code == 200
         data = resp.json()
         assert data["available"] is False
-        assert data["enabled"] is False
-        assert data["idle_threshold_seconds"] is None
+        assert data["tiers"] == {}
         assert data["last_pass"] is None
+        assert data["running"] is None
         assert data["idle_seconds"] == 42.0
         assert data["last_activity"] == 1000.0
 
     @pytest.mark.anyio
-    async def test_reports_config_and_last_pass(self, client: httpx.AsyncClient) -> None:
+    async def test_reports_both_tiers_and_last_pass(self, client: httpx.AsyncClient) -> None:
         dream_status.record_startup(
-            enabled=True, idle_threshold_seconds=7200.0, poll_seconds=1800.0
+            tier="light",
+            enabled=True,
+            idle_threshold_seconds=1800.0,
+            poll_seconds=300.0,
         )
-        dream_status.record_pass("[scratch/task/old] - stale", ok=True)
+        dream_status.record_startup(
+            tier="heavy",
+            enabled=True,
+            idle_threshold_seconds=5400.0,
+            poll_seconds=900.0,
+        )
+        dream_status.record_pass("[scratch/task/old] - merged into task/new", ok=True, tier="heavy")
         resp = await client.get("/api/dream")
         data = resp.json()
         assert data["available"] is True
-        assert data["enabled"] is True
-        assert data["idle_threshold_seconds"] == 7200.0
-        assert data["poll_seconds"] == 1800.0
-        assert data["last_pass"]["ok"] is True
-        assert data["last_pass"]["demotions"] == [
-            {"project": "scratch", "name": "task/old", "reason": "stale"}
+        assert data["tiers"]["light"]["idle_threshold_seconds"] == 1800.0
+        assert data["tiers"]["heavy"]["idle_threshold_seconds"] == 5400.0
+        assert data["last_pass"]["tier"] == "heavy"
+        assert data["last_pass"]["operations"] == [
+            {
+                "project": "scratch",
+                "name": "task/old",
+                "reason": "merged into task/new",
+                "action": "merge",
+            }
         ]
+
+    @pytest.mark.anyio
+    async def test_reports_the_running_tier(self, client: httpx.AsyncClient) -> None:
+        dream_status.record_pass_start("heavy")
+        data = (await client.get("/api/dream")).json()
+        assert data["available"] is True
+        assert data["running"] == "heavy"
 
     @pytest.mark.anyio
     async def test_polling_dream_does_not_record_activity(self, client: httpx.AsyncClient) -> None:
         await client.get("/api/dream")
         assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
+
+
+class TestApiDreamTrigger:
+    @staticmethod
+    def _patch_agent(monkeypatch: pytest.MonkeyPatch, handler: object) -> dict[str, str]:
+        seen: dict[str, str] = {}
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(visualise, "get_agent_url", lambda: "http://agent:8100")
+
+        def wrapped(request: httpx.Request) -> httpx.Response:
+            seen["url"] = str(request.url)
+            return handler(request)  # type: ignore[operator]
+
+        monkeypatch.setattr(
+            visualise.httpx,
+            "AsyncClient",
+            lambda **_kw: real_client(transport=httpx.MockTransport(wrapped)),
+        )
+        return seen
+
+    @pytest.mark.anyio
+    async def test_forwards_to_the_agent_and_relays_the_response(
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen = self._patch_agent(
+            monkeypatch, lambda _r: httpx.Response(200, json={"started": True})
+        )
+        resp = await client.post("/api/dream/trigger", json={"tier": "heavy"})
+        assert resp.status_code == 200
+        assert resp.json() == {"started": True}
+        assert seen["url"] == "http://agent:8100/api/dream/trigger"
+
+    @pytest.mark.anyio
+    async def test_relays_the_agent_rejection_status(
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._patch_agent(
+            monkeypatch,
+            lambda _r: httpx.Response(409, json={"started": False, "reason": "already running"}),
+        )
+        resp = await client.post("/api/dream/trigger", json={"tier": "light"})
+        assert resp.status_code == 409
+        assert resp.json()["reason"] == "already running"
+
+    @pytest.mark.anyio
+    async def test_agent_unreachable_returns_503(
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(_request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused")
+
+        self._patch_agent(monkeypatch, boom)
+        resp = await client.post("/api/dream/trigger", json={"tier": "light"})
+        assert resp.status_code == 503
+        assert resp.json() == {"started": False, "reason": "agent unreachable"}
+
+    @pytest.mark.anyio
+    async def test_non_json_agent_response_returns_502(
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An agent without the trigger route (or a gateway) replies with a plain-text
+        # body; the proxy must not 500 trying to parse it as JSON.
+        self._patch_agent(monkeypatch, lambda _r: httpx.Response(404, text="Not Found"))
+        resp = await client.post("/api/dream/trigger", json={"tier": "light"})
+        assert resp.status_code == 502
+        assert resp.json() == {"started": False, "reason": "agent error"}
 
 
 class TestApiRecall:

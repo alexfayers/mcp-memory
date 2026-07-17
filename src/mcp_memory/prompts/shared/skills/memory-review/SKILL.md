@@ -17,7 +17,9 @@ Work through this checklist to audit and clean up the memory graph. The `/visual
 
 **Verify before every destructive op.** `delete_observations` requires an EXACT string match - re-read the live entity and copy the exact text; paraphrased/truncated strings silently no-op. For `delete_entity`, confirm the entity is genuinely empty/scratch or that its content is preserved elsewhere before deleting. `delete_entity` is blocked while an entity still has incoming relations - delete or re-point those edges first. To remove an empty "ghost" scope, delete its remaining entities then call `delete_project(project)` (it refuses to delete `global` or any scope that still has entities).
 
-**Focus on structural hygiene the autonomous "dream" cannot do.** An opt-in background curation pass may already be casting `-1` votes on obvious stale/superseded/duplicate entities during idle windows - but downvoting is *all* it can do. It cannot re-link orphans, rename, split bloated entities, move scopes, fix relations, or delete anything. So do not spend a review re-downvoting obvious noise; concentrate on the structural work below (orphans, naming, bloat/splitting, relations, scope errors) that only a human/agent can perform. Treat a strongly negative `vote_score` as a review prompt (see step 5), not as work already finished.
+**To consolidate duplicates, prefer `merge_entities(project, source, target)` over hand-merging.** It copies the source's observations onto the target (deduped, keeping votes), repoints all the source's relations to the target, keeps the higher vote score, and **soft-deletes** the source - reversibly, so a wrong merge can be undone with `restore_entity(project, source)` until a grace-window purge. This is safer and more complete than the manual "copy observations, re-point relations, delete the loser" sequence, and it sidesteps the incoming-relation delete block.
+
+**Focus on structural hygiene the autonomous "dream" cannot do.** Opt-in background curation passes may already be running: a light tier casting `-1` votes on obvious stale/superseded/duplicate entities, and a rarer heavy tier that also *merges* clear duplicates within a project (`merge_entities`, a reversible soft-delete). But even the heavy tier cannot re-link orphans, rename, split bloated entities, move scopes, or fix relations. (A separate opt-in startup GC may *reversibly soft-delete* an entity once it is both driven to the saturation floor **and** orphaned - never a `project` root or `user-preferences` - but that is recoverable until a grace-window purge and does not do any of the structural repair below.) So do not spend a review re-downvoting obvious noise or re-merging obvious duplicates; concentrate on the structural work below (orphans, naming, bloat/splitting, relations, scope errors) that only a human/agent can perform. Treat a strongly negative `vote_score` as a review prompt (see step 5), not as work already finished.
 
 ## 1. Find orphans and naming violations
 
@@ -36,7 +38,7 @@ Fix: rename with proper prefix (delete + recreate with relations), link orphans,
 
 Look for:
 - Same entity in multiple project scopes (e.g. `user-preferences/` in a project scope that belongs in `global`)
-- Unprefixed duplicates of prefixed entities (merge observations, re-point relations, delete the unprefixed one)
+- Unprefixed duplicates of prefixed entities within one project - use `merge_entities(project, source=unprefixed, target=prefixed)` to fold the unprefixed copy into the canonical one in a single reversible step
 - `user-preferences` entities scattered across project scopes - extract useful observations into the main global preferences, then delete the project-scoped copy
 - **Near-duplicate observations** within the same entity (same fact phrased two ways) - keep the more precise one
 - **Observations that contradict each other** - resolve the contradiction, keep the correct one
@@ -75,7 +77,7 @@ Each pattern entity should be independently searchable - someone searching for "
 - Archive or delete resolved tasks that are no longer useful context
 - Delete old ticket/CR entities that were one-off investigations
 - Archive superseded project entities (e.g. old TS project replaced by Python rewrite)
-- Treat a strongly negative `vote_score` as a rot signal - prioritise these entities for review, and trim or delete them if the downvotes reflect stale or misleading content. A negative score may be the dream's doing (an idle-window demotion) rather than a human judgement, so it is a *prompt to review*, not a verdict: confirm the rot and delete/trim, or cast a `+1` if the entity is still useful and was over-demoted.
+- Treat a strongly negative `vote_score` as a rot signal - prioritise these entities for review, and trim or delete them if the downvotes reflect stale or misleading content. A negative score may be the dream's doing (an idle-window demotion) rather than a human judgement, so it is a *prompt to review*, not a verdict: confirm the rot and delete/trim, or cast a `+1` if the entity is still useful and was over-demoted. (An entity that reached the saturation floor while orphaned may already have been reversibly soft-deleted by the startup GC; `restore_entity` brings it back if that was wrong.)
 - Remove observations with:
   - Dates/timestamps (entities have automatic created_at/updated_at)
   - File paths in global scope (belong on project entities in project scope)

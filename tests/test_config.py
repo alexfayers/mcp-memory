@@ -33,6 +33,22 @@ class TestMemoryUrl:
         assert config.get_memory_url() == "http://localhost:8000/mcp"
 
 
+class TestAgentUrl:
+    def test_explicit_url_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_AGENT_URL", "http://example:9")
+        assert config.get_agent_url() == "http://example:9"
+
+    def test_uses_agent_port_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_AGENT_URL", raising=False)
+        monkeypatch.setenv("MCP_AGENT_PORT", "9100")
+        assert config.get_agent_url() == "http://localhost:9100"
+
+    def test_falls_back_to_default_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_AGENT_URL", raising=False)
+        monkeypatch.delenv("MCP_AGENT_PORT", raising=False)
+        assert config.get_agent_url() == "http://localhost:8100"
+
+
 class TestRecallConfig:
     def test_max_turns_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_RECALL_MAX_TURNS", raising=False)
@@ -58,13 +74,13 @@ class TestDreamConfig:
 
     def test_idle_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_IDLE_SECONDS", raising=False)
-        assert config.get_dream_idle_seconds() == 7200.0
+        assert config.get_dream_idle_seconds() == 1800.0
         monkeypatch.setenv("MCP_DREAM_IDLE_SECONDS", "60")
         assert config.get_dream_idle_seconds() == 60.0
 
     def test_poll_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_POLL_SECONDS", raising=False)
-        assert config.get_dream_poll_seconds() == 1800.0
+        assert config.get_dream_poll_seconds() == 300.0
         monkeypatch.setenv("MCP_DREAM_POLL_SECONDS", "5")
         assert config.get_dream_poll_seconds() == 5.0
 
@@ -85,6 +101,99 @@ class TestDreamConfig:
         assert config.get_dream_max_votes() == 15
         monkeypatch.setenv("MCP_DREAM_MAX_VOTES", "3")
         assert config.get_dream_max_votes() == 3
+
+
+class TestDreamHeavyConfig:
+    def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_ENABLED", raising=False)
+        assert config.get_dream_heavy_enabled() is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
+    def test_enabled_by_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_DREAM_HEAVY_ENABLED", value)
+        assert config.get_dream_heavy_enabled() is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "nonsense"])
+    def test_disabled_by_non_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_DREAM_HEAVY_ENABLED", value)
+        assert config.get_dream_heavy_enabled() is False
+
+    def test_idle_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_IDLE_SECONDS", raising=False)
+        assert config.get_dream_heavy_idle_seconds() == 5400.0
+        monkeypatch.setenv("MCP_DREAM_HEAVY_IDLE_SECONDS", "60")
+        assert config.get_dream_heavy_idle_seconds() == 60.0
+
+    def test_poll_seconds_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_POLL_SECONDS", raising=False)
+        assert config.get_dream_heavy_poll_seconds() == 900.0
+        monkeypatch.setenv("MCP_DREAM_HEAVY_POLL_SECONDS", "5")
+        assert config.get_dream_heavy_poll_seconds() == 5.0
+
+    def test_model_defaults_to_dream_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_MODEL", raising=False)
+        assert config.get_dream_heavy_model() == config.get_dream_model()
+        monkeypatch.setenv("MCP_DREAM_HEAVY_MODEL", "some-heavy-model")
+        assert config.get_dream_heavy_model() == "some-heavy-model"
+
+    def test_timeout_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_TIMEOUT", raising=False)
+        assert config.get_dream_heavy_timeout() == 600.0
+        monkeypatch.setenv("MCP_DREAM_HEAVY_TIMEOUT", "30")
+        assert config.get_dream_heavy_timeout() == 30.0
+
+    def test_max_ops_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_MAX_OPS", raising=False)
+        assert config.get_dream_heavy_max_ops() == 10
+        monkeypatch.setenv("MCP_DREAM_HEAVY_MAX_OPS", "2")
+        assert config.get_dream_heavy_max_ops() == 2
+
+
+class TestPurgeConfig:
+    def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_PURGE_ENABLED", raising=False)
+        assert config.get_purge_enabled() is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
+    def test_enabled_by_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_PURGE_ENABLED", value)
+        assert config.get_purge_enabled() is True
+
+    def test_grace_days_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_PURGE_GRACE_DAYS", raising=False)
+        assert config.get_purge_grace_days() == 30
+        monkeypatch.setenv("MCP_MEMORY_PURGE_GRACE_DAYS", "7")
+        assert config.get_purge_grace_days() == 7
+
+
+class TestGcConfig:
+    def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_GC_ENABLED", raising=False)
+        assert config.get_gc_enabled() is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
+    def test_enabled_by_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_GC_ENABLED", value)
+        assert config.get_gc_enabled() is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "nonsense"])
+    def test_disabled_by_non_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_GC_ENABLED", value)
+        assert config.get_gc_enabled() is False
+
+
+class TestWorkspaceMarkers:
+    def test_empty_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_WORKSPACE_MARKERS", raising=False)
+        assert config.get_workspace_markers() == ()
+
+    def test_parses_comma_separated_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_WORKSPACE_MARKERS", ".marker, packageInfo")
+        assert config.get_workspace_markers() == (".marker", "packageInfo")
+
+    def test_ignores_blank_entries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_WORKSPACE_MARKERS", " , .marker ,,")
+        assert config.get_workspace_markers() == (".marker",)
 
 
 class TestDetectServicePort:

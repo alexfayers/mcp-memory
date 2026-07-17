@@ -98,6 +98,11 @@ DELETE_ENTITY_DESC = (
     "Delete an entity and all its associated observations and relations from a project."
 )
 DELETE_RELATION_DESC = "Delete a specific relation between two entities in a project."
+RESTORE_ENTITY_DESC = (
+    "Restore a soft-deleted entity, making it visible to reads again. Soft-deleted "
+    "entities (e.g. the loser of a merge_entities call) are hidden but kept intact until "
+    "a grace-window purge; restore reverses the hiding while the entity still exists."
+)
 GET_ENTITY_WITH_RELATIONS_DESC = (
     "Get an entity along with all its relations and related entities within a project. "
     "Traverses the graph to discover linked context."
@@ -167,6 +172,14 @@ MOVE_PROJECT_ENTITIES_DESC = (
     "Move all entities (with their observations and relations) from one project scope into "
     "another. Useful for consolidating a mis-scoped folder-name project into its real project. "
     "Fails if any entity name exists in both scopes."
+)
+MERGE_ENTITIES_DESC = (
+    "Fold a duplicate entity (source) into its canonical twin (target) within one project. "
+    "The source's observations are copied onto the target (deduped, keeping their votes), all "
+    "the source's relations are repointed to the target (self-loops and duplicates dropped), "
+    "the target keeps the higher of the two vote scores, and the source is SOFT-DELETED. The "
+    "merge is reversible: restore_entity brings the source back until a grace-window purge. "
+    "Both entities must already exist in the same project."
 )
 
 SEARCH_ALL_PROJECTS_DESC = (
@@ -485,6 +498,21 @@ def move_project_entities(source: str, target: str) -> dict[str, object]:
         return {"error": str(e)}
 
 
+@mcp.tool(description=MERGE_ENTITIES_DESC)
+@_track
+def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
+    """Fold a duplicate entity into its canonical twin, then soft-delete the source."""
+    try:
+        db = _get_db()
+        result = db.merge_entities(project, source, target)
+        return {
+            "message": f"Merged '{source}' into '{target}' in project '{project}'.",
+            **result,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @mcp.tool(description=DELETE_PROJECT_DESC)
 @_track
 def delete_project(project: str) -> dict[str, str]:
@@ -581,6 +609,21 @@ def delete_entity(
         db = _get_db()
         db.delete_entity(project, name)
         return {"message": f"Deleted entity '{name}' from project '{project}'."}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=RESTORE_ENTITY_DESC)
+@_track
+def restore_entity(
+    project: str,
+    name: str,
+) -> dict[str, str]:
+    """Restore a soft-deleted entity, making it visible to reads again."""
+    try:
+        db = _get_db()
+        db.restore_entity(project, name)
+        return {"message": f"Restored entity '{name}' in project '{project}'."}
     except Exception as e:
         return {"error": str(e)}
 

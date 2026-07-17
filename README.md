@@ -42,6 +42,30 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_MEMORY_PORT` | HTTP server port | `8000` |
 | `MCP_MEMORY_READONLY_AGENTS` | Extra agent types exempt from the memory-update gate (comma-separated) | `Explore`, `Plan` |
 | `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names counted at reduced weight toward the gate (comma-separated) | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `replace_in_file`, `write_to_file` |
+| `MCP_MEMORY_GC_ENABLED` | On startup, soft-delete downvoted orphan entities (score at/below `-10` with no live incoming relation). Reversible; the purge below is the only permanent removal. | off |
+| `MCP_MEMORY_PURGE_ENABLED` | On startup, hard-delete soft-deleted entities older than the grace window | off |
+| `MCP_MEMORY_PURGE_GRACE_DAYS` | How long a soft-deleted entity is retained before it may be purged | `30` |
+| `MCP_DREAM_ENABLED` | Run the autonomous light dream tier (downvotes stale/duplicate entities in idle windows) | off |
+| `MCP_DREAM_IDLE_SECONDS` | Genuine-idle window before the light dream pass fires (once per idle session) | `1800` |
+| `MCP_DREAM_POLL_SECONDS` | How often the coordinator checks whether the light pass is due | `300` |
+| `MCP_DREAM_MODEL` | Fully-qualified model id for light dream spawns | recall model |
+| `MCP_DREAM_TIMEOUT` | Timeout for a single light dream spawn (seconds) | `300` |
+| `MCP_DREAM_MAX_VOTES` | Advisory cap on entities a light pass may demote | `15` |
+| `MCP_DREAM_HEAVY_ENABLED` | Run the heavy dream tier (also merges duplicate entities via reversible soft-delete) | off |
+| `MCP_DREAM_HEAVY_IDLE_SECONDS` | Genuine-idle window before the heavy pass fires (once per idle session) | `5400` |
+| `MCP_DREAM_HEAVY_POLL_SECONDS` | How often the coordinator checks whether the heavy pass is due | `900` |
+| `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id for heavy spawns (set a stronger model, e.g. a Sonnet id) | light dream model |
+| `MCP_DREAM_HEAVY_TIMEOUT` | Timeout for a single heavy dream spawn (seconds) | `600` |
+| `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges + demotions a heavy pass may do | `10` |
+| `MCP_AGENT_PORT` | Port of the memory-agent server | `8100` |
+| `MCP_AGENT_URL` | Explicit memory-agent base URL, overriding `MCP_AGENT_PORT` | (from port) |
+
+The visualiser's dream card has **Run light** / **Run heavy** buttons that trigger a
+pass on demand (regardless of the tier's enabled flag). A manual trigger obeys the same
+single-flight guard as the scheduler, so at most one dream runs at a time. The dream runs
+in the memory-agent process, so the mcp-memory server proxies the trigger to it: if the
+agent runs on a non-default port, set `MCP_AGENT_PORT` (or `MCP_AGENT_URL`) for the
+mcp-memory process too, otherwise the proxy cannot find it.
 
 ### MCP client config
 
@@ -186,6 +210,14 @@ Delete an entity and all associated observations and relations.
 ### delete_relation
 
 Delete a specific relation between two entities.
+
+### merge_entities
+
+Fold a duplicate entity (`source`) into its canonical twin (`target`) within one project. The source's observations are copied onto the target (deduplicated, keeping their votes), all the source's relations are repointed to the target (self-loops and duplicates dropped), the target keeps the higher of the two vote scores, and the source is **soft-deleted**. The merge is reversible: `restore_entity` brings the source back until a grace-window purge removes it. Both entities must already exist in the same project.
+
+### restore_entity
+
+Restore a soft-deleted entity, making it visible to reads again. Soft-deleted entities (e.g. the loser of a `merge_entities` call) are hidden from all reads but kept intact until a grace-window purge (off by default, `MCP_MEMORY_PURGE_ENABLED`; window `MCP_MEMORY_PURGE_GRACE_DAYS`, default 30). Restore reverses the hiding while the entity still exists.
 
 ### list_projects
 

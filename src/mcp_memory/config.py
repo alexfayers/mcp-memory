@@ -13,10 +13,15 @@ _DEFAULT_RECALL_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 _DEFAULT_RECALL_MAX_TURNS = "12"
 _DEFAULT_AUTO_VOTE_WINDOW_SECONDS = "1800"
 _DEFAULT_AUTO_VOTE_MAX_PER_DAY = "3"
-_DEFAULT_DREAM_IDLE_SECONDS = "7200"
-_DEFAULT_DREAM_POLL_SECONDS = "1800"
+_DEFAULT_DREAM_IDLE_SECONDS = "1800"
+_DEFAULT_DREAM_POLL_SECONDS = "300"
 _DEFAULT_DREAM_TIMEOUT = "300"
 _DEFAULT_DREAM_MAX_VOTES = "15"
+_DEFAULT_DREAM_HEAVY_IDLE_SECONDS = "5400"
+_DEFAULT_DREAM_HEAVY_POLL_SECONDS = "900"
+_DEFAULT_DREAM_HEAVY_TIMEOUT = "600"
+_DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
+_DEFAULT_PURGE_GRACE_DAYS = "30"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / "com.mcp-memory.plist"
@@ -52,9 +57,34 @@ def get_data_dir() -> Path:
     return get_db_path().parent
 
 
+def get_workspace_markers() -> tuple[str, ...]:
+    """Return the directory names that mark a multi-package workspace root.
+
+    Read from MCP_MEMORY_WORKSPACE_MARKERS (comma-separated), empty by default so
+    the feature stays opt-in and build-system-agnostic. When a marker directory is
+    found above a package's own repository root, that outer directory is treated as
+    the workspace root so sibling packages share one project scope.
+    """
+    raw = os.environ.get("MCP_MEMORY_WORKSPACE_MARKERS", "")
+    return tuple(marker.strip() for marker in raw.split(",") if marker.strip())
+
+
 def get_agent_port() -> int:
     """Return the HTTP port for the memory-agent server."""
     return int(os.environ.get("MCP_AGENT_PORT", _DEFAULT_AGENT_PORT))
+
+
+def get_agent_url() -> str:
+    """Return the base URL of the memory-agent server that the visualiser proxies to.
+
+    Prefers an explicit MCP_AGENT_URL, then MCP_AGENT_PORT, then the default agent
+    port. The mcp-memory process does not otherwise know the agent's port, so a
+    non-default port must be set for the memory server too (see cli._memory_spec).
+    """
+    explicit = os.environ.get("MCP_AGENT_URL")
+    if explicit:
+        return explicit
+    return f"http://localhost:{get_agent_port()}"
 
 
 def get_memory_url() -> str:
@@ -109,7 +139,7 @@ def get_dream_enabled() -> bool:
 
 
 def get_dream_idle_seconds() -> float:
-    """Return the memory-inactivity window before a dream pass may run."""
+    """Return the genuine-idle window before the light dream pass fires (once per session)."""
     return float(os.environ.get("MCP_DREAM_IDLE_SECONDS", _DEFAULT_DREAM_IDLE_SECONDS))
 
 
@@ -131,3 +161,71 @@ def get_dream_timeout() -> float:
 def get_dream_max_votes() -> int:
     """Return the advisory cap on how many entities a single dream pass may demote."""
     return int(os.environ.get("MCP_DREAM_MAX_VOTES", _DEFAULT_DREAM_MAX_VOTES))
+
+
+def get_dream_heavy_enabled() -> bool:
+    """Return whether the heavy structural dream tier runs (opt-in, off by default).
+
+    Independent of the light tier's MCP_DREAM_ENABLED - the heavy tier merges
+    duplicates and downvotes, so it is enabled separately and defaults off.
+    """
+    return os.environ.get("MCP_DREAM_HEAVY_ENABLED", "false").strip().lower() in _TRUTHY
+
+
+def get_dream_heavy_idle_seconds() -> float:
+    """Return the genuine-idle window before the heavy dream pass fires (once per session).
+
+    Measured from the true start of the idle session; the heavy tier fires once
+    when the session's genuine idle reaches this threshold. Larger than the light
+    threshold so the heavy pass covers the whole quiet period.
+    """
+    return float(os.environ.get("MCP_DREAM_HEAVY_IDLE_SECONDS", _DEFAULT_DREAM_HEAVY_IDLE_SECONDS))
+
+
+def get_dream_heavy_poll_seconds() -> float:
+    """Return how often the heavy-tier watcher checks whether a pass is due."""
+    return float(os.environ.get("MCP_DREAM_HEAVY_POLL_SECONDS", _DEFAULT_DREAM_HEAVY_POLL_SECONDS))
+
+
+def get_dream_heavy_model() -> str:
+    """Return the model id for heavy dream spawns, defaulting to the light dream model.
+
+    Structural curation (merges) benefits from a stronger model, so set
+    MCP_DREAM_HEAVY_MODEL to a fully-qualified id (e.g. a Sonnet id); a bare alias
+    silently remaps to Opus. The light-model default is only a safe fallback.
+    """
+    return os.environ.get("MCP_DREAM_HEAVY_MODEL") or get_dream_model()
+
+
+def get_dream_heavy_timeout() -> float:
+    """Return the overall timeout for a single heavy dream spawn."""
+    return float(os.environ.get("MCP_DREAM_HEAVY_TIMEOUT", _DEFAULT_DREAM_HEAVY_TIMEOUT))
+
+
+def get_dream_heavy_max_ops() -> int:
+    """Return the advisory cap on how many entities a single heavy pass may merge or demote."""
+    return int(os.environ.get("MCP_DREAM_HEAVY_MAX_OPS", _DEFAULT_DREAM_HEAVY_MAX_OPS))
+
+
+def get_purge_enabled() -> bool:
+    """Return whether soft-deleted entities are hard-purged past the grace window.
+
+    Off by default so a normal boot (and every test database) never silently
+    hard-deletes a soft-deleted entity.
+    """
+    return os.environ.get("MCP_MEMORY_PURGE_ENABLED", "false").strip().lower() in _TRUTHY
+
+
+def get_purge_grace_days() -> int:
+    """Return how long a soft-deleted entity is retained before it may be purged."""
+    return int(os.environ.get("MCP_MEMORY_PURGE_GRACE_DAYS", _DEFAULT_PURGE_GRACE_DAYS))
+
+
+def get_gc_enabled() -> bool:
+    """Return whether downvoted orphan entities are garbage-collected on startup.
+
+    Off by default so a normal boot (and every test database) never reaps an
+    entity. Reversible: the GC only soft-deletes, so the grace-window purge stays
+    the sole path to permanent removal.
+    """
+    return os.environ.get("MCP_MEMORY_GC_ENABLED", "false").strip().lower() in _TRUTHY

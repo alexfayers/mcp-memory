@@ -18,18 +18,26 @@ import re
 import shutil
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
 import anyio
 import httpx
 from mcp.server.fastmcp import FastMCP
+from starlette.responses import JSONResponse
 
 from . import dream_status, recall_status
 from .cli import _agent_spec, _setup_service_from_spec
 from .config import (
     get_agent_port,
     get_dream_enabled,
+    get_dream_heavy_enabled,
+    get_dream_heavy_idle_seconds,
+    get_dream_heavy_max_ops,
+    get_dream_heavy_model,
+    get_dream_heavy_poll_seconds,
+    get_dream_heavy_timeout,
     get_dream_idle_seconds,
     get_dream_max_votes,
     get_dream_model,
@@ -44,7 +52,9 @@ from .config import (
 logger = logging.getLogger("memory-agent")
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
+
+    from starlette.requests import Request
 
 
 class SpawnResult(TypedDict):
@@ -77,6 +87,8 @@ _MUTATING_MEMORY_TOOLS = (
     "set_entity_status",
     "set_project_paths",
     "move_project_entities",
+    "merge_entities",
+    "restore_entity",
     "vote_entity",
 )
 # --strict-mcp-config isolates MCP servers but not built-ins. Deny the write/exec
@@ -107,6 +119,15 @@ DISALLOWED_TOOLS: tuple[str, ...] = (
 # denied, keeping grooming to demote-never-delete.
 DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
     *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS if tool != "vote_entity"),
+    *_DISALLOWED_BUILTINS,
+)
+
+# The heavy tier may also merge duplicates, so vote_entity and merge_entities are
+# the two memory tools it is NOT denied; every delete_* (and restore_entity) stays
+# denied, so removal is never hard - merge only soft-deletes the folded-away source.
+_HEAVY_TIER_ALLOWED = {"vote_entity", "merge_entities"}
+HEAVY_DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
+    *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS if tool not in _HEAVY_TIER_ALLOWED),
     *_DISALLOWED_BUILTINS,
 )
 
@@ -178,6 +199,37 @@ DREAM_RITUAL = (
     "found no clear candidates."
 )
 
+HEAVY_DREAM_RITUAL = (
+    "You are a memory curation agent doing structural grooming of a knowledge graph "
+    "while it is idle, with access to the mcp__memory__* tools. "
+    "The mcp__memory server may report as 'still connecting' on your very first "
+    "turn; ignore that and CALL a memory tool anyway - the connection completes "
+    "before the call runs. "
+    "Your ONLY permitted mutations are: merge_entities (to fold a duplicate entity "
+    "into its canonical twin) and vote_entity with a vote of -1 (to DEMOTE a stale "
+    "entity in ranking). You must NEVER delete anything, NEVER create entities, and "
+    "NEVER cast a positive vote. "
+    "Search broadly ACROSS ALL PROJECTS (search_all_projects, then search_nodes and "
+    "get_entity_with_relations / search_related_nodes to confirm). "
+    "When you find two entities in the same project that describe the same thing, "
+    "merge them: merge_entities(project, source, target) where source is the worse "
+    "duplicate to fold away and target is the canonical keeper. Only merge entities "
+    "you are confident are genuine duplicates, and only within a single project - "
+    "never merge across projects. "
+    "Also demote (vote_entity, -1) entities that are clearly stale or superseded but "
+    "not duplicates, skipping any already at or below a score of -10 (the ranking "
+    "penalty has saturated there). "
+    "Do at most {max_ops} operations (merges plus demotions) this pass - be "
+    "conservative and prefer clear cases over borderline calls. "
+    "When you act, pass each entity's exact project and name slug VERBATIM from the "
+    "tool results. "
+    "Finish with a terse audit summary: exactly one line per operation in the form "
+    "'[project/entity-name] - action reason' (the affected slug in square brackets, "
+    "then a hyphen, then the action and a few words of why, e.g. "
+    "'[proj/task/old] - merged into task/new: duplicate'), or the single line "
+    "'nothing changed' if you found no clear candidates."
+)
+
 RECALL_DESC = (
     "Delegate a HEAVY, multi-step memory recall to a throwaway agent and get back "
     "distilled findings, each tagged with its source [project/entity] slug so you "
@@ -238,6 +290,31 @@ def build_recall_command(
     ]
 
 
+def _build_curation_command(
+    *,
+    claude_bin: str,
+    model: str,
+    mcp_config_path: str,
+    prompt: str,
+    disallowed: tuple[str, ...],
+) -> list[str]:
+    """Build the headless ``claude -p`` argv shared by both dream curation tiers."""
+    return [
+        claude_bin,
+        "-p",
+        prompt,
+        "--model",
+        model,
+        "--mcp-config",
+        mcp_config_path,
+        "--strict-mcp-config",
+        "--disallowedTools",
+        *disallowed,
+        "--output-format",
+        "json",
+    ]
+
+
 def build_dream_command(
     *,
     claude_bin: str,
@@ -246,20 +323,30 @@ def build_dream_command(
     max_votes: int,
 ) -> list[str]:
     """Build the headless ``claude -p`` argv for a downvote-only dream curation spawn."""
-    return [
-        claude_bin,
-        "-p",
-        DREAM_RITUAL.format(max_votes=max_votes),
-        "--model",
-        model,
-        "--mcp-config",
-        mcp_config_path,
-        "--strict-mcp-config",
-        "--disallowedTools",
-        *DREAM_DISALLOWED_TOOLS,
-        "--output-format",
-        "json",
-    ]
+    return _build_curation_command(
+        claude_bin=claude_bin,
+        model=model,
+        mcp_config_path=mcp_config_path,
+        prompt=DREAM_RITUAL.format(max_votes=max_votes),
+        disallowed=DREAM_DISALLOWED_TOOLS,
+    )
+
+
+def build_heavy_dream_command(
+    *,
+    claude_bin: str,
+    model: str,
+    mcp_config_path: str,
+    max_ops: int,
+) -> list[str]:
+    """Build the headless ``claude -p`` argv for a merge-and-downvote heavy curation spawn."""
+    return _build_curation_command(
+        claude_bin=claude_bin,
+        model=model,
+        mcp_config_path=mcp_config_path,
+        prompt=HEAVY_DREAM_RITUAL.format(max_ops=max_ops),
+        disallowed=HEAVY_DREAM_DISALLOWED_TOOLS,
+    )
 
 
 def build_spawn_env(config_dir: str, *, base_env: dict[str, str] | None = None) -> dict[str, str]:
@@ -496,6 +583,22 @@ async def run_dream_pass() -> str:
     return result["text"]
 
 
+async def run_heavy_dream_pass() -> str:
+    """Run one merge-and-downvote heavy curation pass in a throwaway agent, returning its audit."""
+    model = get_dream_heavy_model()
+    result = await _run_isolated_agent(
+        lambda claude_bin, config_path: build_heavy_dream_command(
+            claude_bin=claude_bin,
+            model=model,
+            mcp_config_path=config_path,
+            max_ops=get_dream_heavy_max_ops(),
+        ),
+        model=model,
+        timeout=get_dream_heavy_timeout(),
+    )
+    return result["text"]
+
+
 async def fetch_idle_seconds() -> float | None:
     """Return the mcp-memory server's idle seconds, or None if it cannot be reached.
 
@@ -515,30 +618,20 @@ async def fetch_idle_seconds() -> float | None:
     return float(idle) if isinstance(idle, (int, float)) else None
 
 
-async def _dream_tick(last_pass: float) -> float:
-    """Run a dream pass if memory has been idle long enough, returning the new last-pass time.
+@dataclass(frozen=True)
+class TierSpec:
+    """What varies between the light and heavy dream tiers.
 
-    Requires BOTH the reported memory idle window AND the time since the previous
-    pass to exceed the threshold. The second guard prevents a degenerate pass that
-    makes no tool calls (so it never resets the idle marker) from re-firing every
-    poll. Returns ``last_pass`` unchanged when no pass runs.
+    Each getter is a thunk so it resolves the underlying config at call time,
+    which keeps the idle threshold live-configurable and keeps tests able to
+    monkeypatch the config functions the thunks call.
     """
-    threshold = get_dream_idle_seconds()
-    idle = await fetch_idle_seconds()
-    if idle is None or idle < threshold:
-        return last_pass
-    now = time.monotonic()
-    if now - last_pass < threshold:
-        return last_pass
-    try:
-        audit = await run_dream_pass()
-    except Exception as exc:
-        logger.exception("dream pass failed")
-        dream_status.record_pass(str(exc), ok=False)
-    else:
-        logger.info("dream: %s", audit)
-        dream_status.record_pass(audit, ok=_pass_succeeded(audit))
-    return now
+
+    name: str
+    enabled_getter: Callable[[], bool]
+    idle_getter: Callable[[], float]
+    poll_getter: Callable[[], float]
+    run_pass: Callable[[], Awaitable[str]]
 
 
 def _pass_succeeded(audit: str) -> bool:
@@ -550,39 +643,244 @@ def _pass_succeeded(audit: str) -> bool:
     return not audit.startswith("recall ")
 
 
-async def _idle_watch_loop() -> None:
-    """Poll for a memory-idle window and run a dream curation pass when one opens."""
-    dream_status.record_startup(
-        enabled=get_dream_enabled(),
-        idle_threshold_seconds=get_dream_idle_seconds(),
-        poll_seconds=get_dream_poll_seconds(),
+# Global single-flight guard: at most one dream (light OR heavy, scheduled OR
+# manual) runs at a time. A plain bool suffices because every tier watcher and
+# every manual trigger runs in the one memory-agent event loop, so a check-and-set
+# with no await in between is atomic - and unlike a module-level asyncio.Lock it
+# does not bind to a single event loop (tests each run on a fresh loop).
+_dream_running = False
+# Manual triggers spawn a background task; hold a reference so it is not garbage
+# collected mid-run (asyncio only holds a weak reference to running tasks).
+_manual_tasks: set[asyncio.Task[None]] = set()
+
+# Slack (seconds) allowed between a dream pass's own marker reset and when we
+# observe it, before an idle-marker touch counts as real user activity. Tied to
+# activity._MARKER_THROTTLE_SECONDS (60.0): a self-caused reset can surface up to
+# ~60s stale due to the throttled marker write, plus fetch latency. Err large -
+# too small a margin misreads the dream's own delayed reset as the user returning,
+# re-arming the session early and re-creating the sawtooth that starves the heavy tier.
+_SESSION_END_MARGIN_SECONDS = 60.0
+
+
+@dataclass
+class _SessionState:
+    """Mutable state of the current idle session, shared across coordinator ticks.
+
+    ``anchor`` is the monotonic instant the current idle session began (None when
+    no session is active). ``fired`` names the tiers already fired this session.
+    ``last_pass_end`` is the monotonic instant our last pass finished, used to
+    attribute a marker reset to the dream itself rather than to the user.
+    """
+
+    anchor: float | None = None
+    fired: set[str] = field(default_factory=set)
+    last_pass_end: float = 0.0
+
+
+# Single coordinator session state; reset in tests via ``agent._session = _SessionState()``.
+_session = _SessionState()
+
+
+def _claim_dream() -> bool:
+    """Claim the single-flight slot, returning False if a dream is already running."""
+    global _dream_running  # noqa: PLW0603
+    if _dream_running:
+        return False
+    _dream_running = True
+    return True
+
+
+async def _run_claimed(spec: TierSpec) -> None:
+    """Run one already-claimed pass: record start, run, record outcome, release the slot.
+
+    The caller MUST have claimed the slot via ``_claim_dream`` first; this always
+    releases it. ``record_pass_start`` / ``record_pass`` bracket the run so the
+    visualiser can show the pass as in flight. Stamping ``_session.last_pass_end``
+    here - the single chokepoint shared by the scheduled and manual paths - is what
+    lets the coordinator tell the dream's own marker reset from real user activity.
+    """
+    global _dream_running  # noqa: PLW0603
+    dream_status.record_pass_start(spec.name)
+    try:
+        audit = await spec.run_pass()
+    except Exception as exc:
+        logger.exception("%s dream pass failed", spec.name)
+        dream_status.record_pass(str(exc), ok=False, tier=spec.name)
+    else:
+        logger.info("%s dream: %s", spec.name, audit)
+        dream_status.record_pass(audit, ok=_pass_succeeded(audit), tier=spec.name)
+    finally:
+        _dream_running = False
+        _session.last_pass_end = time.monotonic()
+
+
+async def _run_guarded(spec: TierSpec) -> bool:
+    """Run one pass under the single-flight guard, returning whether it actually ran."""
+    if not _claim_dream():
+        return False
+    await _run_claimed(spec)
+    return True
+
+
+def _due_tiers(
+    state: _SessionState, now: float, idle: float, tiers: list[TierSpec]
+) -> list[TierSpec]:
+    """Observe one (now, idle) sample: update the session and return the tiers due to fire.
+
+    A pure, synchronous decision function - the tricky session-detection logic lives
+    here, driven only by explicit inputs, so it is trivially unit-testable.
+
+    ``idle`` is a wall-clock duration; ``now`` and ``state.last_pass_end`` are
+    monotonic instants, so ``implied_activity = now - idle`` is a monotonic instant -
+    only monotonic-vs-monotonic comparisons, no wall/monotonic mix. ``tiers`` must be
+    the enabled tiers; the smallest idle threshold establishes the session.
+    """
+    implied_activity = now - idle
+    session_ended = implied_activity > state.last_pass_end + _SESSION_END_MARGIN_SECONDS
+    if state.anchor is not None and session_ended:
+        state.anchor = None
+        state.fired.clear()
+    if state.anchor is None:
+        if not tiers or idle < min(spec.idle_getter() for spec in tiers):
+            return []
+        state.anchor = now - idle
+    genuine_idle = now - state.anchor
+    return sorted(
+        (
+            spec
+            for spec in tiers
+            if spec.name not in state.fired and genuine_idle >= spec.idle_getter()
+        ),
+        key=lambda spec: spec.idle_getter(),
     )
-    last_pass = 0.0
+
+
+async def _coordinator_tick() -> None:
+    """Fetch idle once, then run every tier the session says is due, at most once each.
+
+    A tier is added to ``_session.fired`` only after a successful guard claim, so a
+    tick blocked by the single-flight guard simply retries the tier next poll.
+    """
+    idle = await fetch_idle_seconds()
+    if idle is None:
+        return
+    now = time.monotonic()
+    for spec in _due_tiers(_session, now, idle, _enabled_tiers()):
+        if await _run_guarded(spec):
+            _session.fired.add(spec.name)
+
+
+# Every field is wrapped in a lambda (not passed as a direct reference) so the
+# module-level name resolves at call time. A direct reference would freeze the
+# original function object, defeating the runtime config the getters read and the
+# monkeypatching the tests rely on.
+_LIGHT_TIER = TierSpec(
+    name="light",
+    enabled_getter=lambda: get_dream_enabled(),  # noqa: PLW0108
+    idle_getter=lambda: get_dream_idle_seconds(),  # noqa: PLW0108
+    poll_getter=lambda: get_dream_poll_seconds(),  # noqa: PLW0108
+    run_pass=lambda: run_dream_pass(),  # noqa: PLW0108
+)
+
+# The heavy tier fires once per idle session at a longer genuine-idle threshold,
+# measured from the session's true start. Because the light tier now fires only
+# once per session, its own marker reset no longer caps the idle clock, so the
+# clock climbs freely to the heavy threshold.
+_HEAVY_TIER = TierSpec(
+    name="heavy",
+    enabled_getter=lambda: get_dream_heavy_enabled(),  # noqa: PLW0108
+    idle_getter=lambda: get_dream_heavy_idle_seconds(),  # noqa: PLW0108
+    poll_getter=lambda: get_dream_heavy_poll_seconds(),  # noqa: PLW0108
+    run_pass=lambda: run_heavy_dream_pass(),  # noqa: PLW0108
+)
+
+_ALL_TIERS = (_LIGHT_TIER, _HEAVY_TIER)
+
+
+def _enabled_tiers() -> list[TierSpec]:
+    """Return the dream tiers whose enabled flag is currently set."""
+    return [spec for spec in _ALL_TIERS if spec.enabled_getter()]
+
+
+_TIERS_BY_NAME = {_LIGHT_TIER.name: _LIGHT_TIER, _HEAVY_TIER.name: _HEAVY_TIER}
+
+
+def trigger_dream(tier: str) -> dict[str, object]:
+    """Kick off a manual dream pass of ``tier`` as a background task.
+
+    Runs regardless of the tier's enabled flag (that flag only gates the autonomous
+    scheduler), but still requires the claude CLI and respects the single-flight
+    guard. Returns ``{"started": bool, "reason": str}`` immediately - the pass itself
+    runs in the background and the visualiser reflects it via the running indicator.
+    """
+    spec = _TIERS_BY_NAME.get(tier)
+    if spec is None:
+        return {"started": False, "reason": "unknown tier"}
+    if _claude_bin() is None:
+        return {"started": False, "reason": "claude CLI not found"}
+    if not _claim_dream():
+        return {"started": False, "reason": "already running"}
+    task = asyncio.create_task(_run_claimed(spec))
+    _manual_tasks.add(task)
+    task.add_done_callback(_manual_tasks.discard)
+    return {"started": True}
+
+
+@mcp.custom_route("/api/dream/trigger", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
+async def _dream_trigger_route(request: Request) -> JSONResponse:
+    """Trigger a manual dream pass. Body: ``{"tier": "light"|"heavy"}``."""
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"started": False, "reason": "invalid JSON body"}, status_code=400)
+    tier = body.get("tier") if isinstance(body, dict) else None
+    if not isinstance(tier, str):
+        return JSONResponse({"started": False, "reason": "tier is required"}, status_code=400)
+    result = trigger_dream(tier)
+    status = 200 if result["started"] else 409
+    return JSONResponse(result, status_code=status)
+
+
+async def _coordinator_loop() -> None:
+    """Snapshot each enabled tier's config, then poll and coordinate their passes.
+
+    One loop drives both tiers, so it polls at the finest enabled cadence and the
+    per-session decision (which tier is due, when the session ended) is made by
+    ``_due_tiers`` each tick.
+    """
+    tiers = _enabled_tiers()
+    for spec in tiers:
+        dream_status.record_startup(
+            tier=spec.name,
+            enabled=spec.enabled_getter(),
+            idle_threshold_seconds=spec.idle_getter(),
+            poll_seconds=spec.poll_getter(),
+        )
+    poll = min(spec.poll_getter() for spec in tiers)
     while True:
-        await asyncio.sleep(get_dream_poll_seconds())
-        last_pass = await _dream_tick(last_pass)
+        await asyncio.sleep(poll)
+        await _coordinator_tick()
 
 
 async def _serve() -> None:
-    """Serve over streamable HTTP, running the idle-watcher alongside if enabled.
+    """Serve over streamable HTTP, running the single dream coordinator alongside.
 
-    The watcher starts only when the dream is enabled AND the claude CLI it would
-    spawn is present; otherwise it would poll forever with every pass no-opping. It
-    is an explicit background task rather than a FastMCP ``lifespan``: in
-    stateless_http mode the low-level server runs per request, so a lifespan task
+    The coordinator starts only when the claude CLI it would spawn is present AND at
+    least one tier is enabled; otherwise it would poll forever with every pass
+    no-opping. It is an explicit background task rather than a FastMCP ``lifespan``:
+    in stateless_http mode the low-level server runs per request, so a lifespan task
     would be spawned and cancelled on every request. Cancelled cleanly on shutdown.
     """
     recall_status.record_startup()
-    watcher = (
-        asyncio.create_task(_idle_watch_loop()) if get_dream_enabled() and _claude_bin() else None
-    )
+    run_coordinator = _claude_bin() is not None and bool(_enabled_tiers())
+    coordinator = asyncio.create_task(_coordinator_loop()) if run_coordinator else None
     try:
         await mcp.run_streamable_http_async()
     finally:
-        if watcher is not None:
-            watcher.cancel()
+        if coordinator is not None:
+            coordinator.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await watcher
+                await coordinator
 
 
 def main(argv: list[str] | None = None) -> None:

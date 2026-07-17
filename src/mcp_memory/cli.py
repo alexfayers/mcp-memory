@@ -45,13 +45,21 @@ class _ServiceSpec:
 
 def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
     """Service spec for the mcp-memory data server."""
+    env = {"MCP_MEMORY_DB_PATH": str(db_path), "MCP_MEMORY_PORT": port}
+    # Carry any soft-delete purge and GC settings through so `MCP_MEMORY_PURGE_* /
+    # MCP_MEMORY_GC_* mcp-memory setup-service` sticks in the installed service.
+    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_PURGE_")})
+    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_GC_")})
+    # Carry the agent locator through so the visualiser's dream-trigger proxy can reach
+    # a non-default memory-agent port (the server does not otherwise know it).
+    env.update({k: v for k, v in os.environ.items() if k in ("MCP_AGENT_URL", "MCP_AGENT_PORT")})
     return _ServiceSpec(
         name="memory",
         binary_name="mcp-memory",
         label=_LAUNCHD_LABEL,
         description="mcp-memory server",
         port=port,
-        env={"MCP_MEMORY_DB_PATH": str(db_path), "MCP_MEMORY_PORT": port},
+        env=env,
         log_path=db_path.parent / "mcp-memory.log",
         plist_path=_LAUNCHD_PLIST,
         systemd_unit=_SYSTEMD_UNIT,

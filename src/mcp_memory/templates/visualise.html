@@ -105,16 +105,25 @@ svg { width: 100vw; height: 100vh; }
 #dream-head .pill { display: inline-flex; align-items: center; gap: 6px; color: #8b949e; }
 #dream-head .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #484f58; flex-shrink: 0; }
 #dream-head.on .pill .dot { background: #bc8cff; box-shadow: 0 0 6px #bc8cff; }
+#dream-head.running .pill .dot { background: #bc8cff; box-shadow: 0 0 6px #bc8cff; animation: glowpulse 1.6s ease-in-out infinite; }
 #dream-head .idle { margin-left: auto; color: #6e7681; font-variant-numeric: tabular-nums; }
+#dream-head.running .idle { color: #bc8cff; }
 #dream-body { padding: 6px 12px; }
+#dream-actions { display: flex; align-items: center; gap: 6px; padding: 4px 12px 8px; border-top: 1px solid #21262d; }
+#dream-actions button { padding: 2px 10px; font-size: 11px; }
+#dream-actions button:disabled { opacity: 0.5; cursor: default; }
+#dream-action-msg { color: #6e7681; font-size: 11px; }
 #dream-body .line { color: #8b949e; padding: 2px 0; }
 #dream-body .line .em { color: #c9d1d9; font-variant-numeric: tabular-nums; }
-#dream-demotions { margin-top: 4px; max-height: 22vh; overflow-y: auto; }
-#dream-demotions .dm { display: flex; gap: 6px; align-items: baseline; padding: 3px 0; border-top: 1px solid #21262d; cursor: pointer; }
-#dream-demotions .dm:hover { background: rgba(188,140,255,0.08); }
-#dream-demotions .dm .v { color: #d29922; font-weight: 700; flex-shrink: 0; }
-#dream-demotions .dm .nm { color: #c9d1d9; word-break: break-all; }
-#dream-demotions .dm .why { color: #6e7681; display: block; }
+#dream-body .line .why { color: #6e7681; }
+#dream-body .line .pill { color: #bc8cff; border: 1px solid rgba(188,140,255,0.4); border-radius: 8px; padding: 0 6px; font-size: 11px; }
+#dream-operations { margin-top: 4px; max-height: 22vh; overflow-y: auto; }
+#dream-operations .dm { display: flex; gap: 6px; align-items: baseline; padding: 3px 0; border-top: 1px solid #21262d; cursor: pointer; }
+#dream-operations .dm:hover { background: rgba(188,140,255,0.08); }
+#dream-operations .dm .v { color: #d29922; font-weight: 700; flex-shrink: 0; }
+#dream-operations .dm .v.merge { color: #bc8cff; }
+#dream-operations .dm .nm { color: #c9d1d9; word-break: break-all; }
+#dream-operations .dm .why { color: #6e7681; display: block; }
 .node.demoted circle { stroke: #d29922; stroke-dasharray: 2 2; }
 .demoted-ring { fill: none; stroke: #d29922; stroke-opacity: 0.8; stroke-dasharray: 2 2; pointer-events: none; }
 </style>
@@ -167,6 +176,11 @@ svg { width: 100vw; height: 100vh; }
       <span class="idle" id="dream-idle"></span>
     </div>
     <div id="dream-body"></div>
+    <div id="dream-actions">
+      <button id="dream-run-light" data-tier="light">Run light</button>
+      <button id="dream-run-heavy" data-tier="heavy">Run heavy</button>
+      <span id="dream-action-msg"></span>
+    </div>
   </div>
 </div>
 <div id="panel">
@@ -649,20 +663,32 @@ function formatDuration(seconds) {
   return `${h}h ${m % 60}m`;
 }
 
+function tierLine(name, cfg, idleSeconds) {
+  // A tier's live status line: each tier fires once per idle session when genuine
+  // idle reaches its threshold, so the line shows only the idle-window state.
+  if (!cfg || !cfg.enabled) return "";
+  const label = name.charAt(0).toUpperCase() + name.slice(1);
+  const remaining = cfg.idle_threshold_seconds - idleSeconds;
+  const idleState = remaining <= 0 ? "idle window open" : `~${formatDuration(remaining)} to idle`;
+  return `<div class="line">${label}: <span class="em">${idleState}</span></div>`;
+}
+
 function renderDream(d) {
+  const tiers = d.tiers || {};
+  const anyEnabled = d.available && Object.values(tiers).some(c => c && c.enabled);
   const head = document.getElementById("dream-head");
-  const enabled = d.available && d.enabled;
-  head.classList.toggle("on", !!enabled);
+  head.classList.toggle("on", !!anyEnabled);
+  head.classList.toggle("running", !!d.running);
   document.getElementById("dream-state").textContent =
-    !d.available ? "dream · unknown" : enabled ? "dream · on" : "dream · off";
-  document.getElementById("dream-idle").textContent = `idle ${formatDuration(d.idle_seconds)}`;
+    !d.available ? "dream · unknown" : anyEnabled ? "dream · on" : "dream · off";
+  document.getElementById("dream-idle").textContent =
+    d.running ? `${d.running} running` : `idle ${formatDuration(d.idle_seconds)}`;
 
   const body = document.getElementById("dream-body");
   const lines = [];
-  if (enabled && d.idle_threshold_seconds != null) {
-    const remaining = d.idle_threshold_seconds - d.idle_seconds;
-    const next = remaining <= 0 ? "idle window open" : `~${formatDuration(remaining)}`;
-    lines.push(`<div class="line">Next pass: <span class="em">${next}</span></div>`);
+  const tierLines = ["light", "heavy"].map(n => tierLine(n, tiers[n], d.idle_seconds)).join("");
+  if (tierLines) {
+    lines.push(tierLines);
   } else if (!d.available) {
     lines.push(`<div class="line">No dream pass has run yet.</div>`);
   } else {
@@ -672,17 +698,26 @@ function renderDream(d) {
   const lp = d.last_pass;
   if (lp) {
     const when = new Date(lp.ts * 1000).toLocaleString();
+    const tier = lp.tier === "heavy" ? "heavy" : "light";
     const status = lp.ok ? "" : ' <span style="color:#f85149">(failed)</span>';
-    lines.push(`<div class="line">Last ran: <span class="em">${when}</span>${status}</div>`);
-    if (lp.ok && lp.demotions.length) {
-      lines.push(`<div class="line">Demoted ${lp.demotions.length} last pass:</div>`);
-      lines.push('<div id="dream-demotions">' + lp.demotions.map(dm =>
-        `<div class="dm" data-project="${(dm.project || "").replace(/"/g, "&quot;")}" data-name="${(dm.name || "").replace(/"/g, "&quot;")}">`
-        + `<span class="v">-1</span><span class="meta"><span class="nm">${(dm.name || "").replace(/</g, "&lt;")}</span>`
-        + (dm.reason ? `<span class="why">${dm.reason.replace(/</g, "&lt;")}</span>` : "")
-        + `</span></div>`).join("") + '</div>');
+    lines.push(`<div class="line">Last ran <span class="pill">${tier}</span>: <span class="em">${when}</span>${status}</div>`);
+    const ops = lp.operations || [];
+    if (lp.ok && ops.length) {
+      const merges = ops.filter(o => o.action === "merge").length;
+      const demotes = ops.length - merges;
+      const parts = [];
+      if (merges) parts.push(`${merges} merged`);
+      if (demotes) parts.push(`${demotes} demoted`);
+      lines.push(`<div class="line">${parts.join(", ")} last pass:</div>`);
+      lines.push('<div id="dream-operations">' + ops.map(op => {
+        const isMerge = op.action === "merge";
+        return `<div class="dm" data-project="${(op.project || "").replace(/"/g, "&quot;")}" data-name="${(op.name || "").replace(/"/g, "&quot;")}">`
+          + `<span class="v${isMerge ? " merge" : ""}">${isMerge ? "⇒" : "-1"}</span><span class="meta"><span class="nm">${(op.name || "").replace(/</g, "&lt;")}</span>`
+          + (op.reason ? `<span class="why">${op.reason.replace(/</g, "&lt;")}</span>` : "")
+          + `</span></div>`;
+      }).join("") + '</div>');
     } else if (lp.ok) {
-      lines.push(`<div class="line">Nothing demoted last pass.</div>`);
+      lines.push(`<div class="line">Nothing changed last pass.</div>`);
     } else {
       lines.push(`<div class="line" style="color:#6e7681">${(lp.audit_text || "").replace(/</g, "&lt;")}</div>`);
     }
@@ -700,6 +735,22 @@ document.getElementById("dream-body").onclick = (e) => {
   const node = nodes.find(n => n.id === row.dataset.name && n.project === row.dataset.project);
   if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
 };
+
+const dreamButtons = [...document.querySelectorAll("#dream-actions button")];
+async function triggerDream(tier) {
+  const msg = document.getElementById("dream-action-msg");
+  msg.textContent = "";
+  dreamButtons.forEach(b => b.disabled = true);
+  try {
+    const res = await fetch("/api/dream/trigger", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier }) });
+    const data = await res.json().catch(() => ({}));
+    if (!data.started) msg.textContent = data.reason || "could not start";
+    await fetchDream();  // reflect the running state immediately
+  } catch (e) { msg.textContent = "could not start"; }
+  finally { dreamButtons.forEach(b => b.disabled = false); }
+}
+dreamButtons.forEach(b => b.onclick = () => triggerDream(b.dataset.tier));
+
 fetchDream();
 setInterval(fetchDream, 5000);
 

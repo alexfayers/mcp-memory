@@ -708,4 +708,15 @@ MIGRATIONS: list[Migration] = [
             "ALTER TABLE observations ADD COLUMN vote_score INTEGER NOT NULL DEFAULT 0",
         ],
     ),
+    Migration(
+        version=23,
+        statements=[
+            # Soft-delete: deleted_at marks an entity hidden from all reads while its
+            # rows stay intact and restorable. NULL means live. A gated startup purge
+            # hard-deletes rows soft-deleted past a grace window. Not in the FTS
+            # projection, so no trigger changes are needed (mirrors v20/v22).
+            "ALTER TABLE entities ADD COLUMN deleted_at DATETIME",
+            "CREATE INDEX IF NOT EXISTS idx_entities_deleted_at ON entities(deleted_at)",
+        ],
+    ),
 ]

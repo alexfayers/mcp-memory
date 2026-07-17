@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import os
 import random
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
 from cline_hooks.core.plugin import HookResult, HooksPlugin
 
+from mcp_memory.config import get_db_path, get_workspace_markers
+from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.review_tracker import (
     record_write,
     should_nudge,
@@ -25,7 +28,7 @@ from mcp_memory.hooks.tracker import (
     reset,
     should_block,
 )
-from mcp_memory.path_resolver import resolve_project_for_path
+from mcp_memory.path_resolver import normalize_path, resolve_project_for_path
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(
     {
@@ -82,6 +85,15 @@ _MEMORY_REVIEW_NUDGE = (
     "MEMORY REVIEW DUE: many memory writes have accumulated since the last review. "
     "Run the `memory-review` skill via a subagent to audit and clean the graph "
     "(orphans, duplicates, naming, bloat). This fires periodically by design."
+)
+_AUTO_REGISTERED_NOTE = (
+    "Registered this workspace to memory project `{project}` (path `{anchor}`), "
+    "so the scope now persists for this directory."
+)
+_AUTO_REGISTER_UNKNOWN_NOTE = (
+    "This workspace (`{anchor}`) maps to no known memory project and its name could not"
+    " be matched to an existing one, so no scope was created. If it belongs to a project,"
+    " register it with `set_project_paths(project=..., paths=['{anchor}'])`."
 )
 
 _DEFAULT_READ_ONLY_AGENT_TYPES = frozenset({"Explore", "Plan"})
@@ -166,21 +178,97 @@ def _is_memory_read(tool_name: str, parameters: dict[str, object]) -> bool:
     return _extract_mcp_suffix(tool_name) in _MEMORY_READ_TOOL_NAMES
 
 
-def _find_project_from_path(file_path: str) -> str | None:
-    """Derive a project name by walking up from a file path to find a .git directory."""
+def _find_git_root(file_path: str) -> Path | None:
+    """Return the nearest ancestor directory containing a .git entry, or None."""
     current = Path(file_path).resolve()
     if current.is_file():
         current = current.parent
     while current != current.parent:
         if (current / ".git").exists():
-            return current.name
+            return current
         current = current.parent
     return None
+
+
+def _find_project_from_path(file_path: str) -> str | None:
+    """Derive a project name by walking up from a file path to find a .git directory."""
+    root = _find_git_root(file_path)
+    return root.name if root else None
+
+
+def _resolve_anchor(path: str) -> tuple[Path, str] | None:
+    """Return the (anchor, candidate name) to register for a path, or None.
+
+    The candidate name is the package's own repository-root folder name. The anchor
+    is the path to register: normally the repository root, but when a configured
+    workspace-marker directory (see config.get_workspace_markers) sits above the
+    repository root, the anchor is that outer workspace root instead, so every
+    sibling package under it resolves to one project scope.
+    """
+    git_root = _find_git_root(path)
+    if git_root is None:
+        return None
+    anchor = git_root
+    markers = get_workspace_markers()
+    if markers:
+        current = git_root.parent
+        while current != current.parent:
+            if any((current / marker).exists() for marker in markers):
+                anchor = current
+                break
+            current = current.parent
+    return anchor, git_root.name
+
+
+def _registration_target(workspace_roots: list[str]) -> tuple[Path, str] | None:
+    """Return the (anchor, candidate name) eligible for auto-registration, or None.
+
+    None means no registration should happen: no workspace, the path is already mapped
+    (never clobber), no repository root was found, or the anchor is the home directory.
+    """
+    if not workspace_roots:
+        return None
+    cwd = workspace_roots[0]
+    if resolve_project_for_path(cwd) is not None:
+        return None
+    resolved = _resolve_anchor(cwd)
+    if resolved is None or resolved[0] == Path.home().resolve():
+        return None
+    return resolved
 
 
 def _resolve_project(path: str) -> str | None:
     """Resolve a path to a project, preferring registered paths over .git detection."""
     return resolve_project_for_path(path) or _find_project_from_path(path)
+
+
+def _safe_project(anchor: Path, basename: str, db: DatabaseManager) -> str | None:
+    """Return the project an anchor may be safely registered to, or None.
+
+    Only identifies a project that already exists, never invents one:
+    - if the anchor (or an ancestor) is already registered, reuse that project - this
+      also means an existing mapping is never overwritten;
+    - else if a sibling package under the anchor is already mapped to a single project,
+      reuse it so the whole workspace collapses to that scope;
+    - else if a project scope already exists whose name matches the repository-root
+      folder name (case-insensitively), pin to that project;
+    - otherwise return None so the caller prompts for deliberate registration.
+    """
+    existing = db.get_project_for_path(str(anchor))
+    if existing:
+        return existing
+    anchor_norm = Path(normalize_path(str(anchor)))
+    below = {
+        project
+        for project, registered in db.list_project_paths()
+        if Path(registered).is_relative_to(anchor_norm)
+    }
+    if len(below) == 1:
+        return next(iter(below))
+    for project in db.list_projects():
+        if project.casefold() == basename.casefold():
+            return project
+    return None
 
 
 _SCOPE_MISMATCH_WARNING = (
@@ -306,11 +394,38 @@ class MemoryPlugin(HooksPlugin):
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
         clear(task_id)
         self._reminder.reset()
+        auto_note = self._maybe_auto_register(workspace_roots)
         if workspace_roots:
             self._project_scope = (
                 _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
             )
-        return HookResult(notes=_build_task_start_context(workspace_roots))
+        notes = _build_task_start_context(workspace_roots)
+        if auto_note:
+            notes.append(auto_note)
+        return HookResult(notes=notes)
+
+    def _maybe_auto_register(self, workspace_roots: list[str]) -> str | None:
+        """Self-heal the workspace-to-project mapping, returning a note or None.
+
+        Best-effort and non-destructive: registers the workspace only when its project
+        can be identified safely (see _safe_project) and never overwrites an existing
+        mapping or the home directory. A database failure is swallowed so task start is
+        never broken. Returns None when a path is registered silently or nothing is done,
+        and a guidance note when the workspace maps to no identifiable project.
+        """
+        target = _registration_target(workspace_roots)
+        if target is None:
+            return None
+        anchor, basename = target
+        try:
+            db = DatabaseManager(get_db_path())
+            project = _safe_project(anchor, basename, db)
+            if project is None:
+                return _AUTO_REGISTER_UNKNOWN_NOTE.format(anchor=anchor)
+            db.add_project_path(project, str(anchor))
+        except (sqlite3.Error, OSError):
+            return None
+        return _AUTO_REGISTERED_NOTE.format(project=project, anchor=anchor)
 
     def _on_task_end(self, **kwargs: object) -> None:
         clear(str(kwargs.get("task_id", "")))
