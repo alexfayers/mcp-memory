@@ -122,6 +122,7 @@ svg { width: 100vw; height: 100vh; }
 #dream-operations .dm:hover { background: rgba(188,140,255,0.08); }
 #dream-operations .dm .v { color: #d29922; font-weight: 700; flex-shrink: 0; }
 #dream-operations .dm .v.merge { color: #bc8cff; }
+#dream-operations .dm .obs-tag { color: #6e7681; border: 1px solid #30363d; border-radius: 6px; padding: 0 4px; font-size: 10px; flex-shrink: 0; }
 #dream-operations .dm .nm { color: #c9d1d9; word-break: break-all; }
 #dream-operations .dm .why { color: #6e7681; display: block; }
 .node.demoted circle { stroke: #d29922; stroke-dasharray: 2 2; }
@@ -703,16 +704,20 @@ function renderDream(d) {
     lines.push(`<div class="line">Last ran <span class="pill">${tier}</span>: <span class="em">${when}</span>${status}</div>`);
     const ops = lp.operations || [];
     if (lp.ok && ops.length) {
-      const merges = ops.filter(o => o.action === "merge").length;
+      const merges = ops.filter(o => o.action === "merge" || o.action === "obs-merge").length;
       const demotes = ops.length - merges;
       const parts = [];
       if (merges) parts.push(`${merges} merged`);
       if (demotes) parts.push(`${demotes} demoted`);
       lines.push(`<div class="line">${parts.join(", ")} last pass:</div>`);
       lines.push('<div id="dream-operations">' + ops.map(op => {
-        const isMerge = op.action === "merge";
-        return `<div class="dm" data-project="${(op.project || "").replace(/"/g, "&quot;")}" data-name="${(op.name || "").replace(/"/g, "&quot;")}">`
-          + `<span class="v${isMerge ? " merge" : ""}">${isMerge ? "⇒" : "-1"}</span><span class="meta"><span class="nm">${(op.name || "").replace(/</g, "&lt;")}</span>`
+        const isMerge = op.action === "merge" || op.action === "obs-merge";
+        const isObs = op.action === "obs-merge" || op.action === "obs-demote";
+        const hashAttr = op.hash ? ` data-hash="${op.hash.replace(/"/g, "&quot;")}"` : "";
+        return `<div class="dm" data-project="${(op.project || "").replace(/"/g, "&quot;")}" data-name="${(op.name || "").replace(/"/g, "&quot;")}"${hashAttr}>`
+          + `<span class="v${isMerge ? " merge" : ""}">${isMerge ? "⇒" : "-1"}</span>`
+          + (isObs ? `<span class="obs-tag">obs</span>` : "")
+          + `<span class="meta"><span class="nm">${(op.name || "").replace(/</g, "&lt;")}</span>`
           + (op.reason ? `<span class="why">${op.reason.replace(/</g, "&lt;")}</span>` : "")
           + `</span></div>`;
       }).join("") + '</div>');

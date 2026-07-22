@@ -17,12 +17,33 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 
 from .config import get_data_dir
 
 _SCHEMA = 3
-_OPERATION_RE = re.compile(r"\[([^/\]]+)/([^\]]+)\]")
+_OPERATION_RE = re.compile(r"\[([^/\]]+)/([^\]#]+)(?:#([0-9a-f]+))?\]")
+# A standalone "observation"/"observations"/"obs" token marks an observation-level
+# op. Word-bounded so it never fires on "obsolete", "observed", or "jobs".
+_OBSERVATION_WORD_RE = re.compile(r"\bobservations?\b|\bobs\b")
+
+
+def _classify_action(reason: str) -> str:
+    """Classify an audit reason into demote / merge / obs-demote / obs-merge.
+
+    Observation-level ops are flagged by an "observation"/"obs" word in the reason;
+    a merge is flagged by a "merge" word (entity merges begin with "merged").
+    """
+    lowered = reason.lower()
+    is_observation = bool(_OBSERVATION_WORD_RE.search(lowered))
+    if is_observation and "merge" in lowered:
+        return "obs-merge"
+    if is_observation:
+        return "obs-demote"
+    if lowered.startswith("merged"):
+        return "merge"
+    return "demote"
+
 
 _configs: dict[str, DreamConfig] = {}
 _last_pass: PassRecord | None = None
@@ -30,16 +51,19 @@ _running: str | None = None
 
 
 class Operation(TypedDict):
-    """One entity the dream reported acting on, parsed from its audit line.
+    """One entity or observation the dream reported acting on, parsed from its audit line.
 
-    ``action`` is ``"merge"`` when the reason describes a merge (heavy tier) and
-    ``"demote"`` otherwise (the light tier only ever downvotes).
+    ``action`` is one of ``"demote"`` (entity downvote), ``"merge"`` (entity merge),
+    ``"obs-demote"`` (observation downvote), or ``"obs-merge"`` (observation merge).
+    ``hash`` is the observation's content_hash when the line addressed one, absent
+    for entity-level ops.
     """
 
     project: str
     name: str
     reason: str
     action: str
+    hash: NotRequired[str]
 
 
 class PassRecord(TypedDict):
@@ -73,8 +97,10 @@ def parse_operations(audit_text: str) -> list[Operation]:
     """Best-effort extract ``[project/entity] - reason`` operation lines from an audit.
 
     Lines without a bracketed slug are ignored, so narration around the operations
-    does not produce spurious entries. The entity name keeps its type prefix. A reason
-    beginning with "merged" (case-insensitive) is a merge; anything else is a demote.
+    does not produce spurious entries. The entity name keeps its type prefix, and an
+    optional ``#hash`` suffix on the slug (e.g. ``[project/entity#a1b2c3d4]``) is
+    captured as the observation's content_hash. The action is classified into
+    demote / merge / obs-demote / obs-merge (see ``_classify_action``).
     """
     operations: list[Operation] = []
     for line in audit_text.splitlines():
@@ -82,10 +108,15 @@ def parse_operations(audit_text: str) -> list[Operation]:
         if match is None:
             continue
         reason = line[match.end() :].lstrip(" :-\t").strip()
-        action = "merge" if reason.lower().startswith("merged") else "demote"
-        operations.append(
-            {"project": match.group(1), "name": match.group(2), "reason": reason, "action": action}
-        )
+        operation: Operation = {
+            "project": match.group(1),
+            "name": match.group(2),
+            "reason": reason,
+            "action": _classify_action(reason),
+        }
+        if match.group(3) is not None:
+            operation["hash"] = match.group(3)
+        operations.append(operation)
     return operations
 
 
@@ -246,9 +277,7 @@ def _normalise_last_pass(last_pass: object) -> PassRecord | None:
                     "project": d.get("project", ""),
                     "name": d.get("name", ""),
                     "reason": d.get("reason", ""),
-                    "action": "merge"
-                    if str(d.get("reason", "")).lower().startswith("merged")
-                    else "demote",
+                    "action": _classify_action(str(d.get("reason", ""))),
                 }
                 for d in legacy
             ],

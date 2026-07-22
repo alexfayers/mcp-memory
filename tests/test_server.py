@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 
 from mcp_memory import server
-from mcp_memory.database import DatabaseManager
+from mcp_memory.database import DatabaseManager, _hash_observation
 from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _GLOBAL_PROJECT, _ensure_project_root, _validate_and_extract_relations
+from tests import obs_contents
 
 
 @pytest.fixture
@@ -407,29 +408,98 @@ class TestVoteEntityTool:
 
 
 class TestVoteObservationTool:
-    def test_valid_vote_returns_new_score(self, server_db: DatabaseManager) -> None:
+    def test_valid_vote_by_content_returns_new_score(self, server_db: DatabaseManager) -> None:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        server.vote_observation("proj", "e1", "x", 1)
-        assert server.vote_observation("proj", "e1", "x", 1) == {
+        server.vote_observation("proj", "e1", 1, observation="x")
+        assert server.vote_observation("proj", "e1", 1, observation="x") == {
             "entityName": "e1",
             "project": "proj",
             "observation": "x",
+            "observationHash": None,
             "vote_score": 2,
         }
+
+    def test_valid_vote_by_hash(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        content_hash = server_db.get_entity("proj", "e1").observations[0].content_hash
+        result = server.vote_observation("proj", "e1", 1, observationHash=content_hash)
+        assert result["vote_score"] == 1
+        assert result["observationHash"] == content_hash
+
+    def test_neither_addressing_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        assert "error" in server.vote_observation("proj", "e1", 1)
+
+    def test_both_addressing_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        content_hash = server_db.get_entity("proj", "e1").observations[0].content_hash
+        assert "error" in server.vote_observation(
+            "proj", "e1", 1, observation="x", observationHash=content_hash
+        )
 
     def test_invalid_vote_returns_error(self, server_db: DatabaseManager) -> None:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        assert "error" in server.vote_observation("proj", "e1", "x", 5)
+        assert "error" in server.vote_observation("proj", "e1", 5, observation="x")
 
     def test_missing_observation_returns_error(self, server_db: DatabaseManager) -> None:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        assert "error" in server.vote_observation("proj", "e1", "nope", 1)
+        assert "error" in server.vote_observation("proj", "e1", 1, observation="nope")
+
+
+class TestAddObservationsTool:
+    def test_returns_hashes_of_new_observations(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}]
+        )
+        result = server.add_observations("proj", "e1", ["b", "c"])
+        assert result["count"] == 2
+        assert result["hashes"] == [_hash_observation("b"), _hash_observation("c")]
+
+
+class TestDeleteObservationsTool:
+    def test_delete_by_content(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}]
+        )
+        result = server.delete_observations("proj", "e1", observations=["a"])
+        assert result["count"] == 1
+        assert obs_contents(server_db.get_entity("proj", "e1")) == ["b"]
+
+    def test_delete_by_hash(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}]
+        )
+        result = server.delete_observations(
+            "proj", "e1", observationHashes=[_hash_observation("a")]
+        )
+        assert result["count"] == 1
+        assert obs_contents(server_db.get_entity("proj", "e1")) == ["b"]
+
+
+class TestSearchNodesObservationShape:
+    def test_search_output_carries_content_hash_per_observation(
+        self, server_db: DatabaseManager
+    ) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
+        )
+        entity = server.search_nodes("proj", "needle")["entities"][0]
+        observation = entity.observations[0]
+        assert observation.content == "needle"
+        assert observation.content_hash == _hash_observation("needle")
+        assert observation.vote_score == 0
 
 
 class TestRestoreEntityTool:
@@ -440,7 +510,7 @@ class TestRestoreEntityTool:
         server_db.soft_delete_entity("proj", "e1")
         result = server.restore_entity("proj", "e1")
         assert result == {"message": "Restored entity 'e1' in project 'proj'."}
-        assert server_db.get_entity("proj", "e1").observations == ["x"]
+        assert obs_contents(server_db.get_entity("proj", "e1")) == ["x"]
 
     def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
         assert "error" in server.restore_entity("proj", "nope")
@@ -458,7 +528,7 @@ class TestMergeEntitiesTool:
         result = server.merge_entities("proj", "dup", "canon")
         assert result["message"] == "Merged 'dup' into 'canon' in project 'proj'."
         assert result["observations_merged"] == 1
-        assert "from-source" in server_db.get_entity("proj", "canon").observations
+        assert "from-source" in obs_contents(server_db.get_entity("proj", "canon"))
         with pytest.raises(ValueError, match="not found"):
             server_db.get_entity("proj", "dup")
 
@@ -473,6 +543,26 @@ class TestMergeEntitiesTool:
             "proj", [{"name": "canon", "entityType": "task", "observations": ["b"]}]
         )
         assert "error" in server.merge_entities("proj", "nope", "canon")
+
+
+class TestMergeObservationsTool:
+    def test_merge_reports_count_and_removes_source(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["source", "target"]}]
+        )
+        entity = server_db.get_entity("proj", "e1")
+        hashes = {o.content: o.content_hash for o in entity.observations}
+        result = server.merge_observations("proj", "e1", hashes["source"], hashes["target"])
+        assert result["message"] == "Merged observation into target in 'e1'."
+        assert result["merged"] == 1
+        assert obs_contents(server_db.get_entity("proj", "e1")) == ["target"]
+
+    def test_unknown_hash_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["t"]}]
+        )
+        target = server_db.get_entity("proj", "e1").observations[0].content_hash
+        assert "error" in server.merge_observations("proj", "e1", "deadbeef", target)
 
 
 class TestProjectPathTools:
@@ -547,7 +637,7 @@ class TestProjectPathTools:
             "message": "Moved 1 entities from 'src' to 'dst'.",
             "moved": 1,
         }
-        assert server_db.get_entity("dst", "e1").observations == ["a"]
+        assert obs_contents(server_db.get_entity("dst", "e1")) == ["a"]
 
     def test_move_project_entities_collision_returns_error(
         self, server_db: DatabaseManager

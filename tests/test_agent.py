@@ -96,8 +96,10 @@ class TestBuildRecallCommand:
         denied = set(command[deny_index + 1 :])
         assert "mcp__memory__create_entities" in denied
         assert "mcp__memory__vote_entity" in denied
+        assert "mcp__memory__vote_observation" in denied
         assert "mcp__memory__restore_entity" in denied
         assert "mcp__memory__merge_entities" in denied
+        assert "mcp__memory__merge_observations" in denied
         assert "Bash" in denied
 
     def test_allows_memory_read_tools_by_not_denying_them(self) -> None:
@@ -218,6 +220,30 @@ class TestBuildDreamCommand:
         denied = set(command[deny_index + 1 :])
         assert "mcp__memory__merge_entities" in denied
 
+    def test_light_allows_vote_observation_but_denies_merge_observations(self) -> None:
+        command = agent.build_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_votes=15
+        )
+        deny_index = command.index("--disallowedTools")
+        denied = set(command[deny_index + 1 :])
+        assert "mcp__memory__vote_observation" not in denied
+        assert "mcp__memory__merge_observations" in denied
+
+    def test_prompt_permits_observation_demotion(self) -> None:
+        command = agent.build_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7
+        )
+        prompt = command[command.index("-p") + 1]
+        assert "vote_observation" in prompt
+        assert "content_hash" in prompt
+
+    def test_ritual_observation_line_round_trips_to_obs_demote(self) -> None:
+        operations = dream_status.parse_operations(
+            "[myproj/task/a#a1b2c3d4] - observation demoted: stale"
+        )
+        assert operations[0]["action"] == "obs-demote"
+        assert operations[0]["hash"] == "a1b2c3d4"
+
 
 class TestBuildHeavyDreamCommand:
     def test_allows_vote_and_merge_but_denies_other_mutations(self) -> None:
@@ -278,6 +304,31 @@ class TestBuildHeavyDreamCommand:
                 "action": "merge",
             }
         ]
+
+    def test_heavy_allows_observation_vote_and_merge(self) -> None:
+        command = agent.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+        )
+        deny_index = command.index("--disallowedTools")
+        denied = set(command[deny_index + 1 :])
+        assert "mcp__memory__vote_observation" not in denied
+        assert "mcp__memory__merge_observations" not in denied
+
+    def test_prompt_permits_observation_ops(self) -> None:
+        command = agent.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+        )
+        prompt = command[command.index("-p") + 1]
+        assert "vote_observation" in prompt
+        assert "merge_observations" in prompt
+        assert "content_hash" in prompt
+
+    def test_obs_merge_audit_line_round_trips(self) -> None:
+        operations = dream_status.parse_operations(
+            "[myproj/task/a#a1b2c3d4] - merged observation into #deadbeef: duplicate"
+        )
+        assert operations[0]["action"] == "obs-merge"
+        assert operations[0]["hash"] == "a1b2c3d4"
 
 
 class TestFetchIdleSeconds:

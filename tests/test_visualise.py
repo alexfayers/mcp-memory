@@ -120,7 +120,7 @@ class TestGetAllGraphData:
         db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
         )
-        db.vote_observation("proj", "e1", "c", 1)
+        db.vote_observation("proj", "e1", 1, content="c")
         entity = get_all_graph_data(db, "proj")["entities"][0]
         assert entity["observations"] == ["c", "a", "b"]
         assert entity["observation_votes"] == [1, 0, 0]
@@ -318,6 +318,23 @@ class TestApiDream:
                 "action": "merge",
             }
         ]
+
+    @pytest.mark.anyio
+    async def test_carries_observation_ops_with_action_and_hash(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        dream_status.record_pass(
+            "[scratch/task/a#a1b2c3d4] - observation demoted: stale\n"
+            "[scratch/task/a#deadbeef] - merged observation into #cafe1234: duplicate",
+            ok=True,
+            tier="heavy",
+        )
+        data = (await client.get("/api/dream")).json()
+        operations = data["last_pass"]["operations"]
+        assert operations[0]["action"] == "obs-demote"
+        assert operations[0]["hash"] == "a1b2c3d4"
+        assert operations[1]["action"] == "obs-merge"
+        assert operations[1]["hash"] == "deadbeef"
 
     @pytest.mark.anyio
     async def test_reports_the_running_tier(self, client: httpx.AsyncClient) -> None:

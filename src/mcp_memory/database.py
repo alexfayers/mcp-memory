@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import sqlite3
@@ -11,7 +12,7 @@ from typing import cast
 
 from .config import get_gc_enabled, get_purge_enabled, get_purge_grace_days
 from .migrations.runner import run_migrations
-from .models import VALID_STATUSES, VALID_VOTES, Entity, EntityStatus, Relation
+from .models import VALID_STATUSES, VALID_VOTES, Entity, EntityStatus, Observation, Relation
 from .path_resolver import match_project_for_path, normalize_path
 
 _RECENCY_HALF_LIFE_DAYS = 30.0
@@ -62,6 +63,11 @@ def _parse_date(value: str) -> str:
     return datetime.fromisoformat(value).isoformat()
 
 
+def _hash_observation(content: str) -> str:
+    """Return the 8-char content-derived hash used to address an observation."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+
+
 class DatabaseManager:
     """Manages all database operations for the MCP memory knowledge graph."""
 
@@ -81,11 +87,26 @@ class DatabaseManager:
         self._db.execute("PRAGMA busy_timeout=5000")
 
         run_migrations(self._db)
+        self._backfill_observation_hashes()
         self.prune_surfaced_entities(_SURFACED_RETENTION_DAYS)
         if get_gc_enabled():
             self.gc_downvoted_orphans()
         if get_purge_enabled():
             self.purge_soft_deleted(get_purge_grace_days())
+
+    def _backfill_observation_hashes(self) -> None:
+        """Populate content_hash for any observation missing one. No-op after the first run."""
+        rows = self._db.execute(
+            "SELECT id, content FROM observations WHERE content_hash IS NULL"
+        ).fetchall()
+        if not rows:
+            return
+        with self._db:
+            for row in rows:
+                self._db.execute(
+                    "UPDATE observations SET content_hash = ? WHERE id = ?",
+                    (_hash_observation(row["content"]), row["id"]),
+                )
 
     def list_projects(self) -> list[str]:
         """Return all project names from the database."""
@@ -315,35 +336,30 @@ class DatabaseManager:
         ).fetchone()
         return row["name"] if row else None
 
-    def _get_observations_with_scores(self, entity_id: int) -> list[tuple[str, int]]:
+    def _get_observations_full(self, entity_id: int) -> list[Observation]:
         """Return an entity's observations best-first (vote_score DESC, then insertion order)."""
         rows = self._db.execute(
-            "SELECT content, vote_score FROM observations WHERE entity_id = ? "
+            "SELECT content, content_hash, vote_score FROM observations WHERE entity_id = ? "
             "ORDER BY vote_score DESC, id",
             (entity_id,),
         ).fetchall()
-        return [(row["content"], int(row["vote_score"])) for row in rows]
+        return [
+            Observation(
+                content=row["content"],
+                content_hash=row["content_hash"],
+                vote_score=int(row["vote_score"]),
+            )
+            for row in rows
+        ]
 
     def _get_observations(self, entity_id: int) -> list[str]:
-        return [content for content, _ in self._get_observations_with_scores(entity_id)]
-
-    def observation_scores(self, project: str, name: str) -> list[int]:
-        """Return an entity's observation vote scores, aligned with its observation order.
-
-        Empty when the entity does not exist. Read-only companion to _get_observations
-        for callers (e.g. the visualiser) that hold an entity by name, not id.
-        """
-        project_id = self._get_or_create_project_id(project)
-        entity_id = self._get_entity_id(name, project_id)
-        if entity_id is None:
-            return []
-        return [score for _, score in self._get_observations_with_scores(entity_id)]
+        return [o.content for o in self._get_observations_full(entity_id)]
 
     def _build_entity(self, row: sqlite3.Row, entity_id: int, compact: bool = False) -> Entity:
         return Entity(
             name=row["name"],
             entity_type=row["entity_type"],
-            observations=[] if compact else self._get_observations(entity_id),
+            observations=[] if compact else self._get_observations_full(entity_id),
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -473,12 +489,14 @@ class DatabaseManager:
                     entity_id = cast("int", cursor.lastrowid)
 
                 self._db.executemany(
-                    "INSERT INTO observations (entity_id, content) VALUES (?, ?)",
-                    [(entity_id, obs) for obs in observations],
+                    "INSERT INTO observations (entity_id, content, content_hash) VALUES (?, ?, ?)",
+                    [(entity_id, obs, _hash_observation(obs)) for obs in observations],
                 )
 
-    def add_observations(self, project: str, entity_name: str, observations: list[str]) -> int:
-        """Append deduplicated observations to an existing entity."""
+    def add_observations(
+        self, project: str, entity_name: str, observations: list[str]
+    ) -> list[str]:
+        """Append deduplicated observations to an entity, returning the new ones' content hashes."""
         project_id = self._get_or_create_project_id(project)
         entity_id = self._get_entity_id(entity_name, project_id)
         if entity_id is None:
@@ -489,15 +507,24 @@ class DatabaseManager:
 
         if new_observations:
             self._db.executemany(
-                "INSERT INTO observations (entity_id, content) VALUES (?, ?)",
-                [(entity_id, obs) for obs in new_observations],
+                "INSERT INTO observations (entity_id, content, content_hash) VALUES (?, ?, ?)",
+                [(entity_id, obs, _hash_observation(obs)) for obs in new_observations],
             )
             self._db.commit()
 
-        return len(new_observations)
+        return [_hash_observation(obs) for obs in new_observations]
 
-    def delete_observations(self, project: str, entity_name: str, observations: list[str]) -> int:
-        """Delete observations by exact content match."""
+    def delete_observations(
+        self,
+        project: str,
+        entity_name: str,
+        observations: list[str] | None = None,
+        hashes: list[str] | None = None,
+    ) -> int:
+        """Delete observations by exact content match and/or by content_hash."""
+        if not observations and not hashes:
+            raise ValueError("Provide at least one of 'observations' or 'hashes'")
+
         project_id = self._get_or_create_project_id(project)
         entity_id = self._get_entity_id(entity_name, project_id)
         if entity_id is None:
@@ -505,10 +532,16 @@ class DatabaseManager:
 
         count = 0
         with self._db:
-            for obs in observations:
+            for obs in observations or []:
                 cursor = self._db.execute(
                     "DELETE FROM observations WHERE entity_id = ? AND content = ?",
                     (entity_id, obs),
+                )
+                count += cursor.rowcount
+            for obs_hash in hashes or []:
+                cursor = self._db.execute(
+                    "DELETE FROM observations WHERE entity_id = ? AND content_hash = ?",
+                    (entity_id, obs_hash),
                 )
                 count += cursor.rowcount
 
@@ -550,16 +583,32 @@ class DatabaseManager:
         ).fetchone()
         return int(row["vote_score"])
 
-    def vote_observation(self, project: str, entity_name: str, content: str, vote: int) -> int:
+    def vote_observation(
+        self,
+        project: str,
+        entity_name: str,
+        vote: int,
+        *,
+        content: str | None = None,
+        content_hash: str | None = None,
+    ) -> int:
         """Apply a +1/-1 usefulness vote to a single observation and return its new score.
 
-        The observation is addressed by exact content within its entity (like
-        delete_observations). Content is not DB-unique, so identical observations all
-        receive the vote and share the returned score. Like vote_entity, this leaves
+        The observation is addressed by content_hash (cheap) or exact content within its
+        entity; exactly one must be given. Neither is DB-unique, so identical observations
+        all receive the vote and share the returned score. Like vote_entity, this leaves
         updated_at untouched, so a vote does not disturb recency ranking.
         """
         if vote not in VALID_VOTES:
             raise ValueError(f"Invalid vote '{vote}'. Must be one of: {VALID_VOTES}")
+        if (content is None) == (content_hash is None):
+            raise ValueError("Provide exactly one of 'content' or 'content_hash'")
+
+        if content is not None:
+            column, value = "content", content
+        else:
+            assert content_hash is not None
+            column, value = "content_hash", content_hash
 
         project_id = self._get_or_create_project_id(project)
         entity_id = self._get_entity_id(entity_name, project_id)
@@ -567,16 +616,16 @@ class DatabaseManager:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
 
         cursor = self._db.execute(
-            "UPDATE observations SET vote_score = vote_score + ? "
-            "WHERE entity_id = ? AND content = ?",
-            (vote, entity_id, content),
+            f"UPDATE observations SET vote_score = vote_score + ? "
+            f"WHERE entity_id = ? AND {column} = ?",
+            (vote, entity_id, value),
         )
         if cursor.rowcount == 0:
             raise ValueError(f"Observation not found in entity '{entity_name}'")
         self._db.commit()
         row = self._db.execute(
-            "SELECT vote_score FROM observations WHERE entity_id = ? AND content = ?",
-            (entity_id, content),
+            f"SELECT vote_score FROM observations WHERE entity_id = ? AND {column} = ?",
+            (entity_id, value),
         ).fetchone()
         return int(row["vote_score"])
 
@@ -772,8 +821,9 @@ class DatabaseManager:
 
         with self._db:
             obs = self._db.execute(
-                "INSERT INTO observations (entity_id, content, vote_score, created_at) "
-                "SELECT ?, content, vote_score, created_at FROM observations "
+                "INSERT INTO observations "
+                "(entity_id, content, vote_score, created_at, content_hash) "
+                "SELECT ?, content, vote_score, created_at, content_hash FROM observations "
                 "WHERE entity_id = ? AND content NOT IN "
                 "(SELECT content FROM observations WHERE entity_id = ?)",
                 (target_id, source_id, target_id),
@@ -802,6 +852,47 @@ class DatabaseManager:
             "observations_merged": obs.rowcount,
             "relations_repointed": outgoing.rowcount + incoming.rowcount,
         }
+
+    def merge_observations(
+        self, project: str, entity_name: str, source_hash: str, target_hash: str
+    ) -> dict[str, int]:
+        """Fold one observation into another within a single entity, addressed by content_hash.
+
+        Additive on the target: the target keeps the higher of the two vote scores and its
+        own timestamp. The source observation is hard-deleted (observations have no
+        soft-delete concept, consistent with delete_observations). Only merges observations
+        within one entity, never across entities.
+        """
+        if source_hash == target_hash:
+            raise ValueError("Cannot merge an observation into itself")
+        project_id = self._get_or_create_project_id(project)
+        entity_id = self._get_entity_id(entity_name, project_id)
+        if entity_id is None:
+            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+
+        source = self._db.execute(
+            "SELECT vote_score FROM observations WHERE entity_id = ? AND content_hash = ?",
+            (entity_id, source_hash),
+        ).fetchone()
+        if source is None:
+            raise ValueError(f"Source observation not found in entity '{entity_name}'")
+        target = self._db.execute(
+            "SELECT vote_score FROM observations WHERE entity_id = ? AND content_hash = ?",
+            (entity_id, target_hash),
+        ).fetchone()
+        if target is None:
+            raise ValueError(f"Target observation not found in entity '{entity_name}'")
+
+        with self._db:
+            self._db.execute(
+                "UPDATE observations SET vote_score = ? WHERE entity_id = ? AND content_hash = ?",
+                (max(int(source["vote_score"]), int(target["vote_score"])), entity_id, target_hash),
+            )
+            deleted = self._db.execute(
+                "DELETE FROM observations WHERE entity_id = ? AND content_hash = ?",
+                (entity_id, source_hash),
+            )
+        return {"merged": deleted.rowcount}
 
     def purge_soft_deleted(self, grace_days: int) -> int:
         """Hard-delete entities soft-deleted longer than the grace window, returning the count."""

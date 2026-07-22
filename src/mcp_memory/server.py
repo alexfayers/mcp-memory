@@ -83,7 +83,9 @@ SEARCH_NODES_DESC = (
     "Optionally filter by entityType, status, and/or date range "
     "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
     "Within each returned entity, observations are ordered best-first by their own votes "
-    "(see vote_observation). Use compact=true to omit observations for a lightweight summary."
+    "(see vote_observation). Each observation carries a content_hash usable with "
+    "vote_observation, delete_observations, and merge_observations to address it without "
+    "pasting its full content. Use compact=true to omit observations for a lightweight summary."
 )
 READ_GRAPH_DESC = (
     "Get the most recent entities and their relations for a project. "
@@ -109,11 +111,15 @@ GET_ENTITY_WITH_RELATIONS_DESC = (
 )
 ADD_OBSERVATIONS_DESC = (
     "Append observations to an existing entity without overwriting. "
-    "Skips duplicates. Throws if the entity does not exist. "
+    "Skips duplicates. Throws if the entity does not exist. Returns the content hashes of the "
+    "newly-added observations, usable with vote_observation/delete_observations/"
+    "merge_observations. "
     "To reorder existing observations by usefulness rather than add one, see vote_observation."
 )
 DELETE_OBSERVATIONS_DESC = (
-    "Delete specific observations from an existing entity by exact content match. "
+    "Delete specific observations from an existing entity by exact content match "
+    "(observations) and/or by content_hash (observationHashes - the cheap alternative that "
+    "avoids pasting full content; hashes come from read output). "
     "Returns the count of deleted observations. Throws if the entity does not exist. "
     "For an observation that is stale but not wrong enough to remove, prefer vote_observation "
     "(downvote to sink it) over deletion."
@@ -131,7 +137,8 @@ VOTE_ENTITY_DESC = (
 )
 VOTE_OBSERVATION_DESC = (
     "Record a +1 or -1 usefulness vote on a single observation of an entity, addressed by its "
-    "exact content (like delete_observations). Upvoted observations surface first within the "
+    "observationHash (the content_hash from read output - preferred, saves tokens) OR its exact "
+    "observation content; provide exactly one. Upvoted observations surface first within the "
     "entity and downvoted ones sink, so a fat entity leads with its most useful lines. A light "
     "alternative to delete_observations when an observation is stale but not wrong enough to "
     "remove. Complements vote_entity, which ranks whole entities. Does not change content or "
@@ -180,6 +187,13 @@ MERGE_ENTITIES_DESC = (
     "the target keeps the higher of the two vote scores, and the source is SOFT-DELETED. The "
     "merge is reversible: restore_entity brings the source back until a grace-window purge. "
     "Both entities must already exist in the same project."
+)
+MERGE_OBSERVATIONS_DESC = (
+    "Fold a duplicate observation (source) into another (target) WITHIN THE SAME ENTITY, "
+    "addressed by their content_hash. The target keeps the higher of the two vote scores and "
+    "its own timestamp; the source observation is removed (hard-deleted, like "
+    "delete_observations). Only merges observations inside one entity - never across entities. "
+    "Raises if either hash matches no observation, or if source and target hashes are equal."
 )
 
 SEARCH_ALL_PROJECTS_DESC = (
@@ -513,6 +527,23 @@ def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
         return {"error": str(e)}
 
 
+@mcp.tool(description=MERGE_OBSERVATIONS_DESC)
+@_track
+def merge_observations(
+    project: str, entityName: str, sourceHash: str, targetHash: str
+) -> dict[str, object]:
+    """Fold one observation into another within an entity, addressed by content_hash."""
+    try:
+        db = _get_db()
+        result = db.merge_observations(project, entityName, sourceHash, targetHash)
+        return {
+            "message": f"Merged observation into target in '{entityName}'.",
+            **result,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @mcp.tool(description=DELETE_PROJECT_DESC)
 @_track
 def delete_project(project: str) -> dict[str, str]:
@@ -670,12 +701,16 @@ def add_observations(
     project: str,
     entityName: str,
     observations: list[str],
-) -> dict[str, str | int]:
+) -> dict[str, object]:
     """Append deduplicated observations to an existing entity."""
     try:
         db = _get_db()
-        count = db.add_observations(project, entityName, observations)
-        return {"message": f"Added {count} observations to '{entityName}'.", "count": count}
+        hashes = db.add_observations(project, entityName, observations)
+        return {
+            "message": f"Added {len(hashes)} observations to '{entityName}'.",
+            "count": len(hashes),
+            "hashes": hashes,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -685,12 +720,15 @@ def add_observations(
 def delete_observations(
     project: str,
     entityName: str,
-    observations: list[str],
+    observations: list[str] | None = None,
+    observationHashes: list[str] | None = None,
 ) -> dict[str, str | int]:
-    """Delete observations by exact content match."""
+    """Delete observations by exact content match and/or by content_hash."""
     try:
         db = _get_db()
-        count = db.delete_observations(project, entityName, observations)
+        count = db.delete_observations(
+            project, entityName, observations=observations, hashes=observationHashes
+        )
         return {"message": f"Deleted {count} observations from '{entityName}'.", "count": count}
     except Exception as e:
         return {"error": str(e)}
@@ -726,16 +764,24 @@ def vote_entity(project: str, name: str, vote: int) -> dict[str, object]:
 @mcp.tool(description=VOTE_OBSERVATION_DESC)
 @_track
 def vote_observation(
-    project: str, entityName: str, observation: str, vote: int
+    project: str,
+    entityName: str,
+    vote: int,
+    observation: str | None = None,
+    observationHash: str | None = None,
 ) -> dict[str, object]:
     """Apply a +1/-1 usefulness vote to a single observation, returning its new net vote_score."""
     try:
         db = _get_db()
+        vote_score = db.vote_observation(
+            project, entityName, vote, content=observation, content_hash=observationHash
+        )
         return {
             "entityName": entityName,
             "project": project,
             "observation": observation,
-            "vote_score": db.vote_observation(project, entityName, observation, vote),
+            "observationHash": observationHash,
+            "vote_score": vote_score,
         }
     except Exception as e:
         return {"error": str(e)}

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
 
-from mcp_memory.database import DatabaseManager
+from mcp_memory.database import DatabaseManager, _hash_observation
 from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
 from mcp_memory.models import Entity, Relation
 from mcp_memory.path_resolver import normalize_path
+from tests import obs_contents, obs_votes
 
 
 @pytest.fixture
@@ -24,7 +26,7 @@ class TestCreateEntities:
         entity = db.get_entity("proj", "e1")
         assert entity.name == "e1"
         assert entity.entity_type == "task"
-        assert entity.observations == ["obs1"]
+        assert obs_contents(entity) == ["obs1"]
 
     def test_create_entity_with_status(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -36,13 +38,13 @@ class TestCreateEntities:
     def test_upsert_overwrites_observations(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["old"]}])
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["new"]}])
-        assert db.get_entity("proj", "e1").observations == ["new"]
+        assert obs_contents(db.get_entity("proj", "e1")) == ["new"]
 
     def test_project_isolation(self, db: DatabaseManager) -> None:
         db.create_entities("p1", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         db.create_entities("p2", [{"name": "e1", "entityType": "task", "observations": ["b"]}])
-        assert db.get_entity("p1", "e1").observations == ["a"]
-        assert db.get_entity("p2", "e1").observations == ["b"]
+        assert obs_contents(db.get_entity("p1", "e1")) == ["a"]
+        assert obs_contents(db.get_entity("p2", "e1")) == ["b"]
 
     def test_empty_name_raises(self, db: DatabaseManager) -> None:
         with pytest.raises(ValueError, match="non-empty string"):
@@ -66,7 +68,7 @@ class TestMoveProjectEntities:
         db.create_entities("dst", [{"name": "d0", "entityType": "task", "observations": ["x"]}])
         moved = db.move_project_entities("src", "dst")
         assert moved == 1
-        assert db.get_entity("dst", "e1").observations == ["a"]
+        assert obs_contents(db.get_entity("dst", "e1")) == ["a"]
 
     def test_preserves_relations(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -143,12 +145,12 @@ class TestProjectCaseInsensitivity:
             "MyProject", [{"name": "e1", "entityType": "task", "observations": ["a"]}]
         )
         entity = db.get_entity("myproject", "e1")
-        assert entity.observations == ["a"]
+        assert obs_contents(entity) == ["a"]
 
     def test_case_insensitive_project_does_not_duplicate(self, db: DatabaseManager) -> None:
         db.create_entities("Proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["b"]}])
-        assert db.get_entity("PROJ", "e1").observations == ["b"]
+        assert obs_contents(db.get_entity("PROJ", "e1")) == ["b"]
 
 
 class TestMigrations:
@@ -230,6 +232,73 @@ class TestMigrations:
         ]
         assert scores == [0]
         reopened.close()
+
+    def test_hash_observation_is_deterministic(self) -> None:
+        expected = hashlib.sha256(b"abc").hexdigest()[:8]
+        assert _hash_observation("abc") == expected
+        assert _hash_observation("abc") == _hash_observation("abc")
+        assert len(_hash_observation("abc")) == 8
+
+    def test_content_hash_backfills_for_preexisting_rows(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        first = DatabaseManager(db_path)
+        first.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["x", "y"]}]
+        )
+        with first._db:
+            first._db.execute("UPDATE observations SET content_hash = NULL")
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        rows = reopened._db.execute("SELECT content, content_hash FROM observations").fetchall()
+        assert rows
+        for row in rows:
+            assert row["content_hash"] is not None
+            assert row["content_hash"] == _hash_observation(row["content"])
+        reopened.close()
+
+    def test_content_hash_backfill_is_idempotent(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        first = DatabaseManager(db_path)
+        first.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["x", "y"]}]
+        )
+        before = {
+            row["id"]: row["content_hash"]
+            for row in first._db.execute("SELECT id, content_hash FROM observations").fetchall()
+        }
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        after = {
+            row["id"]: row["content_hash"]
+            for row in reopened._db.execute("SELECT id, content_hash FROM observations").fetchall()
+        }
+        assert after == before
+        reopened.close()
+
+    def test_content_hash_column_and_index_exist(self, db: DatabaseManager) -> None:
+        columns = {row[1] for row in db._db.execute("PRAGMA table_info(observations)").fetchall()}
+        assert "content_hash" in columns
+
+        indexes = {
+            row[0]
+            for row in db._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='observations'"
+            ).fetchall()
+        }
+        assert "idx_observations_content_hash" in indexes
+
+    def test_insert_sites_populate_content_hash(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["created"]}]
+        )
+        db.add_observations("proj", "task/a", ["appended"])
+
+        rows = db._db.execute("SELECT content, content_hash FROM observations").fetchall()
+        assert {row["content"] for row in rows} == {"created", "appended"}
+        for row in rows:
+            assert row["content_hash"] == _hash_observation(row["content"])
 
 
 class TestConnectionPragmas:
@@ -667,14 +736,14 @@ class TestProjectPaths:
 class TestObservations:
     def test_add_observations(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
-        count = db.add_observations("proj", "e1", ["b", "c"])
-        assert count == 2
-        assert db.get_entity("proj", "e1").observations == ["a", "b", "c"]
+        hashes = db.add_observations("proj", "e1", ["b", "c"])
+        assert hashes == [_hash_observation("b"), _hash_observation("c")]
+        assert obs_contents(db.get_entity("proj", "e1")) == ["a", "b", "c"]
 
     def test_add_observations_deduplicates(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
-        count = db.add_observations("proj", "e1", ["a", "b"])
-        assert count == 1
+        hashes = db.add_observations("proj", "e1", ["a", "b"])
+        assert hashes == [_hash_observation("b")]
 
     def test_add_observations_missing_entity_raises(self, db: DatabaseManager) -> None:
         with pytest.raises(ValueError, match="not found"):
@@ -686,7 +755,7 @@ class TestObservations:
         )
         count = db.delete_observations("proj", "e1", ["b"])
         assert count == 1
-        assert db.get_entity("proj", "e1").observations == ["a", "c"]
+        assert obs_contents(db.get_entity("proj", "e1")) == ["a", "c"]
 
     def test_delete_observations_nonexistent_content(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
@@ -697,36 +766,66 @@ class TestObservations:
         with pytest.raises(ValueError, match="not found"):
             db.delete_observations("proj", "missing", ["x"])
 
+    def test_delete_observations_requires_addressing(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        with pytest.raises(ValueError, match="at least one"):
+            db.delete_observations("proj", "e1")
+
+    def test_delete_observations_by_hash(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
+        )
+        count = db.delete_observations("proj", "e1", hashes=[_hash_observation("b")])
+        assert count == 1
+        assert obs_contents(db.get_entity("proj", "e1")) == ["a", "c"]
+
+    def test_delete_observations_unknown_hash_deletes_nothing(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        assert db.delete_observations("proj", "e1", hashes=["deadbeef"]) == 0
+
     def test_upvoted_observation_leads(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
         )
-        db.vote_observation("proj", "e1", "c", 1)
-        assert db.get_entity("proj", "e1").observations == ["c", "a", "b"]
+        db.vote_observation("proj", "e1", 1, content="c")
+        assert obs_contents(db.get_entity("proj", "e1")) == ["c", "a", "b"]
 
     def test_downvoted_observation_sinks(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
         )
-        db.vote_observation("proj", "e1", "a", -1)
-        assert db.get_entity("proj", "e1").observations == ["b", "c", "a"]
+        db.vote_observation("proj", "e1", -1, content="a")
+        assert obs_contents(db.get_entity("proj", "e1")) == ["b", "c", "a"]
 
     def test_unvoted_observations_keep_insertion_order(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
         )
-        assert db.get_entity("proj", "e1").observations == ["a", "b", "c"]
+        assert obs_contents(db.get_entity("proj", "e1")) == ["a", "b", "c"]
 
-    def test_observation_scores_align_with_observation_order(self, db: DatabaseManager) -> None:
+    def test_observation_votes_align_with_observation_order(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
         )
-        db.vote_observation("proj", "e1", "c", 1)
-        assert db.get_entity("proj", "e1").observations == ["c", "a", "b"]
-        assert db.observation_scores("proj", "e1") == [1, 0, 0]
+        db.vote_observation("proj", "e1", 1, content="c")
+        assert obs_contents(db.get_entity("proj", "e1")) == ["c", "a", "b"]
+        assert obs_votes(db.get_entity("proj", "e1")) == [1, 0, 0]
 
-    def test_observation_scores_missing_entity_is_empty(self, db: DatabaseManager) -> None:
-        assert db.observation_scores("proj", "ghost") == []
+    def test_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.get_entity("proj", "ghost")
+
+    def test_get_entity_returns_observation_objects(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        observations = db.get_entity("proj", "e1").observations
+        assert len(observations) == 1
+        assert observations[0].content == "a"
+        assert observations[0].content_hash == _hash_observation("a")
+        assert observations[0].vote_score == 0
+
+    def test_compact_read_yields_no_observations(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        assert db.search_nodes("proj", "e1", compact=True)["entities"][0].observations == []
 
 
 class TestEntityStatus:
@@ -868,7 +967,7 @@ class TestSoftDelete:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         db.soft_delete_entity("proj", "e1")
         db.restore_entity("proj", "e1")
-        assert db.get_entity("proj", "e1").observations == ["x"]
+        assert obs_contents(db.get_entity("proj", "e1")) == ["x"]
 
     def test_soft_delete_missing_entity_raises(self, db: DatabaseManager) -> None:
         with pytest.raises(ValueError, match="not found"):
@@ -913,16 +1012,17 @@ class TestSoftDelete:
         db.soft_delete_entity("proj", "e1")
         assert db.paths_for_entity_name("e1") == []
 
-    def test_soft_deleted_hidden_from_observation_scores(self, db: DatabaseManager) -> None:
+    def test_soft_deleted_hidden_from_get_entity(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         db.soft_delete_entity("proj", "e1")
-        assert db.observation_scores("proj", "e1") == []
+        with pytest.raises(ValueError, match="not found"):
+            db.get_entity("proj", "e1")
 
     def test_create_replaces_soft_deleted_tombstone(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["old"]}])
         db.soft_delete_entity("proj", "e1")
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["new"]}])
-        assert db.get_entity("proj", "e1").observations == ["new"]
+        assert obs_contents(db.get_entity("proj", "e1")) == ["new"]
 
     def test_purge_removes_only_past_grace(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
@@ -949,7 +1049,7 @@ class TestMergeEntities:
             ],
         )
         db.merge_entities("proj", "dup", "canon")
-        obs = set(db.get_entity("proj", "canon").observations)
+        obs = set(obs_contents(db.get_entity("proj", "canon")))
         assert obs == {"shared", "only-source", "only-target"}
 
     def test_source_is_soft_deleted_not_gone(self, db: DatabaseManager) -> None:
@@ -1080,6 +1180,53 @@ class TestMergeEntities:
         assert db._get_entity_id("dup", project_id, include_deleted=True) is None
 
 
+class TestMergeObservations:
+    @staticmethod
+    def _hashes(db: DatabaseManager, project: str, name: str) -> dict[str, str]:
+        return {o.content: o.content_hash for o in db.get_entity(project, name).observations}
+
+    def test_takes_max_vote_score(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["source", "target"]}]
+        )
+        db.vote_observation("proj", "e1", 1, content="source")
+        hashes = self._hashes(db, "proj", "e1")
+        db.merge_observations("proj", "e1", hashes["source"], hashes["target"])
+        assert obs_votes(db.get_entity("proj", "e1")) == [1]
+
+    def test_source_is_removed(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["source", "target"]}]
+        )
+        hashes = self._hashes(db, "proj", "e1")
+        assert db.merge_observations("proj", "e1", hashes["source"], hashes["target"]) == {
+            "merged": 1
+        }
+        assert obs_contents(db.get_entity("proj", "e1")) == ["target"]
+
+    def test_unknown_source_hash_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["t"]}])
+        target = self._hashes(db, "proj", "e1")["t"]
+        with pytest.raises(ValueError, match="Source observation not found"):
+            db.merge_observations("proj", "e1", "deadbeef", target)
+
+    def test_unknown_target_hash_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["s"]}])
+        source = self._hashes(db, "proj", "e1")["s"]
+        with pytest.raises(ValueError, match="Target observation not found"):
+            db.merge_observations("proj", "e1", source, "deadbeef")
+
+    def test_source_equals_target_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["s"]}])
+        source = self._hashes(db, "proj", "e1")["s"]
+        with pytest.raises(ValueError, match="into itself"):
+            db.merge_observations("proj", "e1", source, source)
+
+    def test_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.merge_observations("proj", "ghost", "aaaa", "bbbb")
+
+
 class TestGcDownvotedOrphans:
     @staticmethod
     def _downvote(db: DatabaseManager, project: str, name: str, times: int) -> None:
@@ -1105,7 +1252,7 @@ class TestGcDownvotedOrphans:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         self._downvote(db, "proj", "e1", 9)
         assert db.gc_downvoted_orphans() == 0
-        assert db.get_entity("proj", "e1").observations == ["x"]
+        assert obs_contents(db.get_entity("proj", "e1")) == ["x"]
 
     def test_at_floor_boundary_is_reaped(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
@@ -1126,7 +1273,7 @@ class TestGcDownvotedOrphans:
         )
         self._downvote(db, "proj", "keeper", 10)
         assert db.gc_downvoted_orphans() == 0
-        assert db.get_entity("proj", "keeper").observations == ["k"]
+        assert obs_contents(db.get_entity("proj", "keeper")) == ["k"]
 
     def test_floored_orphan_whose_only_source_is_soft_deleted_is_reaped(
         self, db: DatabaseManager
@@ -1154,7 +1301,7 @@ class TestGcDownvotedOrphans:
         )
         self._downvote(db, "proj", name, 10)
         assert db.gc_downvoted_orphans() == 0
-        assert db.get_entity("proj", name).observations == ["x"]
+        assert obs_contents(db.get_entity("proj", name)) == ["x"]
 
     def test_already_soft_deleted_is_untouched(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
@@ -1177,7 +1324,7 @@ class TestGcDownvotedOrphans:
         self._downvote(db, "proj", "o2", 10)
         self._downvote(db, "proj", "fresh", 9)
         assert db.gc_downvoted_orphans() == 2
-        assert db.get_entity("proj", "fresh").observations == ["c"]
+        assert obs_contents(db.get_entity("proj", "fresh")) == ["c"]
 
     def test_gc_disabled_by_default_on_boot(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1189,7 +1336,7 @@ class TestGcDownvotedOrphans:
         self._downvote(seed, "proj", "e1", 10)
         seed.close()
         reopened = DatabaseManager(db_path)
-        assert reopened.get_entity("proj", "e1").observations == ["x"]
+        assert obs_contents(reopened.get_entity("proj", "e1")) == ["x"]
 
     def test_gc_runs_on_boot_when_enabled(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1644,28 +1791,46 @@ class TestVoteEntity:
 class TestVoteObservation:
     def test_upvote_returns_new_score(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
-        assert db.vote_observation("proj", "e1", "x", 1) == 1
+        assert db.vote_observation("proj", "e1", 1, content="x") == 1
 
     def test_votes_accumulate(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
-        db.vote_observation("proj", "e1", "x", 1)
-        db.vote_observation("proj", "e1", "x", 1)
-        assert db.vote_observation("proj", "e1", "x", -1) == 1
+        db.vote_observation("proj", "e1", 1, content="x")
+        db.vote_observation("proj", "e1", 1, content="x")
+        assert db.vote_observation("proj", "e1", -1, content="x") == 1
+
+    def test_upvote_by_content_hash_matches_by_content(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        content_hash = db.get_entity("proj", "e1").observations[0].content_hash
+        assert db.vote_observation("proj", "e1", 1, content_hash=content_hash) == 1
+        assert db.get_entity("proj", "e1").observations[0].vote_score == 1
+
+    def test_requires_exactly_one_addressing(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        with pytest.raises(ValueError, match="exactly one"):
+            db.vote_observation("proj", "e1", 1)
+        with pytest.raises(ValueError, match="exactly one"):
+            db.vote_observation("proj", "e1", 1, content="x", content_hash=_hash_observation("x"))
 
     @pytest.mark.parametrize("vote", [0, 2, -3])
     def test_invalid_vote_raises(self, db: DatabaseManager, vote: int) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         with pytest.raises(ValueError, match="Invalid vote"):
-            db.vote_observation("proj", "e1", "x", vote)
+            db.vote_observation("proj", "e1", vote, content="x")
 
     def test_missing_entity_raises(self, db: DatabaseManager) -> None:
         with pytest.raises(ValueError, match="not found"):
-            db.vote_observation("proj", "nope", "x", 1)
+            db.vote_observation("proj", "nope", 1, content="x")
 
     def test_missing_observation_raises(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         with pytest.raises(ValueError, match="not found"):
-            db.vote_observation("proj", "e1", "no-such-obs", 1)
+            db.vote_observation("proj", "e1", 1, content="no-such-obs")
+
+    def test_unknown_hash_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        with pytest.raises(ValueError, match="not found"):
+            db.vote_observation("proj", "e1", 1, content_hash="deadbeef")
 
     def test_vote_does_not_change_updated_at(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
@@ -1674,14 +1839,27 @@ class TestVoteObservation:
         )
         db._db.commit()
         before = db.get_entity("proj", "e1").updated_at
-        db.vote_observation("proj", "e1", "x", 1)
+        db.vote_observation("proj", "e1", 1, content="x")
         assert db.get_entity("proj", "e1").updated_at == before
 
     def test_duplicate_content_observations_move_together(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["dup", "dup"]}]
         )
-        db.vote_observation("proj", "e1", "dup", 1)
+        db.vote_observation("proj", "e1", 1, content="dup")
+        scores = [
+            row[0]
+            for row in db._db.execute(
+                "SELECT vote_score FROM observations WHERE content = 'dup'"
+            ).fetchall()
+        ]
+        assert scores == [1, 1]
+
+    def test_duplicate_content_share_hash_and_move_together(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["dup", "dup"]}]
+        )
+        db.vote_observation("proj", "e1", 1, content_hash=_hash_observation("dup"))
         scores = [
             row[0]
             for row in db._db.execute(
@@ -1699,7 +1877,7 @@ class TestVoteObservation:
             ],
         )
         before = [e.name for e in db.search_nodes("proj", "deploy")["entities"]]
-        db.vote_observation("proj", "task/a", "deploy", 1)
+        db.vote_observation("proj", "task/a", 1, content="deploy")
         after = [e.name for e in db.search_nodes("proj", "deploy")["entities"]]
         assert after == before
 
@@ -1719,7 +1897,7 @@ class TestCompactMode:
             "proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2"]}]
         )
         result = db.read_graph("proj", compact=False)
-        assert result["entities"][0].observations == ["obs1", "obs2"]
+        assert obs_contents(result["entities"][0]) == ["obs1", "obs2"]
 
     def test_search_nodes_compact_omits_observations(self, db: DatabaseManager) -> None:
         db.create_entities(

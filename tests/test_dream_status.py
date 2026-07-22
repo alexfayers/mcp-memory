@@ -66,6 +66,31 @@ class TestParseOperations:
         result = dream_status.parse_operations("[p/task/old] - Merged into task/new")
         assert result[0]["action"] == "merge"
 
+    def test_observation_demote_action(self) -> None:
+        result = dream_status.parse_operations("[p/task/a#a1b2c3d4] - observation demoted: stale")
+        assert result[0]["action"] == "obs-demote"
+        assert result[0]["name"] == "task/a"
+        assert result[0]["hash"] == "a1b2c3d4"
+
+    def test_observation_merge_action(self) -> None:
+        result = dream_status.parse_operations(
+            "[p/task/a#a1b2c3d4] - merged observation into #deadbeef: duplicate"
+        )
+        assert result[0]["action"] == "obs-merge"
+        assert result[0]["hash"] == "a1b2c3d4"
+
+    def test_hash_suffix_excluded_from_name(self) -> None:
+        result = dream_status.parse_operations("[global/pattern/foo#abc12345] - observation stale")
+        assert result[0]["name"] == "pattern/foo"
+        assert result[0]["hash"] == "abc12345"
+
+    def test_entity_line_has_no_hash_key(self) -> None:
+        result = dream_status.parse_operations("[p/task/x] - superseded")
+        assert "hash" not in result[0]
+
+    def test_obsolete_reason_is_not_observation_action(self) -> None:
+        assert dream_status.parse_operations("[p/task/x] - obsolete")[0]["action"] == "demote"
+
 
 class TestRecordAndRead:
     def test_absent_status_is_none(self) -> None:

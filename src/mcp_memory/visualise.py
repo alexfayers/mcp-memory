@@ -102,7 +102,7 @@ def get_all_graph_data(
     entity_ids: list[int] = []
     project_ids: set[int] = set()
     for row in entity_rows:
-        scored = db._get_observations_with_scores(row["id"])
+        scored = db._get_observations_full(row["id"])
         entities.append(
             {
                 "name": row["name"],
@@ -112,8 +112,8 @@ def get_all_graph_data(
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "vote_score": row["vote_score"],
-                "observations": [content for content, _ in scored],
-                "observation_votes": [score for _, score in scored],
+                "observations": [o.content for o in scored],
+                "observation_votes": [o.vote_score for o in scored],
             }
         )
         entity_ids.append(row["id"])
@@ -155,8 +155,8 @@ def search_graph(
             "created_at": entity.created_at,
             "updated_at": entity.updated_at,
             "vote_score": entity.vote_score,
-            "observations": entity.observations,
-            "observation_votes": db.observation_scores(entity.project_name or "", entity.name),
+            "observations": [o.content for o in entity.observations],
+            "observation_votes": [o.vote_score for o in entity.observations],
         }
         for position, entity in enumerate(cast("list[Entity]", result["entities"]), start=1)
     ]
@@ -289,7 +289,7 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
             return parsed
         project, name, vote, observation = parsed
         try:
-            new_score = get_db().vote_observation(project, name, observation or "", vote)
+            new_score = get_db().vote_observation(project, name, vote, content=observation or "")
         except ValueError:
             return JSONResponse({"error": "observation not found"}, status_code=404)
         result = {

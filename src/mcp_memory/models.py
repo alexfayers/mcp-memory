@@ -76,10 +76,17 @@ def normalize_relation_type(relation_type: str) -> str:
 
 
 @dataclass
+class Observation:
+    content: str
+    content_hash: str
+    vote_score: int = 0
+
+
+@dataclass
 class Entity:
     name: str
     entity_type: str
-    observations: list[str]
+    observations: list[Observation]
     status: EntityStatus | None = None
     created_at: str | None = None
     updated_at: str | None = None

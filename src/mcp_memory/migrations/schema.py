@@ -719,4 +719,15 @@ MIGRATIONS: list[Migration] = [
             "CREATE INDEX IF NOT EXISTS idx_entities_deleted_at ON entities(deleted_at)",
         ],
     ),
+    Migration(
+        version=24,
+        statements=[
+            # content_hash addresses an observation by a content-derived digest,
+            # backfilled at startup and written at every insert site. Nullable and
+            # not part of the FTS projection, so no trigger changes (mirrors v20/v22).
+            "ALTER TABLE observations ADD COLUMN content_hash TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_observations_content_hash "
+            "ON observations(entity_id, content_hash)",
+        ],
+    ),
 ]
