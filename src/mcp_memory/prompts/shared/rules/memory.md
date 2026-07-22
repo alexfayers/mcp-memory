@@ -41,6 +41,10 @@ Ensure you _always_ update memory as you progress through a task, and just befor
 - **Do NOT create project summary entities in global scope.** Each project's `project/` entity lives in its own project scope. Global is only for things that span multiple projects.
 - **NEVER put workspace-specific facts (repo names, file paths, workspace specific rules, tool configs specific to a repo) into global memory.**
 
+### Finding project locations
+
+**CRITICAL - mechanical trip-wire, do not rely on judgement here:** the instant a task needs a project's filesystem location, the first tool call MUST be `get_paths_for_project(project="<repo-name>")` (or `list_project_paths()` to browse all registered mappings, or `get_project_for_path(path=...)` to go the other direction) - BEFORE any `find`, `grep`, `ls`, or other disk search. This includes cases where you already ran a memory search for unrelated content in the same turn and it happened to surface a path in passing (e.g. inside a task observation) - that is not a substitute for the deliberate lookup call. Memory already tracks where projects live on disk; searching the filesystem for a project you could look up is redundant and slower. Only fall back to a disk search if `get_paths_for_project` returns empty.
+
 ### If the `memory` server is unavailable
 
 If `memory` is not accessible and you need it for the current task:
