@@ -1,11 +1,12 @@
 ---
 name: memory-review
 description: Audit and clean up the memory graph - fix orphans, consolidate duplicates, trim bloat, and enforce naming conventions. Run periodically or when asked about memory health.
+disable-model-invocation: true
 ---
 
 # memory-review
 
-**When to run: only when explicitly asked, or at a genuine lull (session wind-down, no active task).** This is a long, heavyweight audit. Do NOT launch it - especially not as a background subagent - in the middle of active work just because a periodic "review due" reminder fired. Mid-task it competes for attention and slows the real work; the reminder is a nudge to schedule it, not an instruction to start it now. When a reminder fires during active work, note it and defer to the next lull, or ask the user first.
+**When to run: only when explicitly asked, or at a genuine lull (session wind-down, no active task).** This is a long, heavyweight audit, invoked only via the user's explicit `/memory-review`. The periodic "review due" hook reminder is a nudge to mention to the user, not an instruction to launch this skill automatically; surface it and let the user decide when to run it.
 
 Work through this checklist to audit and clean up the memory graph. The `/visualise` endpoint gives a visual overview, but auditors MUST read the graph data via the **read-only memory MCP tools** (`read_graph`, `search_nodes`, `get_entity_with_relations`, `search_related_nodes`), NOT via `curl`/`Read` of `/api/graph`.
 

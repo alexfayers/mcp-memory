@@ -965,7 +965,7 @@ class TestMemoryReviewNudge:
         assert len(result.notes) == 1
         note = result.notes[0]
         assert "memory-review" in note
-        assert "subagent" in note.lower()
+        assert "user" in note.lower()
         mock_reset.assert_called_once_with()
 
     def test_user_prompt_no_nudge_when_not_due(self) -> None:

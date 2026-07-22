@@ -83,8 +83,9 @@ _MEMORY_COMPACT_WARNING = (
 )
 _MEMORY_REVIEW_NUDGE = (
     "MEMORY REVIEW DUE: many memory writes have accumulated since the last review. "
-    "Run the `memory-review` skill via a subagent to audit and clean the graph "
-    "(orphans, duplicates, naming, bloat). This fires periodically by design."
+    "Mention this to the user and let them run `/memory-review` when they choose - "
+    "e.g. at the next lull (session wind-down, no active task). This fires "
+    "periodically by design."
 )
 _AUTO_REGISTERED_NOTE = (
     "Registered this workspace to memory project `{project}` (path `{anchor}`), "
