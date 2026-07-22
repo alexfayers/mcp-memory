@@ -40,6 +40,7 @@ Ensure you _always_ update memory as you progress through a task, and just befor
 
 - **Do NOT create project summary entities in global scope.** Each project's `project/` entity lives in its own project scope. Global is only for things that span multiple projects.
 - **NEVER put workspace-specific facts (repo names, file paths, workspace specific rules, tool configs specific to a repo) into global memory.**
+- **Before adding to an entity found via search, check whether its current scope actually matches its subject.** A scope can be wrong for reasons other than the entity being new - e.g. it was created from a fallback/basename scope (a home directory that happens to be a git repo, a generic folder name) rather than the specific project it is actually about. If an entity's content clearly belongs to a different, already-known project scope, move it there (recreate under the correct project with all existing observations/relations preserved, then `delete_entity` the original) before appending more content - don't perpetuate a wrong scope by writing more into it.
 
 ### Finding project locations
 
