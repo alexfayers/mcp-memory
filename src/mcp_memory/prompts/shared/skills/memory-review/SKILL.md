@@ -10,6 +10,16 @@ disable-model-invocation: true
 
 Work through this checklist to audit and clean up the memory graph. The `/visualise` endpoint gives a visual overview, but auditors MUST read the graph data via the **read-only memory MCP tools** (`read_graph`, `search_nodes`, `get_entity_with_relations`, `search_related_nodes`), NOT via `curl`/`Read` of `/api/graph`.
 
+**Start with the deterministic audit.** Run `mcp-memory audit --project <scope>` (or `mcp-memory audit --all-projects`) once up front. It reads the live database read-only and emits one JSON report of every *mechanical* violation - orphans, misused `project`-type entities, unprefixed names, ghost scopes, oversized entities (per the section 3 size targets), `task belongs-to project` relation violations, star-graph tasks, and strongly-downvoted entities:
+
+```json
+{"project": "...", "orphans": [...], "misused_project_type": [...], "unprefixed": [...],
+ "ghost_scopes": [...], "oversized": [...], "relation_violations": [...],
+ "star_graph_tasks": [...], "negative_vote_entities": [...]}
+```
+
+This replaces the manual enumeration in the sub-checks below - the audit *finds* the violations deterministically so you do not have to eyeball the graph for them. It does **not** decide fixes: near-duplicate/contradiction detection, what is reusable enough for a `pattern/`, memory-vs-rule-file redundancy, and every merge/delete/rename/relink decision remain your judgement. Use the audit as the worklist, then apply the judgement each section describes.
+
 **Read the graph via the read-only memory MCP tools** (`read_graph`, `get_entity_with_relations`), not curl. The "MEMORY UPDATE REQUIRED" gate (in mcp-memory's own hook plugin, `hooks/plugin.py`, NOT cline-hooks) never hard-blocks subagents - it applies to the main agent loop only - so auditors run freely regardless of agent type. (Reading via curl is fine on the MAIN thread too, where you can write to satisfy the gate.)
 
 **Approach:** Use subagents for READ-ONLY auditing only - fan out one agent per scope or per concern to enumerate issues and propose fixes. Each returns a structured list of proposed ops; the MAIN THREAD executes all mutations (deletes, migrates, status changes) serially.
@@ -26,14 +36,15 @@ Work through this checklist to audit and clean up the memory graph. The `/visual
 
 `create_entities` now rejects new unprefixed names and any mis-named/second `project` entity at creation time (a name must start with `<entityType>/`, and a `project` entity must be named exactly `project/<scope>`). The checks below therefore target **legacy entities created before that enforcement** - new ones can no longer be made.
 
-For each project scope, identify:
-- **Orphan entities** - nodes with zero relations (these float disconnected in the graph)
-- **Misused `project` type** - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` and `user-preferences` are the only types exempt from the relation requirement, so a legacy work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. These are always a mistake: the content belongs in a `task/`, `feature/`, or `pattern/` entity (with a relation), or should be deleted if superseded.
-- **Unprefixed entities** - names not starting with a standard prefix (`project/`, `feature/`, `task/`, `user-preferences/`, `pattern/`, `knowledge/`)
-- **Duplicate entities** - same concept stored with and without prefix (e.g. `MyProject` and `project/MyProject`)
-- **Ghost project scopes** - scopes that exist but contain zero entities (from auto-generated sessions, old renames)
+The audit's `orphans`, `misused_project_type`, `unprefixed`, and `ghost_scopes` keys enumerate these deterministically - read them instead of eyeballing the graph:
+- **Orphan entities** (`orphans`) - nodes with zero relations (these float disconnected in the graph)
+- **Misused `project` type** (`misused_project_type`) - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` and `user-preferences` are the only types exempt from the relation requirement, so a legacy work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. These are always a mistake: the content belongs in a `task/`, `feature/`, or `pattern/` entity (with a relation), or should be deleted if superseded.
+- **Unprefixed entities** (`unprefixed`) - names not starting with a standard prefix (`project/`, `feature/`, `task/`, `user-preferences/`, `pattern/`, `knowledge/`)
+- **Ghost project scopes** (`ghost_scopes`) - scopes that exist but contain zero entities (from auto-generated sessions, old renames)
 
-Fix: rename with proper prefix (delete + recreate with relations), link orphans, or delete if stale. For a misused `project` entity, migrate its content to the correct entity type with a relation (or delete if a `task/`/`feature/` already covers it), then delete the rogue `project` entity.
+**Duplicate entities** - same concept stored with and without prefix (e.g. `MyProject` and `project/MyProject`) - are a judgement call the audit does not make: cross-reference the `unprefixed` list against prefixed names in the same scope to spot them.
+
+Fix (your judgement): rename with proper prefix (delete + recreate with relations), link orphans, or delete if stale. For a misused `project` entity, migrate its content to the correct entity type with a relation (or delete if a `task/`/`feature/` already covers it), then delete the rogue `project` entity.
 
 ## 2. Consolidate duplicates
 
@@ -54,6 +65,8 @@ Project and task entities accumulate session-level detail over time. Trim them:
 - Move reusable learnings to `pattern/` entities in global scope
 
 ### Size targets
+
+The audit's `oversized` key lists every entity over its ceiling (with `count` and `threshold`), so you do not have to tally observations by hand. The ceilings it enforces are the upper bounds below; deciding *what* to trim from an over-ceiling entity is your judgement.
 
 | Entity type | Ideal obs count | Action if over |
 |---|---|---|
@@ -78,7 +91,7 @@ Each pattern entity should be independently searchable - someone searching for "
 - Archive or delete resolved tasks that are no longer useful context
 - Delete old ticket/CR entities that were one-off investigations
 - Archive superseded project entities (e.g. old TS project replaced by Python rewrite)
-- Treat a strongly negative `vote_score` as a rot signal - prioritise these entities for review, and trim or delete them if the downvotes reflect stale or misleading content. A negative score may be the dream's doing (an idle-window demotion) rather than a human judgement, so it is a *prompt to review*, not a verdict: confirm the rot and delete/trim, or cast a `+1` if the entity is still useful and was over-demoted. (An entity that reached the saturation floor while orphaned may already have been reversibly soft-deleted by the startup GC; `restore_entity` brings it back if that was wrong.)
+- Treat a strongly negative `vote_score` as a rot signal - the audit's `negative_vote_entities` key lists these for you. Prioritise them for review, and trim or delete them if the downvotes reflect stale or misleading content. A negative score may be the dream's doing (an idle-window demotion) rather than a human judgement, so it is a *prompt to review*, not a verdict: confirm the rot and delete/trim, or cast a `+1` if the entity is still useful and was over-demoted. (An entity that reached the saturation floor while orphaned may already have been reversibly soft-deleted by the startup GC; `restore_entity` brings it back if that was wrong.)
 - Remove observations with:
   - Dates/timestamps (entities have automatic created_at/updated_at)
   - File paths in global scope (belong on project entities in project scope)
@@ -88,8 +101,9 @@ Each pattern entity should be independently searchable - someone searching for "
 
 ## 6. Verify relations
 
-- Every non-exempt entity should have at least one relation
-- `task/` entities must have `implements` relation(s) to the feature(s) they modify - NOT `belongs-to` project
+The audit flags the two mechanical relation faults for you: `orphans` (entities with zero relations, from section 1) and `relation_violations` (`task belongs-to project` edges). Work those keys, then apply the judgement checks below that the audit cannot make:
+- Every non-exempt entity should have at least one relation (see `orphans`)
+- `task/` entities must have `implements` relation(s) to the feature(s) they modify - NOT `belongs-to` project (see `relation_violations`)
 - `feature/` entities must have `belongs-to` relation to their parent project or knowledge hub
 - `pattern/` entities should be linked to relevant `user-preferences/` or `project/` entities
 - `knowledge/` entities should be linked to relevant projects or preferences
@@ -98,7 +112,7 @@ Each pattern entity should be independently searchable - someone searching for "
 
 ## 6a. Fix star graphs
 
-A common anti-pattern is every task having a `belongs-to` relation directly to the project root, creating a star graph. Fix this by:
+A common anti-pattern is every task linking directly to the project root, creating a star graph - the audit's `star_graph_tasks` key lists every `task -> project` edge (both the `belongs-to` violations and any other direct link). Fix this by:
 - Ensuring feature entities exist for each major area of the project
 - Replacing `task belongs-to project` with `task implements feature`
 - Tasks are still reachable from the project via feature traversal (feature belongs-to project)

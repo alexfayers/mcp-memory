@@ -275,6 +275,19 @@ def _cmd_migrate_db(args: argparse.Namespace) -> None:
         print("No installed service found; start the server to use the migrated database.")
 
 
+def _cmd_audit(args: argparse.Namespace) -> None:
+    """Emit the read-only structural-hygiene report as one JSON blob on stdout."""
+    from .audit import audit_graph
+    from .database import DatabaseManager
+
+    db = DatabaseManager(get_db_path())
+    try:
+        report = audit_graph(db, None if args.all_projects else args.project)
+    finally:
+        db.close()
+    print(json.dumps(report, indent=2))
+
+
 def _cmd_install_kiro(args: argparse.Namespace) -> None:
     """Patch Kiro agent config with memory MCP server and allowedTools."""
     port = args.port
@@ -395,6 +408,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Source database path (default: auto-detected from the installed service)",
     )
 
+    audit = sub.add_parser(
+        "audit", help="Report structural memory-graph hygiene issues as JSON (read-only)"
+    )
+    scope = audit.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--project", help="Audit a single project scope")
+    scope.add_argument("--all-projects", action="store_true", help="Audit every project scope")
+
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument("target", choices=["kiro", "claude-code"], help="Agent to install for.")
     install.add_argument(
@@ -420,6 +440,8 @@ def main() -> None:
         _cmd_setup_service(args)
     elif args.command == "migrate-db":
         _cmd_migrate_db(args)
+    elif args.command == "audit":
+        _cmd_audit(args)
     elif args.command == "install":
         if args.target == "claude-code":
             _cmd_install_claude_code()
