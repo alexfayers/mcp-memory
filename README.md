@@ -9,7 +9,7 @@ SQLite-backed persistent memory MCP server with FTS5 search and project scoping.
 - **Implicit-usefulness ranking** - an entity edited soon after a search surfaced it earns an automatic upvote, so ranking self-tunes from observed use without relying on explicit votes
 - **Graph traversal** - explore entity relationships with filtering by type
 - **Safe observation updates** - append or delete individual observations without overwriting
-- **Observation-level voting** - up/down-vote individual observations so an entity's most useful lines surface first and stale ones sink, not just whole-entity votes
+- **Observation-level voting** - up/down-vote individual observations (addressable by a content-derived `content_hash`) so an entity's most useful lines surface first and stale ones sink, not just whole-entity votes
 - **Entity status tracking** - track entity lifecycle with status fields
 - **Migration framework** - automatic schema upgrades
 - **HTTP transport** - single server instance shared across all clients via streamable-http
@@ -201,7 +201,7 @@ In addition to these explicit votes, the server casts a deterministic `+1` on it
 
 ### vote_observation
 
-Record a `+1` or `-1` usefulness vote on a single observation of an entity, addressed by its exact content (like `delete_observations`). Upvoted observations surface first within the entity and downvoted ones sink, so a fat entity leads with its most useful lines. This is a light alternative to `delete_observations` when an observation is stale but not wrong enough to remove, and complements `vote_entity`, which ranks whole entities. Voting does not change content or `updated_at`. Returns the observation's new net `vote_score`.
+Record a `+1` or `-1` usefulness vote on a single observation of an entity, addressed either by its exact content (like `delete_observations`) or, more cheaply, by its `content_hash` (read off the observation in tool output). Upvoted observations surface first within the entity and downvoted ones sink, so a fat entity leads with its most useful lines. This is a light alternative to `delete_observations` when an observation is stale but not wrong enough to remove, and complements `vote_entity`, which ranks whole entities. Voting does not change content or `updated_at`. Returns the observation's new net `vote_score`.
 
 ### delete_entity
 
@@ -214,6 +214,10 @@ Delete a specific relation between two entities.
 ### merge_entities
 
 Fold a duplicate entity (`source`) into its canonical twin (`target`) within one project. The source's observations are copied onto the target (deduplicated, keeping their votes), all the source's relations are repointed to the target (self-loops and duplicates dropped), the target keeps the higher of the two vote scores, and the source is **soft-deleted**. The merge is reversible: `restore_entity` brings the source back until a grace-window purge removes it. Both entities must already exist in the same project.
+
+### merge_observations
+
+Fold a near-duplicate observation (`sourceHash`) into another (`targetHash`) within a single entity, both addressed by their `content_hash`. The target keeps the higher of the two vote scores and the source observation is **hard-deleted** - unlike `merge_entities`'s reversible soft-delete, this removal is not recoverable. This is the observation-level analogue of `merge_entities` for genuine within-entity duplicates; for an observation that is merely stale rather than a duplicate, prefer `vote_observation` (downvote to sink it) or `delete_observations`.
 
 ### restore_entity
 

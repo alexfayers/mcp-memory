@@ -1,9 +1,10 @@
 # memory-agent: an LLM curation/recall service in front of mcp-memory
 
-Status: **v1 + v2 + v3 built** (`recall`, the autonomous light `dream` curation
-pass, and a heavy structural tier that also merges duplicates - all shipped and
-live-verified), plus an in-process GC that soft-deletes downvoted orphan entities
-on startup (opt-in; see [Autonomous curation](#v2---dream-autonomous-curation))
+Status: **v1 + v2 + v3 + v4 built** (`recall`, the autonomous light `dream`
+curation pass, a heavy structural tier that also merges duplicates, and
+observation-level curation on both tiers - all shipped and live-verified), plus
+an in-process GC that soft-deletes downvoted orphan entities on startup (opt-in;
+see [Autonomous curation](#v2---dream-autonomous-curation))
 
 A dedicated MCP server that puts an LLM "brain" in front of the mcp-memory
 data store. A caller delegates heavy memory recall to it and receives distilled
@@ -408,12 +409,47 @@ independent of the light tier's `MCP_DREAM_ENABLED`.
   last ran. The coordinator snapshots each enabled tier's config block, so the card
   shows both tiers' idle-window state side by side.
 
+## v4 - observation-level dream curation
+
+Both dream tiers gain observation-level reach. Until now the dream could only act
+on whole entities (light demotes, heavy also merges); a fat entity carrying one
+stale or duplicate observation could not be groomed without touching the whole
+entity. v4 extends each tier's mutation surface to individual observations,
+addressed by `content_hash` - the 8-char content-derived hash (`sha256(content)[:8]`)
+now carried on every observation - so the dream never pastes observation text back.
+
+- **Light tier: `vote_observation` added.** The light tier's mutation surface
+  becomes `vote_entity` + `vote_observation`, both `-1`-only (its deny-list drops
+  `vote_observation` alongside `vote_entity`). It can now sink a single stale
+  observation within an otherwise-useful entity instead of only demoting the whole
+  entity. Still demote-never-delete: an observation vote changes neither content
+  nor `updated_at`, and only downvotes are cast.
+- **Heavy tier: `vote_observation` + `merge_observations` added.** The heavy
+  tier's mutation surface becomes `vote_entity` + `merge_entities` +
+  `vote_observation` + `merge_observations` (its deny-list drops the two
+  observation tools on top of the v3 drops). It can fold a within-entity duplicate
+  observation into its twin, the observation-level analogue of the entity merge it
+  already does. **Unlike `merge_entities`, `merge_observations` hard-deletes the
+  folded-away source observation** - there is no soft-delete or `restore_entity`
+  for observations, so this removal is *not* reversible. This is the one place the
+  heavy tier does an irreversible removal; it is gated on the same clear-duplicate
+  judgement as the entity merge, and confined to observations within a single
+  entity.
+- **Both are hash-addressed.** The dream ritual reads each observation's
+  `content_hash` from tool output and passes it to `vote_observation` /
+  `merge_observations`, matching how the tools are addressed everywhere else.
+- **Sole-writer safety is unchanged.** Both tiers still mutate only by spawning
+  `claude -p` calling `mcp__memory__*` over HTTP into the single mcp-memory
+  process; the single-flight guard and once-per-session rule are untouched.
+
 ### Deferred beyond v3
 
 - **Synthesised-observation append.** Gated behind observation-level voting
   shipping first: entity-level voting cannot down-rank a single bad observation,
   so auto-append could poison a good entity and compound the model's own
-  guesses. See the observation-level-voting task in the memory graph.
+  guesses. See the observation-level-voting task in the memory graph. (Prerequisite
+  now shipped, see [v4](#v4---observation-level-dream-curation) - observation-level
+  voting is live, so this item is now unblocked.)
 - **Team / cross-device HTTP hosting** with authentication.
 
 ## Pre-flight gate (all phases)
@@ -468,6 +504,8 @@ The authoritative, evolving decision log is in the memory graph:
   command, and measured costs. `depends-on` `task/observation-level-voting-retrieval`.
 - `task/observation-level-voting-retrieval` (project **mcp-memory**) -
   prerequisite for the deferred synthesised-append capability.
+- `task/obs-hashing-dream-voting-merge` (project **mcp-memory**) - the shipped
+  observation `content_hash`, `merge_observations` tool, and v4 dream tiers.
 - `feature/mcp-memory/server` (project **mcp-memory**) - the `vote_entity` tool
   and ranking behaviour this design relies on.
 - `pattern/claude-code-custom-subagents` (project **global**) - native subagent
