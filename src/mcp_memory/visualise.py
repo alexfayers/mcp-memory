@@ -112,8 +112,14 @@ def get_all_graph_data(
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "vote_score": row["vote_score"],
-                "observations": [o.content for o in scored],
-                "observation_votes": [o.vote_score for o in scored],
+                "observations": [
+                    {
+                        "content": o.content,
+                        "content_hash": o.content_hash,
+                        "vote_score": o.vote_score,
+                    }
+                    for o in scored
+                ],
             }
         )
         entity_ids.append(row["id"])
@@ -155,8 +161,10 @@ def search_graph(
             "created_at": entity.created_at,
             "updated_at": entity.updated_at,
             "vote_score": entity.vote_score,
-            "observations": [o.content for o in entity.observations],
-            "observation_votes": [o.vote_score for o in entity.observations],
+            "observations": [
+                {"content": o.content, "content_hash": o.content_hash, "vote_score": o.vote_score}
+                for o in entity.observations
+            ],
         }
         for position, entity in enumerate(cast("list[Entity]", result["entities"]), start=1)
     ]
@@ -169,12 +177,12 @@ def search_graph(
 
 
 async def _parse_vote_body(
-    request: Request, *, require_observation: bool = False
+    request: Request, *, require_hash: bool = False
 ) -> tuple[str, str, int, str | None] | JSONResponse:
     """Validate a vote request body shared by /api/vote and /api/vote-observation.
 
-    Returns ``(project, name, vote, observation)`` on success (observation is None unless
-    required), or a 400 JSONResponse mirroring the entity-vote validation ladder.
+    Returns ``(project, name, vote, observation_hash)`` on success (observation_hash is None
+    unless required), or a 400 JSONResponse mirroring the entity-vote validation ladder.
     """
     try:
         body = await request.json()
@@ -187,12 +195,12 @@ async def _parse_vote_body(
     vote = body.get("vote")
     if not isinstance(project, str) or not isinstance(name, str):
         return JSONResponse({"error": "project and name are required"}, status_code=400)
-    observation = body.get("observation")
-    if require_observation and not isinstance(observation, str):
-        return JSONResponse({"error": "observation is required"}, status_code=400)
+    observation_hash = body.get("observationHash")
+    if require_hash and not isinstance(observation_hash, str):
+        return JSONResponse({"error": "observationHash is required"}, status_code=400)
     if not isinstance(vote, int) or isinstance(vote, bool) or vote not in (1, -1):
         return JSONResponse({"error": "vote must be 1 or -1"}, status_code=400)
-    return project, name, vote, (observation if require_observation else None)
+    return project, name, vote, (observation_hash if require_hash else None)
 
 
 def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager]) -> None:
@@ -284,23 +292,30 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
 
     @mcp.custom_route("/api/vote-observation", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_vote_observation(request: Request) -> JSONResponse:
-        parsed = await _parse_vote_body(request, require_observation=True)
+        parsed = await _parse_vote_body(request, require_hash=True)
         if isinstance(parsed, JSONResponse):
             return parsed
-        project, name, vote, observation = parsed
+        project, name, vote, observation_hash = parsed
         try:
-            new_score = get_db().vote_observation(project, name, vote, content=observation or "")
+            new_score = get_db().vote_observation(
+                project, name, vote, content_hash=observation_hash or ""
+            )
         except ValueError:
             return JSONResponse({"error": "observation not found"}, status_code=404)
         result = {
             "name": name,
             "project": project,
-            "observation": observation,
+            "observationHash": observation_hash,
             "vote_score": new_score,
         }
         activity.record_tool(
             "vote_observation",
-            {"project": project, "entityName": name, "observation": observation, "vote": vote},
+            {
+                "project": project,
+                "entityName": name,
+                "observationHash": observation_hash,
+                "vote": vote,
+            },
             result,
         )
         return JSONResponse(result)

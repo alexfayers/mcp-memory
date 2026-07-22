@@ -21,6 +21,7 @@ select:hover, button:hover { border-color: #58a6ff; }
 #panel .obs-vote { display: flex; gap: 4px; align-items: center; flex-shrink: 0; opacity: 0; transition: opacity .1s; }
 #panel .obs:hover .obs-vote { opacity: 1; }
 #panel .obs-score { font-size: 11px; min-width: 18px; text-align: right; }
+#panel .obs-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color:#6e7681; border:1px solid #30363d; border-radius:6px; padding:0 4px; font-size:10px; flex-shrink:0; }
 #panel .obs-btn { padding: 0 6px; font-size: 11px; cursor: pointer; }
 #panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #484f58; cursor: pointer; font-size: 18px; }
 svg { width: 100vw; height: 100vh; }
@@ -258,15 +259,14 @@ async function castVote(vote) {
 document.getElementById("vote-up").onclick = () => castVote(1);
 document.getElementById("vote-down").onclick = () => castVote(-1);
 
-async function castObservationVote(observation, vote, btns) {
+async function castObservationVote(hash, vote, btns) {
   if (!panelDatum) return;
   const { project, name } = panelDatum;
   btns.forEach(b => b.disabled = true);
   try {
-    const data = await postVote("/api/vote-observation", { project, name, observation, vote });
+    const data = await postVote("/api/vote-observation", { project, name, observationHash: hash, vote });
     if (!data) return;
-    const idx = (panelDatum.observations || []).indexOf(observation);
-    if (idx >= 0 && panelDatum.observation_votes) panelDatum.observation_votes[idx] = data.vote_score;
+    (panelDatum.observations || []).forEach(o => { if (o.content_hash === hash) o.vote_score = data.vote_score; });
     renderObservations(panelDatum);
   } catch (e) { /* transient; leave display unchanged */ }
   finally { btns.forEach(b => b.disabled = false); }
@@ -449,15 +449,18 @@ function showPanel(d) {
 function renderObservations(d) {
   const container = document.getElementById("p-obs");
   container.innerHTML = "";
-  const obs = d.observations || [], votes = d.observation_votes || [];
-  obs.forEach((o, i) => {
-    const score = votes[i] || 0;
+  const obs = d.observations || [];
+  obs.forEach(o => {
+    const score = o.vote_score || 0;
     const colour = score > 0 ? '#3fb950' : score < 0 ? '#f85149' : '#8b949e';
     const row = document.createElement("div");
     row.className = "obs";
     const text = document.createElement("span");
     text.className = "obs-text";
-    text.textContent = o;
+    text.textContent = o.content;
+    const hash = document.createElement("span");
+    hash.className = "obs-hash";
+    hash.textContent = o.content_hash;
     const controls = document.createElement("span");
     controls.className = "obs-vote";
     const scoreEl = document.createElement("span");
@@ -470,10 +473,10 @@ function renderObservations(d) {
     const down = document.createElement("button");
     down.className = "obs-btn";
     down.textContent = "-1";
-    up.onclick = () => castObservationVote(o, 1, [up, down]);
-    down.onclick = () => castObservationVote(o, -1, [up, down]);
+    up.onclick = () => castObservationVote(o.content_hash, 1, [up, down]);
+    down.onclick = () => castObservationVote(o.content_hash, -1, [up, down]);
     controls.append(scoreEl, up, down);
-    row.append(text, controls);
+    row.append(text, hash, controls);
     container.append(row);
   });
 }
@@ -621,7 +624,7 @@ function renderResults(hits) {
   searchRankByName = new Map(hits.map(h => [h.name, h.rank]));
   document.getElementById("results-count").textContent = hits.length + (hits.length === 1 ? " match" : " matches");
   document.getElementById("results-list").innerHTML = hits.map(h => {
-    const snip = (h.observations[0] || "").replace(/</g, "&lt;");
+    const snip = ((h.observations[0] && h.observations[0].content) || "").replace(/</g, "&lt;");
     const votes = h.vote_score ? `${h.vote_score > 0 ? "+" : ""}${h.vote_score} votes` : null;
     const sub = [h.entity_type, h.project, h.status, votes].filter(Boolean).join(" · ");
     return `<div class="hit" data-name="${h.name.replace(/"/g, "&quot;")}">`

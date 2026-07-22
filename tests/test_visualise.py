@@ -9,7 +9,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 
 from mcp_memory import activity, dream_status, recall_status, visualise
-from mcp_memory.database import DatabaseManager
+from mcp_memory.database import DatabaseManager, _hash_observation
 from mcp_memory.models import Relation
 from mcp_memory.visualise import (
     get_all_graph_data,
@@ -80,7 +80,8 @@ class TestGetAllGraphData:
         entity = result["entities"][0]
         assert entity["name"] == "e1"
         assert entity["entity_type"] == "task"
-        assert entity["observations"] == ["obs1", "obs2"]
+        assert [o["content"] for o in entity["observations"]] == ["obs1", "obs2"]
+        assert all("content_hash" in o and "vote_score" in o for o in entity["observations"])
         assert entity["status"] == "planned"
         assert entity["vote_score"] == 1
 
@@ -122,8 +123,11 @@ class TestGetAllGraphData:
         )
         db.vote_observation("proj", "e1", 1, content="c")
         entity = get_all_graph_data(db, "proj")["entities"][0]
-        assert entity["observations"] == ["c", "a", "b"]
-        assert entity["observation_votes"] == [1, 0, 0]
+        assert [(o["content"], o["vote_score"]) for o in entity["observations"]] == [
+            ("c", 1),
+            ("a", 0),
+            ("b", 0),
+        ]
 
 
 class TestVisualisePage:
@@ -491,8 +495,13 @@ class TestSearchGraph:
             "created_at": entity["created_at"],
             "updated_at": entity["updated_at"],
             "vote_score": 0,
-            "observations": ["deployment pipeline"],
-            "observation_votes": [0],
+            "observations": [
+                {
+                    "content": "deployment pipeline",
+                    "content_hash": _hash_observation("deployment pipeline"),
+                    "vote_score": 0,
+                }
+            ],
         }
 
     def test_empty_query_returns_empty(self, db: DatabaseManager) -> None:
@@ -769,13 +778,18 @@ class TestApiVoteObservation:
         db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
         resp = await client.post(
             "/api/vote-observation",
-            json={"project": "proj", "name": "e1", "observation": "o", "vote": 1},
+            json={
+                "project": "proj",
+                "name": "e1",
+                "observationHash": _hash_observation("o"),
+                "vote": 1,
+            },
         )
         assert resp.status_code == 200
         assert resp.json() == {
             "name": "e1",
             "project": "proj",
-            "observation": "o",
+            "observationHash": _hash_observation("o"),
             "vote_score": 1,
         }
 
@@ -786,7 +800,12 @@ class TestApiVoteObservation:
         db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
         await client.post(
             "/api/vote-observation",
-            json={"project": "proj", "name": "e1", "observation": "o", "vote": 1},
+            json={
+                "project": "proj",
+                "name": "e1",
+                "observationHash": _hash_observation("o"),
+                "vote": 1,
+            },
         )
         events = (await client.get("/api/activity")).json()["events"]
         assert len(events) == 1
@@ -803,7 +822,7 @@ class TestApiVoteObservation:
             "/api/vote-observation", json={"project": "proj", "name": "e1", "vote": 1}
         )
         assert resp.status_code == 400
-        assert resp.json() == {"error": "observation is required"}
+        assert resp.json() == {"error": "observationHash is required"}
 
     @pytest.mark.anyio
     async def test_invalid_vote_value_rejected(
@@ -812,7 +831,12 @@ class TestApiVoteObservation:
         db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
         resp = await client.post(
             "/api/vote-observation",
-            json={"project": "proj", "name": "e1", "observation": "o", "vote": 5},
+            json={
+                "project": "proj",
+                "name": "e1",
+                "observationHash": _hash_observation("o"),
+                "vote": 5,
+            },
         )
         assert resp.status_code == 400
         assert resp.json() == {"error": "vote must be 1 or -1"}
@@ -824,7 +848,7 @@ class TestApiVoteObservation:
         db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
         resp = await client.post(
             "/api/vote-observation",
-            json={"project": "proj", "name": "e1", "observation": "ghost", "vote": 1},
+            json={"project": "proj", "name": "e1", "observationHash": "deadbeef", "vote": 1},
         )
         assert resp.status_code == 404
         assert resp.json() == {"error": "observation not found"}
