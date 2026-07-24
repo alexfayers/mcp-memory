@@ -10,6 +10,7 @@ An optional second server, `memory-agent`, may also be present. It exposes a sin
 
 - Use `recall` when answering a question would otherwise mean firing several searches and traversing many entities - it keeps that graph JSON out of your own context while handing back actionable slugs you can then vote on or traverse.
 - **Mechanical trip-wire (do not rely on judgement here):** the moment you notice you are about to fire a *second* broad `search_nodes`/`search_all_projects` call for the *same* question, or a single search result is large enough to be truncated/persisted to a file, stop and route the question through `recall` instead. Multiple broad searches for one question is the signal you should have used `recall` from the start.
+- **The truncated/persisted-to-a-file trip-wire fires the INSTANT that result comes back - it does not wait for you to notice a pattern.** If a `get_entity_with_relations`/`search_nodes`/`search_all_projects` result reads "Output too large... saved to file", stop immediately: do not fire further broad memory calls to keep gathering context for the same question. Either answer from what you already have, or restart the remaining work through `recall`. Continuing with more direct calls "just this once more" after that message is the exact mistake this trip-wire exists to prevent.
 - It is read-only and each call is a full agent spawn (slower and costlier than a direct tool call), so for a targeted lookup you can do inline, call `search_nodes` directly instead.
 - `recall` does **not** replace the mandatory "Before starting a task" search ritual or the cheap session-start scan - those stay on the plain `memory` tools. Reach for `recall` once you know the user's specific ask and answering it needs heavy traversal; it is not the broad "what's here" scan at session start. If `memory-agent` is absent, ignore this note.
 
@@ -208,6 +209,10 @@ For each significant unit of work (feature implemented, bug fixed, refactor comp
     - Avoid project-specific details in global memory; focus on patterns and lessons.
 
 3. If a memory is no longer relevant, was incorrect, or would actively mislead future sessions, use `delete_entity` and/or `delete_relation` to remove it. Use this sparingly - prefer marking things deprecated in text unless the memory would cause harm.
+
+## Before recommending from memory
+
+A memory entity's "here's the full list of X" (affected files, packages, dependencies) is a synthesis from whenever it was written, not a live fact. Restating it is not the same as verifying it. When asked whether such a list is complete - especially if the user pushes back ("are you sure that's all?") - re-derive it against the live source (grep the actual call chain, not just the wiring one layer up) before answering, rather than re-asserting the cached synthesis with more confidence.
 
 ## Answering memory-related questions
 
