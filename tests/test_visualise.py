@@ -160,6 +160,13 @@ class TestVisualisePage:
         assert "demoted (downvoted)" in resp.text
 
     @pytest.mark.anyio
+    async def test_includes_observation_merge_ui(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "castObservationMerge" in resp.text
+        assert "/api/merge-observation" in resp.text
+        assert "mergeSource" in resp.text
+
+    @pytest.mark.anyio
     async def test_dream_card_renders_both_tiers_and_merge_ops(
         self, client: httpx.AsyncClient
     ) -> None:
@@ -852,3 +859,83 @@ class TestApiVoteObservation:
         )
         assert resp.status_code == 404
         assert resp.json() == {"error": "observation not found"}
+
+
+class TestApiMergeObservation:
+    @pytest.mark.anyio
+    async def test_valid_merge_removes_source_keeps_target(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "pattern", "observations": ["src", "dst"]}]
+        )
+        resp = await client.post(
+            "/api/merge-observation",
+            json={
+                "project": "proj",
+                "name": "e1",
+                "sourceHash": _hash_observation("src"),
+                "targetHash": _hash_observation("dst"),
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"name": "e1", "project": "proj", "merged": 1}
+
+        entity = get_all_graph_data(db, "proj")["entities"][0]
+        hashes = {o["content_hash"] for o in entity["observations"]}
+        assert _hash_observation("src") not in hashes
+        assert _hash_observation("dst") in hashes
+
+    @pytest.mark.anyio
+    async def test_merge_records_activity_as_update(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "pattern", "observations": ["src", "dst"]}]
+        )
+        await client.post(
+            "/api/merge-observation",
+            json={
+                "project": "proj",
+                "name": "e1",
+                "sourceHash": _hash_observation("src"),
+                "targetHash": _hash_observation("dst"),
+            },
+        )
+        events = (await client.get("/api/activity")).json()["events"]
+        assert len(events) == 1
+        assert events[0]["tool"] == "merge_observations"
+        assert events[0]["kind"] == "update"
+        assert events[0]["entities"] == ["e1"]
+
+    @pytest.mark.anyio
+    async def test_unknown_observation_returns_404(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post(
+            "/api/merge-observation",
+            json={
+                "project": "proj",
+                "name": "e1",
+                "sourceHash": "deadbeef",
+                "targetHash": _hash_observation("o"),
+            },
+        )
+        assert resp.status_code == 404
+        assert resp.json() == {"error": "observation not found"}
+
+    @pytest.mark.anyio
+    async def test_missing_hash_fields_returns_400(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post("/api/merge-observation", json={"project": "proj", "name": "e1"})
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "sourceHash and targetHash are required"}
+
+    @pytest.mark.anyio
+    async def test_malformed_body_returns_400(self, client: httpx.AsyncClient) -> None:
+        resp = await client.post("/api/merge-observation", content=b"not json")
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "invalid JSON body"}

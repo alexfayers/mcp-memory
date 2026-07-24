@@ -193,6 +193,13 @@ class TestBuildDreamCommand:
         assert "vote_entity" in prompt
         assert "-1" in prompt
 
+    def test_prompt_interpolates_the_gc_downvote_floor(self) -> None:
+        command = agent.build_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7
+        )
+        prompt = command[command.index("-p") + 1]
+        assert "-10" in prompt
+
     def test_prompt_specifies_a_parseable_audit_format(self) -> None:
         command = agent.build_dream_command(
             claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7
@@ -285,6 +292,13 @@ class TestBuildHeavyDreamCommand:
         assert "merge_entities" in prompt
         assert "same project" in prompt
         assert "vote_entity" in prompt
+
+    def test_prompt_interpolates_the_gc_downvote_floor(self) -> None:
+        command = agent.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+        )
+        prompt = command[command.index("-p") + 1]
+        assert "-10" in prompt
 
     def test_prompt_specifies_a_parseable_audit_format(self) -> None:
         command = agent.build_heavy_dream_command(

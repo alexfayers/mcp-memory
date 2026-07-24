@@ -320,6 +320,40 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
         )
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/merge-observation", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_merge_observation(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        project = body.get("project")
+        name = body.get("name")
+        if not isinstance(project, str) or not isinstance(name, str):
+            return JSONResponse({"error": "project and name are required"}, status_code=400)
+        source_hash = body.get("sourceHash")
+        target_hash = body.get("targetHash")
+        if not isinstance(source_hash, str) or not isinstance(target_hash, str):
+            return JSONResponse(
+                {"error": "sourceHash and targetHash are required"}, status_code=400
+            )
+        try:
+            result = get_db().merge_observations(project, name, source_hash, target_hash)
+        except ValueError:
+            return JSONResponse({"error": "observation not found"}, status_code=404)
+        activity.record_tool(
+            "merge_observations",
+            {
+                "project": project,
+                "entityName": name,
+                "sourceHash": source_hash,
+                "targetHash": target_hash,
+            },
+            result,
+        )
+        return JSONResponse({"name": name, "project": project, "merged": result["merged"]})
+
     @mcp.custom_route("/visualise", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def visualise_page(request: Request) -> HTMLResponse:
         return HTMLResponse(_VISUALISE_HTML)

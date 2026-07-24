@@ -48,6 +48,7 @@ from .config import (
     get_recall_max_turns,
     get_recall_model,
 )
+from .database import _GC_DOWNVOTE_FLOOR
 
 logger = logging.getLogger("memory-agent")
 
@@ -193,7 +194,7 @@ DREAM_RITUAL = (
     "and get_entity_with_relations / search_related_nodes to confirm) for entities "
     "that are stale, superseded, or duplicated by a better entity. Before voting, "
     "inspect each candidate's current vote_score: do NOT downvote an entity that is "
-    "already strongly negative (a score at or below -10), because the ranking "
+    "already strongly negative (a score at or below {gc_floor}), because the ranking "
     "penalty has already saturated and further votes are wasted. "
     "To demote an individual observation, read the content_hash field off that "
     "observation object in the tool results and pass it to vote_observation "
@@ -234,7 +235,7 @@ HEAVY_DREAM_RITUAL = (
     "merge_observations(project, entity, sourceHash, targetHash). "
     "Also demote (vote_entity, -1) entities, and demote (vote_observation, -1, by "
     "content_hash) individual observations, that are clearly stale or superseded but "
-    "not duplicates, skipping any already at or below a score of -10 (the ranking "
+    "not duplicates, skipping any already at or below a score of {gc_floor} (the ranking "
     "penalty has saturated there). "
     "Do at most {max_ops} operations (merges plus demotions) this pass - be "
     "conservative and prefer clear cases over borderline calls. "
@@ -348,7 +349,7 @@ def build_dream_command(
         claude_bin=claude_bin,
         model=model,
         mcp_config_path=mcp_config_path,
-        prompt=DREAM_RITUAL.format(max_votes=max_votes),
+        prompt=DREAM_RITUAL.format(max_votes=max_votes, gc_floor=_GC_DOWNVOTE_FLOOR),
         disallowed=DREAM_DISALLOWED_TOOLS,
     )
 
@@ -365,7 +366,7 @@ def build_heavy_dream_command(
         claude_bin=claude_bin,
         model=model,
         mcp_config_path=mcp_config_path,
-        prompt=HEAVY_DREAM_RITUAL.format(max_ops=max_ops),
+        prompt=HEAVY_DREAM_RITUAL.format(max_ops=max_ops, gc_floor=_GC_DOWNVOTE_FLOOR),
         disallowed=HEAVY_DREAM_DISALLOWED_TOOLS,
     )
 

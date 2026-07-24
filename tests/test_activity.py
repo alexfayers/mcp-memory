@@ -89,6 +89,8 @@ class TestKindMapping:
             "delete_observations": "update",
             "set_entity_status": "update",
             "vote_entity": "update",
+            "vote_observation": "update",
+            "merge_observations": "update",
             "delete_entity": "delete",
             "delete_relation": "delete",
             "delete_project": "delete",
@@ -159,6 +161,16 @@ class TestWriteExtraction:
             {"entityName": "task/foo", "project": "p", "observation": "o", "vote_score": 1},
         )
         assert activity.recent(0)[0]["entities"] == ["task/foo"]
+
+    def test_merge_observations_extracts_entity_name(self) -> None:
+        activity.record_tool(
+            "merge_observations",
+            {"project": "p", "entityName": "task/foo", "sourceHash": "a", "targetHash": "b"},
+            {"merged": 1},
+        )
+        event = activity.recent(0)[0]
+        assert event["kind"] == "update"
+        assert event["entities"] == ["task/foo"]
 
     def test_project_level_tools_record_project_with_no_entities(self) -> None:
         activity.record_tool("delete_project", {"project": "scratch"}, {"message": "ok"})

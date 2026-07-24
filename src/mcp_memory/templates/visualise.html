@@ -16,13 +16,17 @@ select:hover, button:hover { border-color: #58a6ff; }
 #panel h2 { font-size: 15px; margin-bottom: 4px; color: #58a6ff; word-break: break-all; }
 #panel h3 { font-size: 12px; color: #484f58; margin-bottom: 12px; }
 #panel .status-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #30363d; margin-bottom: 12px; }
-#panel .obs { font-size: 12px; line-height: 1.6; color: #8b949e; padding: 4px 0; border-bottom: 1px solid #21262d; display: flex; gap: 8px; align-items: flex-start; }
-#panel .obs-text { flex: 1; }
+#panel .obs { font-size: 12px; line-height: 1.6; color: #8b949e; padding: 4px 0; border-bottom: 1px solid #21262d; display: flex; flex-direction: column; gap: 4px; }
+#panel .obs-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+#panel .obs-text { overflow-wrap: break-word; }
 #panel .obs-vote { display: flex; gap: 4px; align-items: center; flex-shrink: 0; opacity: 0; transition: opacity .1s; }
 #panel .obs:hover .obs-vote { opacity: 1; }
 #panel .obs-score { font-size: 11px; min-width: 18px; text-align: right; }
 #panel .obs-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color:#6e7681; border:1px solid #30363d; border-radius:6px; padding:0 4px; font-size:10px; flex-shrink:0; }
 #panel .obs-btn { padding: 0 6px; font-size: 11px; cursor: pointer; }
+#panel .obs.armed { outline: 1px solid #58a6ff; }
+#panel .obs.armed .obs-vote { opacity: 1; }
+#panel .obs-merge-btn.armed { color: #58a6ff; border-color: #58a6ff; }
 #panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #484f58; cursor: pointer; font-size: 18px; }
 svg { width: 100vw; height: 100vh; }
 .link { stroke-opacity: 0.4; }
@@ -231,6 +235,7 @@ const zoom = d3.zoom().scaleExtent([ZOOM_MIN, ZOOM_MAX]).on("zoom", e => {
 svg.call(zoom);
 
 let simulation = null, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, panelDatum = null, orphans = new Set();
+let mergeSource = null;
 let nodes = [], links = [], relCount = new Map();
 
 const panel = document.getElementById("panel");
@@ -267,6 +272,21 @@ async function castObservationVote(hash, vote, btns) {
     const data = await postVote("/api/vote-observation", { project, name, observationHash: hash, vote });
     if (!data) return;
     (panelDatum.observations || []).forEach(o => { if (o.content_hash === hash) o.vote_score = data.vote_score; });
+    renderObservations(panelDatum);
+  } catch (e) { /* transient; leave display unchanged */ }
+  finally { btns.forEach(b => b.disabled = false); }
+}
+
+async function castObservationMerge(targetHash, btns) {
+  if (!panelDatum || !mergeSource) return;
+  const { project, name } = panelDatum;
+  const sourceHash = mergeSource;
+  btns.forEach(b => b.disabled = true);
+  try {
+    const data = await postVote("/api/merge-observation", { project, name, sourceHash, targetHash });
+    if (!data) return;
+    panelDatum.observations = (panelDatum.observations || []).filter(o => o.content_hash !== sourceHash);
+    mergeSource = null;
     renderObservations(panelDatum);
   } catch (e) { /* transient; leave display unchanged */ }
   finally { btns.forEach(b => b.disabled = false); }
@@ -431,6 +451,7 @@ function renderVotes(score) {
 
 function showPanel(d) {
   panelDatum = d;
+  mergeSource = null;
   document.getElementById("p-name").textContent = d.name;
   document.getElementById("p-type").textContent = d.entity_type;
   const sb = document.getElementById("p-status");
@@ -454,7 +475,7 @@ function renderObservations(d) {
     const score = o.vote_score || 0;
     const colour = score > 0 ? '#3fb950' : score < 0 ? '#f85149' : '#8b949e';
     const row = document.createElement("div");
-    row.className = "obs";
+    row.className = "obs" + (o.content_hash === mergeSource ? " armed" : "");
     const text = document.createElement("span");
     text.className = "obs-text";
     text.textContent = o.content;
@@ -475,8 +496,24 @@ function renderObservations(d) {
     down.textContent = "-1";
     up.onclick = () => castObservationVote(o.content_hash, 1, [up, down]);
     down.onclick = () => castObservationVote(o.content_hash, -1, [up, down]);
-    controls.append(scoreEl, up, down);
-    row.append(text, hash, controls);
+    const merge = document.createElement("button");
+    merge.className = "obs-btn obs-merge-btn";
+    if (o.content_hash === mergeSource) {
+      merge.classList.add("armed");
+      merge.textContent = "cancel";
+      merge.onclick = () => { mergeSource = null; renderObservations(panelDatum); };
+    } else if (mergeSource) {
+      merge.textContent = "merge into";
+      merge.onclick = () => castObservationMerge(o.content_hash, [up, down, merge]);
+    } else {
+      merge.textContent = "merge";
+      merge.onclick = () => { mergeSource = o.content_hash; renderObservations(panelDatum); };
+    }
+    controls.append(scoreEl, up, down, merge);
+    const meta = document.createElement("span");
+    meta.className = "obs-meta";
+    meta.append(hash, controls);
+    row.append(meta, text);
     container.append(row);
   });
 }

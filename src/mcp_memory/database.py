@@ -12,7 +12,15 @@ from typing import cast
 
 from .config import get_gc_enabled, get_purge_enabled, get_purge_grace_days
 from .migrations.runner import run_migrations
-from .models import VALID_STATUSES, VALID_VOTES, Entity, EntityStatus, Observation, Relation
+from .models import (
+    STRUCTURAL_ENTITY_TYPES,
+    VALID_STATUSES,
+    VALID_VOTES,
+    Entity,
+    EntityStatus,
+    Observation,
+    Relation,
+)
 from .path_resolver import match_project_for_path, normalize_path
 
 _RECENCY_HALF_LIFE_DAYS = 30.0
@@ -41,15 +49,9 @@ _RELATIVE_UNITS = {"d": 1, "w": 7, "m": 30}
 # enough to seed the ranking eval, short enough that the table does not grow without bound.
 _SURFACED_RETENTION_DAYS = 30
 
-# Vote score at or below which an orphan becomes eligible for autonomous GC. Matches the
-# dream's saturation floor (see agent.py: it stops downvoting at -10), so GC reaps exactly
-# where the dream gives up. The two must stay aligned.
+# Vote score at or below which an orphan becomes eligible for autonomous GC. agent.py imports
+# this so the dream's saturation-floor prose and the GC reap threshold share one value.
 _GC_DOWNVOTE_FLOOR = -10
-
-# Entity types the autonomous GC must never reap even when downvoted and orphaned: a project
-# root or user-preferences singleton is structurally load-bearing. Duplicated from
-# server.RELATION_EXEMPT_TYPES rather than imported, to avoid a database -> server cycle.
-_GC_EXEMPT_ENTITY_TYPES: tuple[str, ...] = ("project", "user-preferences")
 
 
 def _parse_date(value: str) -> str:
@@ -914,7 +916,7 @@ class DatabaseManager:
         relation-exempt type, and with no live incoming relation. Removal is a reversible
         soft-delete, so the grace-window purge stays the sole path to permanent removal.
         """
-        placeholders = ",".join("?" * len(_GC_EXEMPT_ENTITY_TYPES))
+        placeholders = ",".join("?" * len(STRUCTURAL_ENTITY_TYPES))
         with self._db:
             cursor = self._db.execute(
                 f"UPDATE entities SET deleted_at = CURRENT_TIMESTAMP "
@@ -926,7 +928,7 @@ class DatabaseManager:
                 f"SELECT 1 FROM relations r "
                 f"JOIN entities src ON r.source_id = src.id "
                 f"WHERE r.target_id = entities.id AND src.deleted_at IS NULL)",
-                (threshold, *_GC_EXEMPT_ENTITY_TYPES),
+                (threshold, *STRUCTURAL_ENTITY_TYPES),
             )
         return cursor.rowcount
 

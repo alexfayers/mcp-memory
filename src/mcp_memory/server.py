@@ -13,7 +13,13 @@ from . import usefulness
 from .activity import record_tool
 from .config import get_db_path
 from .database import DatabaseManager
-from .models import VALID_RELATION_TYPES, Entity, Relation, normalize_relation_type
+from .models import (
+    STRUCTURAL_ENTITY_TYPES,
+    VALID_RELATION_TYPES,
+    Entity,
+    Relation,
+    normalize_relation_type,
+)
 from .visualise import register_visualise_routes
 
 if TYPE_CHECKING:
@@ -48,7 +54,6 @@ mcp = FastMCP(
     port=int(os.environ.get("MCP_MEMORY_PORT", "8000")),
 )
 
-RELATION_EXEMPT_TYPES = frozenset({"user-preferences", "project"})
 VALID_ENTITY_TYPES = frozenset(
     {
         "project",
@@ -320,11 +325,11 @@ def _validate_and_extract_relations(
 
         _validate_entity_type_and_name(project, entity_type, name)
 
-        if entity_type not in RELATION_EXEMPT_TYPES:
+        if entity_type not in STRUCTURAL_ENTITY_TYPES:
             if not relations_raw or not isinstance(relations_raw, list):
                 raise ValueError(
                     f"Entity type '{entity_type}' requires at least one relation. "
-                    f"Only {sorted(RELATION_EXEMPT_TYPES)} are exempt."
+                    f"Only {sorted(STRUCTURAL_ENTITY_TYPES)} are exempt."
                 )
 
         if isinstance(relations_raw, list):

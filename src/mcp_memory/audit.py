@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .models import STRUCTURAL_ENTITY_TYPES
+
 if TYPE_CHECKING:
     from .database import DatabaseManager
 
@@ -24,9 +26,6 @@ STANDARD_PREFIXES = (
     "pattern/",
     "knowledge/",
 )
-
-# The only types allowed to carry zero relations (see server.RELATION_EXEMPT_TYPES).
-_RELATION_EXEMPT_TYPES = frozenset({"project", "user-preferences"})
 
 # Observation-count ceilings per entity type, from memory-review SKILL.md section 3's
 # "Size targets" table. An entity whose observation count exceeds its ceiling is oversized.
@@ -114,7 +113,7 @@ def audit_graph(db: DatabaseManager, project: str | None = None) -> dict[str, ob
         ref = {"name": row["name"], "entity_type": row["entity_type"], "project": row["project"]}
         entity_type = row["entity_type"]
 
-        if entity_type not in _RELATION_EXEMPT_TYPES and row["rel_count"] == 0:
+        if entity_type not in STRUCTURAL_ENTITY_TYPES and row["rel_count"] == 0:
             orphans.append(ref)
 
         if entity_type == "project" and row["name"] != f"project/{row['project']}":

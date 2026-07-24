@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 
 EntityStatus = Literal["planned", "in-progress", "blocked", "resolved", "archived"]
 
-VALID_STATUSES = ("planned", "in-progress", "blocked", "resolved", "archived")
+VALID_STATUSES = get_args(EntityStatus)
+
+# Entity types exempt from the relation requirement and from autonomous GC: a project root or
+# user-preferences singleton is structurally load-bearing.
+STRUCTURAL_ENTITY_TYPES = frozenset({"project", "user-preferences"})
 
 VALID_VOTES = (1, -1)
 
