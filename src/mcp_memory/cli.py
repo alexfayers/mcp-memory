@@ -288,6 +288,43 @@ def _cmd_audit(args: argparse.Namespace) -> None:
     print(json.dumps(report, indent=2))
 
 
+def _cmd_eval(args: argparse.Namespace) -> None:
+    """Report search-ranking quality over recorded retrieval telemetry (read-only)."""
+    from .database import DatabaseManager
+    from .eval import evaluate
+
+    db = DatabaseManager(get_db_path())
+    try:
+        report = evaluate(db, args.k, since=args.since)
+    finally:
+        db.close()
+    window = f", since {args.since}" if args.since else ""
+    print(f"Ranking quality over {report.query_count} labelled queries (k={report.k}{window}):")
+    print(f"  mean precision@{report.k}: {report.mean_precision_at_k:.3f}")
+    print(
+        f"    fraction of top-{report.k} results that were relevant; best case up to 1.0 "
+        f"({1 / report.k:.3g} if only 1 relevant item), worst case 0.0"
+    )
+    print(f"  MRR: {report.mrr:.3f}")
+    mrr_bounds = "best case 1.0, worst case 0.0"
+    print(
+        f"    1/rank of the first relevant result; {mrr_bounds}; "
+        f"{report.mrr:.3f} means it sits around rank {1 / report.mrr:.1f}"
+        if report.mrr
+        else f"    1/rank of the first relevant result; {mrr_bounds}"
+    )
+    print(f"  mean recall@{report.k}: {report.mean_recall_at_k:.3f}")
+    print(
+        f"    fraction of all relevant items that made it into the top {report.k}; "
+        "best case 1.0, worst case 0.0"
+    )
+    print(f"  mean nDCG@{report.k}: {report.mean_ndcg_at_k:.3f}")
+    print(
+        "    ranking quality vs. the ideal order, normalised to the true relevant-set size; "
+        "best case 1.0, worst case 0.0; not capped by small relevant sets like precision is"
+    )
+
+
 def _cmd_install_kiro(args: argparse.Namespace) -> None:
     """Patch Kiro agent config with memory MCP server and allowedTools."""
     port = args.port
@@ -415,6 +452,25 @@ def _build_parser() -> argparse.ArgumentParser:
     scope.add_argument("--project", help="Audit a single project scope")
     scope.add_argument("--all-projects", action="store_true", help="Audit every project scope")
 
+    evaluate_cmd = sub.add_parser(
+        "eval",
+        help="Report search-ranking quality over recorded retrieval telemetry (read-only)",
+    )
+    evaluate_cmd.add_argument(
+        "--k",
+        type=int,
+        default=10,
+        help="Rank cutoff for precision@k (default: 10)",
+    )
+    evaluate_cmd.add_argument(
+        "--since",
+        default=None,
+        help=(
+            "Only score retrievals surfaced on or after this point (relative '7d'/'2w'/'3m' "
+            "or ISO date); telemetry is pruned after ~30 days, so this cannot reach further back"
+        ),
+    )
+
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument("target", choices=["kiro", "claude-code"], help="Agent to install for.")
     install.add_argument(
@@ -442,6 +498,8 @@ def main() -> None:
         _cmd_migrate_db(args)
     elif args.command == "audit":
         _cmd_audit(args)
+    elif args.command == "eval":
+        _cmd_eval(args)
     elif args.command == "install":
         if args.target == "claude-code":
             _cmd_install_claude_code()

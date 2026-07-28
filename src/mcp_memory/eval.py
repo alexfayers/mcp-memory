@@ -9,10 +9,13 @@ rather than a guess, and gives phase D a regression gate it must not degrade.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
+
+from .database import _parse_date
 
 if TYPE_CHECKING:
     from .database import DatabaseManager
@@ -43,6 +46,37 @@ def reciprocal_rank(ranked: Sequence[str], relevant: set[str]) -> float:
     return 0.0
 
 
+def recall_at_k(ranked: Sequence[str], relevant: set[str], k: int) -> float:
+    """Fraction of the relevant items that appear in the top-k ranked items.
+
+    The denominator is the size of the relevant set, so a short result list is penalised
+    for missing relevant items. Returns 0.0 when there are no relevant items.
+    """
+    if not relevant:
+        return 0.0
+    hits = sum(1 for name in ranked[:k] if name in relevant)
+    return hits / len(relevant)
+
+
+def ndcg_at_k(ranked: Sequence[str], relevant: set[str], k: int) -> float:
+    """Normalised discounted cumulative gain over the top-k ranked items (binary relevance).
+
+    Each relevant item contributes ``1 / log2(rank + 1)`` at its 1-based rank; the sum is
+    normalised by the ideal DCG (every relevant item ranked first). Returns 0.0 when there
+    are no relevant items or no ideal gain.
+    """
+    if not relevant:
+        return 0.0
+    dcg = sum(
+        1.0 / math.log2(index + 1)
+        for index, name in enumerate(ranked[:k], start=1)
+        if name in relevant
+    )
+    ideal_hits = min(len(relevant), k)
+    idcg = sum(1.0 / math.log2(index + 1) for index in range(1, ideal_hits + 1))
+    return dcg / idcg if idcg else 0.0
+
+
 @dataclass(frozen=True)
 class LabelledQuery:
     """One recorded retrieval: the query, its ranked entity names, and the used (relevant) set."""
@@ -60,20 +94,30 @@ class EvalReport:
     query_count: int
     mean_precision_at_k: float
     mrr: float
+    mean_recall_at_k: float
+    mean_ndcg_at_k: float
     k: int
 
 
-def iter_labelled_queries(db: DatabaseManager) -> Iterator[LabelledQuery]:
+def iter_labelled_queries(db: DatabaseManager, since: str | None = None) -> Iterator[LabelledQuery]:
     """Reconstruct each recorded retrieval from ``surfaced_entities`` as a labelled query.
 
     Hits are grouped by ``retrieval_id`` and ordered by their stored rank; the relevance
     label is the set of surfaced entities that were subsequently used (``used_at`` set). A
-    cross-project search re-runs against all projects, so its query scope is ``None``.
+    cross-project search re-runs against all projects, so its query scope is ``None``. When
+    ``since`` is given (a relative '7d'/'2w'/'3m' or ISO date string), only retrievals
+    surfaced on or after that instant are included.
     """
-    rows = db._db.execute(
+    sql = (
         "SELECT retrieval_id, project, query, tool, entity_name, rank, used_at "
-        "FROM surfaced_entities ORDER BY retrieval_id, rank"
-    ).fetchall()
+        "FROM surfaced_entities "
+    )
+    params: list[str] = []
+    if since is not None:
+        sql += "WHERE surfaced_at >= ? "
+        params.append(_parse_date(since))
+    sql += "ORDER BY retrieval_id, rank"
+    rows = db._db.execute(sql, params).fetchall()
 
     grouped: dict[str, list[sqlite3.Row]] = {}
     for row in rows:
@@ -90,17 +134,20 @@ def iter_labelled_queries(db: DatabaseManager) -> Iterator[LabelledQuery]:
         )
 
 
-def evaluate(db: DatabaseManager, k: int = 10) -> EvalReport:
+def evaluate(db: DatabaseManager, k: int = 10, since: str | None = None) -> EvalReport:
     """Score current ranking quality by replaying each labelled query against the live graph.
 
     For every recorded retrieval that has at least one used (relevant) entity, the query is
-    re-run on the current graph and scored with precision@k and reciprocal rank against that
-    used set. Returns the mean precision@k and MRR over those queries; a graph with no usable
-    labels yields an all-zero report.
+    re-run on the current graph and scored with precision@k, reciprocal rank, recall@k, and
+    nDCG@k against that used set. Returns the mean of each metric over those queries; a graph
+    with no usable labels yields an all-zero report. When ``since`` is given, only retrievals
+    surfaced on or after that instant are scored.
     """
     precisions: list[float] = []
     reciprocal_ranks: list[float] = []
-    for labelled in iter_labelled_queries(db):
+    recalls: list[float] = []
+    ndcgs: list[float] = []
+    for labelled in iter_labelled_queries(db, since):
         if not labelled.relevant:
             continue
         result = db.search_nodes(
@@ -109,13 +156,24 @@ def evaluate(db: DatabaseManager, k: int = 10) -> EvalReport:
         ranked_now = [entity.name for entity in cast("list[Entity]", result["entities"])]
         precisions.append(precision_at_k(ranked_now, labelled.relevant, k))
         reciprocal_ranks.append(reciprocal_rank(ranked_now, labelled.relevant))
+        recalls.append(recall_at_k(ranked_now, labelled.relevant, k))
+        ndcgs.append(ndcg_at_k(ranked_now, labelled.relevant, k))
 
     count = len(precisions)
     if count == 0:
-        return EvalReport(query_count=0, mean_precision_at_k=0.0, mrr=0.0, k=k)
+        return EvalReport(
+            query_count=0,
+            mean_precision_at_k=0.0,
+            mrr=0.0,
+            mean_recall_at_k=0.0,
+            mean_ndcg_at_k=0.0,
+            k=k,
+        )
     return EvalReport(
         query_count=count,
         mean_precision_at_k=sum(precisions) / count,
         mrr=sum(reciprocal_ranks) / count,
+        mean_recall_at_k=sum(recalls) / count,
+        mean_ndcg_at_k=sum(ndcgs) / count,
         k=k,
     )

@@ -7,10 +7,12 @@ than guesswork. Coupled to no live state: every entity, age, and vote is set exp
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import pytest
 
+from mcp_memory import cli
 from mcp_memory import eval as ranking_eval
 from mcp_memory.database import DatabaseManager
 
@@ -85,6 +87,46 @@ class TestMetricFunctions:
         assert ranking_eval.reciprocal_rank(["a", "b"], {"z"}) == 0.0
 
 
+class TestRecallAtK:
+    def test_all_relevant_retrieved_in_top_k(self) -> None:
+        assert ranking_eval.recall_at_k(["a", "b", "c"], {"a", "c"}, 3) == 1.0
+
+    def test_partial_relevant_retrieved(self) -> None:
+        assert ranking_eval.recall_at_k(["a", "x", "y"], {"a", "b"}, 3) == 0.5
+
+    def test_relevant_below_cutoff_not_counted(self) -> None:
+        assert ranking_eval.recall_at_k(["x", "y", "a"], {"a"}, 2) == 0.0
+
+    def test_empty_relevant_is_zero(self) -> None:
+        assert ranking_eval.recall_at_k(["a", "b"], set(), 5) == 0.0
+
+    def test_no_relevant_retrieved_is_zero(self) -> None:
+        assert ranking_eval.recall_at_k(["x", "y"], {"a", "b"}, 5) == 0.0
+
+    def test_k_larger_than_list_uses_full_list(self) -> None:
+        assert ranking_eval.recall_at_k(["a", "b"], {"a", "b"}, 10) == 1.0
+
+
+class TestNdcgAtK:
+    def test_perfect_ranking_scores_one(self) -> None:
+        assert ranking_eval.ndcg_at_k(["a", "b", "c"], {"a", "b"}, 3) == pytest.approx(1.0)
+
+    def test_empty_relevant_is_zero(self) -> None:
+        assert ranking_eval.ndcg_at_k(["a", "b"], set(), 5) == 0.0
+
+    def test_no_relevant_retrieved_is_zero(self) -> None:
+        assert ranking_eval.ndcg_at_k(["x", "y"], {"a"}, 5) == 0.0
+
+    def test_relevant_lower_rank_scores_less_than_perfect(self) -> None:
+        # single relevant item at rank 2 -> dcg = 1/log2(3), idcg = 1/log2(2) = 1.0
+        expected = (1.0 / math.log2(3)) / 1.0
+        assert ranking_eval.ndcg_at_k(["x", "a"], {"a"}, 5) == pytest.approx(expected)
+
+    def test_relevant_beyond_k_excluded(self) -> None:
+        # relevant item only at rank 3 but k=2 -> dcg=0
+        assert ranking_eval.ndcg_at_k(["x", "y", "a"], {"a"}, 2) == 0.0
+
+
 class TestIterLabelledQueries:
     def test_groups_hits_by_retrieval_id_ordered_by_rank(self, db: DatabaseManager) -> None:
         db.record_surfaced(
@@ -122,6 +164,19 @@ class TestIterLabelledQueries:
 
         assert {q.query for q in queries} == {"q1", "q2"}
 
+    def test_since_filters_out_older_retrievals(self, db: DatabaseManager) -> None:
+        db.record_surfaced("search_nodes", "old", "rid-old", [("proj", "task/a", 1)])
+        db.record_surfaced("search_nodes", "recent", "rid-recent", [("proj", "task/b", 1)])
+        db._db.execute(
+            "UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days') "
+            "WHERE retrieval_id = 'rid-old'"
+        )
+        db._db.commit()
+
+        queries = list(ranking_eval.iter_labelled_queries(db, since="7d"))
+
+        assert {q.query for q in queries} == {"recent"}
+
 
 class TestEvaluate:
     def test_perfect_ranking_scores_one(self, db: DatabaseManager) -> None:
@@ -137,6 +192,8 @@ class TestEvaluate:
         assert report.query_count == 1
         assert report.mean_precision_at_k == 1.0
         assert report.mrr == 1.0
+        assert report.mean_recall_at_k == 1.0
+        assert report.mean_ndcg_at_k == pytest.approx(1.0)
 
     def test_used_entity_ranked_below_noise_lowers_scores(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -166,6 +223,9 @@ class TestEvaluate:
         # Only 'task/used' is relevant, but it is now ranked #2, so precision@1 and RR drop.
         assert report.mean_precision_at_k == 0.0
         assert report.mrr == pytest.approx(0.5)
+        # At k=1 the relevant item sits below the cutoff, so recall@1 and nDCG@1 are also 0.
+        assert report.mean_recall_at_k == 0.0
+        assert report.mean_ndcg_at_k == 0.0
 
     def test_queries_with_no_relevant_labels_are_skipped(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -178,6 +238,24 @@ class TestEvaluate:
         assert report.query_count == 0
         assert report.mean_precision_at_k == 0.0
         assert report.mrr == 0.0
+        assert report.mean_recall_at_k == 0.0
+        assert report.mean_ndcg_at_k == 0.0
+
+    def test_since_scopes_the_query_window(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
+        )
+        db.record_surfaced("search_nodes", "needle", "rid-old", [("proj", "task/a", 1)])
+        db.record_surfaced("search_nodes", "needle", "rid-recent", [("proj", "task/a", 1)])
+        db._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
+        db._db.execute(
+            "UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days') "
+            "WHERE retrieval_id = 'rid-old'"
+        )
+        db._db.commit()
+
+        assert ranking_eval.evaluate(db, k=5).query_count == 2
+        assert ranking_eval.evaluate(db, k=5, since="7d").query_count == 1
 
 
 class TestVoteInfluence:
@@ -208,3 +286,62 @@ class TestVoteInfluence:
         entities = db.search_nodes("proj", "cache")["entities"]
         assert _rank_of("task/bad", entities) != -1
         assert _rank_of("task/bad", entities) > _rank_of("task/good", entities)
+
+
+class TestEvalCommand:
+    def test_eval_command_reports_ranking_quality(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        db_path = tmp_path / "cli-eval.db"
+        seed = DatabaseManager(db_path)
+        seed.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
+        )
+        seed.record_surfaced("search_nodes", "needle", "rid-1", [("proj", "task/a", 1)])
+        seed._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
+        seed._db.commit()
+        seed.close()
+
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
+        monkeypatch.setattr("sys.argv", ["mcp-memory", "eval", "--k", "5"])
+        cli.main()
+
+        out = capsys.readouterr().out
+        assert "1 labelled queries (k=5)" in out
+        assert "mean precision@5: 1.000" in out
+        assert "MRR: 1.000" in out
+        assert "mean recall@5: 1.000" in out
+        assert "mean nDCG@5: 1.000" in out
+        assert "fraction of all relevant items" in out
+        assert "normalised to the true relevant-set size" in out
+
+    def test_eval_command_since_scopes_window_and_header(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        db_path = tmp_path / "cli-eval-since.db"
+        seed = DatabaseManager(db_path)
+        seed.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
+        )
+        seed.record_surfaced("search_nodes", "needle", "rid-old", [("proj", "task/a", 1)])
+        seed.record_surfaced("search_nodes", "needle", "rid-recent", [("proj", "task/a", 1)])
+        seed._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
+        seed._db.execute(
+            "UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days') "
+            "WHERE retrieval_id = 'rid-old'"
+        )
+        seed._db.commit()
+        seed.close()
+
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
+        monkeypatch.setattr("sys.argv", ["mcp-memory", "eval", "--k", "5", "--since", "7d"])
+        cli.main()
+
+        out = capsys.readouterr().out
+        assert "1 labelled queries (k=5, since 7d)" in out
