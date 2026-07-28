@@ -166,6 +166,14 @@ class TestPurgeConfig:
         assert config.get_purge_grace_days() == 7
 
 
+class TestSurfacedRetentionConfig:
+    def test_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", raising=False)
+        assert config.get_surfaced_retention_days() == 180
+        monkeypatch.setenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", "7")
+        assert config.get_surfaced_retention_days() == 7
+
+
 class TestGcConfig:
     def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_MEMORY_GC_ENABLED", raising=False)

@@ -20,6 +20,7 @@ from .config import (
     get_agent_port,
     get_db_path,
     get_default_db_path,
+    get_surfaced_retention_days,
 )
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
 
@@ -46,10 +47,13 @@ class _ServiceSpec:
 def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
     """Service spec for the mcp-memory data server."""
     env = {"MCP_MEMORY_DB_PATH": str(db_path), "MCP_MEMORY_PORT": port}
-    # Carry any soft-delete purge and GC settings through so `MCP_MEMORY_PURGE_* /
-    # MCP_MEMORY_GC_* mcp-memory setup-service` sticks in the installed service.
+    # Carry any soft-delete purge, GC, and surfaced-retention settings through so
+    # `MCP_MEMORY_PURGE_*/MCP_MEMORY_GC_*/MCP_MEMORY_SURFACED_RETENTION_DAYS
+    # mcp-memory setup-service` sticks in the installed service.
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_PURGE_")})
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_GC_")})
+    if "MCP_MEMORY_SURFACED_RETENTION_DAYS" in os.environ:
+        env["MCP_MEMORY_SURFACED_RETENTION_DAYS"] = os.environ["MCP_MEMORY_SURFACED_RETENTION_DAYS"]
     # Carry the agent locator through so the visualiser's dream-trigger proxy can reach
     # a non-default memory-agent port (the server does not otherwise know it).
     env.update({k: v for k, v in os.environ.items() if k in ("MCP_AGENT_URL", "MCP_AGENT_PORT")})
@@ -467,7 +471,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Only score retrievals surfaced on or after this point (relative '7d'/'2w'/'3m' "
-            "or ISO date); telemetry is pruned after ~30 days, so this cannot reach further back"
+            f"or ISO date); telemetry is pruned after ~{get_surfaced_retention_days()} days, "
+            "so this cannot reach further back"
         ),
     )
 

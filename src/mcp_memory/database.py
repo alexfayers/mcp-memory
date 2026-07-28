@@ -10,7 +10,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from .config import get_gc_enabled, get_purge_enabled, get_purge_grace_days
+from .config import (
+    get_gc_enabled,
+    get_purge_enabled,
+    get_purge_grace_days,
+    get_surfaced_retention_days,
+)
 from .migrations.runner import run_migrations
 from .models import (
     STRUCTURAL_ENTITY_TYPES,
@@ -44,10 +49,6 @@ _VOTE_SCALE = 5.0
 
 _RELATIVE_DATE_RE = re.compile(r"^(\d+)([dwm])$")
 _RELATIVE_UNITS = {"d": 1, "w": 7, "m": 30}
-
-# Retrieval telemetry (surfaced_entities) older than this is pruned on startup. Kept long
-# enough to seed the ranking eval, short enough that the table does not grow without bound.
-_SURFACED_RETENTION_DAYS = 30
 
 # Vote score at or below which an orphan becomes eligible for autonomous GC. agent.py imports
 # this so the dream's saturation-floor prose and the GC reap threshold share one value.
@@ -90,11 +91,18 @@ class DatabaseManager:
 
         run_migrations(self._db)
         self._backfill_observation_hashes()
-        self.prune_surfaced_entities(_SURFACED_RETENTION_DAYS)
-        if get_gc_enabled():
-            self.gc_downvoted_orphans()
-        if get_purge_enabled():
-            self.purge_soft_deleted(get_purge_grace_days())
+        # Best-effort startup maintenance: a short-lived process (e.g. the CLI) opening its
+        # own connection can race a long-running service's write and hit "database is
+        # locked" past busy_timeout. None of this is required for the caller's own request
+        # to succeed, so skip silently on contention rather than crashing the whole command.
+        try:
+            self.prune_surfaced_entities(get_surfaced_retention_days())
+            if get_gc_enabled():
+                self.gc_downvoted_orphans()
+            if get_purge_enabled():
+                self.purge_soft_deleted(get_purge_grace_days())
+        except sqlite3.OperationalError:
+            pass
 
     def _backfill_observation_hashes(self) -> None:
         """Populate content_hash for any observation missing one. No-op after the first run."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -465,6 +466,36 @@ class TestPruneSurfaced:
         reopened = DatabaseManager(db_path)
         count = reopened._db.execute("SELECT COUNT(*) AS n FROM surfaced_entities").fetchone()["n"]
         assert count == 0
+        reopened.close()
+
+    def test_startup_retention_respects_env_override(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", "5")
+        db_path = tmp_path / "memory.db"
+        first = DatabaseManager(db_path)
+        first.record_surfaced("search_nodes", "q", "old", [("proj", "task/a", 1)])
+        first._db.execute("UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days')")
+        first._db.commit()
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        count = reopened._db.execute("SELECT COUNT(*) AS n FROM surfaced_entities").fetchone()["n"]
+        assert count == 0
+        reopened.close()
+
+    def test_startup_survives_locked_database_during_maintenance(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db_path = tmp_path / "memory.db"
+        DatabaseManager(db_path).close()
+
+        def _raise_locked(self: DatabaseManager, retention_days: int) -> int:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(DatabaseManager, "prune_surfaced_entities", _raise_locked)
+
+        reopened = DatabaseManager(db_path)
         reopened.close()
 
 

@@ -22,6 +22,7 @@ _DEFAULT_DREAM_HEAVY_POLL_SECONDS = "900"
 _DEFAULT_DREAM_HEAVY_TIMEOUT = "600"
 _DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
 _DEFAULT_PURGE_GRACE_DAYS = "30"
+_DEFAULT_SURFACED_RETENTION_DAYS = "180"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / "com.mcp-memory.plist"
@@ -219,6 +220,13 @@ def get_purge_enabled() -> bool:
 def get_purge_grace_days() -> int:
     """Return how long a soft-deleted entity is retained before it may be purged."""
     return int(os.environ.get("MCP_MEMORY_PURGE_GRACE_DAYS", _DEFAULT_PURGE_GRACE_DAYS))
+
+
+def get_surfaced_retention_days() -> int:
+    """Return how long surfaced_entities retrieval telemetry is retained before pruning."""
+    return int(
+        os.environ.get("MCP_MEMORY_SURFACED_RETENTION_DAYS", _DEFAULT_SURFACED_RETENTION_DAYS)
+    )
 
 
 def get_gc_enabled() -> bool:
