@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ from mcp_memory.hooks.plugin import (
     _find_project_from_path,
     _is_file_edit,
     _is_memory_read,
+    _is_memory_server_reachable,
     _parse_mcp_arguments,
     _resolve_anchor,
     _safe_project,
@@ -349,7 +351,10 @@ class TestMemoryPluginMessages:
         (repo / ".git").mkdir(parents=True)
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
 
-        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",
@@ -379,6 +384,52 @@ class TestMemoryPluginMessages:
         assert result is not None
         assert len(result.notes) == 1
         assert "`cool-project`" in result.notes[0]
+
+
+class TestMemoryPluginServerDownGating:
+    def test_blocks_when_server_reachable_and_over_threshold(self, plugin: MemoryPlugin) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+            )
+        assert result is not None
+        assert result.block is not None
+
+    def test_does_not_block_when_server_unreachable(self, plugin: MemoryPlugin) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=False),
+        ):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+            )
+        assert result is not None
+        assert result.block is None
+        assert len(result.notes) == 1
+        assert "unavailable" in result.notes[0].lower()
+
+    def test_no_reachability_check_when_below_threshold(self, plugin: MemoryPlugin) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=False),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable") as mock_reachable,
+        ):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={},
+            )
+        assert result is None
+        mock_reachable.assert_not_called()
 
 
 class TestRegisteredPathResolution:
@@ -421,6 +472,33 @@ class TestRegisteredPathResolution:
         with patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value="myrepo"):
             note = _workspace_entity_note([str(repo)])
         assert note == "The project memory entity for this workspace is `project/myrepo`."
+
+
+class TestIsMemoryServerReachable:
+    def test_true_when_listening(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        monkeypatch.setattr(
+            "mcp_memory.hooks.plugin.get_memory_url",
+            lambda: f"http://127.0.0.1:{port}/mcp",
+        )
+        try:
+            assert _is_memory_server_reachable() is True
+        finally:
+            listener.close()
+
+    def test_false_when_nothing_listening(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        listener.close()
+        monkeypatch.setattr(
+            "mcp_memory.hooks.plugin.get_memory_url",
+            lambda: f"http://127.0.0.1:{port}/mcp",
+        )
+        assert _is_memory_server_reachable() is False
 
 
 class TestParseMcpArguments:
@@ -786,7 +864,10 @@ class TestMemoryReadsNotGated:
         assert result is None
 
     def test_non_memory_tool_still_blocked(self, plugin: MemoryPlugin) -> None:
-        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",
@@ -821,7 +902,10 @@ class TestReadOnlyAgentExemption:
         assert result is None
 
     def test_main_thread_still_blocked(self, plugin: MemoryPlugin) -> None:
-        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",
@@ -1051,7 +1135,10 @@ class TestFileEditsReducedWeight:
         assert plugin._project_scope == "repo-b"
 
     def test_pre_tool_use_edit_still_blockable(self, plugin: MemoryPlugin) -> None:
-        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",

@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import os
 import random
+import socket
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
 
 from cline_hooks.core.plugin import HookResult, HooksPlugin
 
-from mcp_memory.config import get_db_path, get_workspace_markers
+from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
 from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.review_tracker import (
     record_write,
@@ -72,6 +74,10 @@ _MEMORY_COOLDOWN_STEPS = 5
 _MEMORY_BLOCK_TEMPLATE = (
     "MEMORY UPDATE REQUIRED: You have made many tool calls without updating memory. "
     "Update the `{project}` project and `global` scopes in the memory server before continuing."
+)
+_MEMORY_SERVER_DOWN_NOTE = (
+    "Memory server appears to be unreachable ({url}) - skipping the memory-update "
+    "block so you aren't stuck. Let the user know memory is currently unavailable."
 )
 _MEMORY_COMPLETION_REMINDER = (
     "REQUIRED before completing:\n"
@@ -339,11 +345,27 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     return parts
 
 
+_LIVENESS_TIMEOUT_SECONDS = 1.0
+
+
+def _is_memory_server_reachable() -> bool:
+    """Return True if a process is accepting connections on the memory server's host:port."""
+    parsed = urlparse(get_memory_url())
+    host, port = parsed.hostname or "localhost", parsed.port or 80
+    try:
+        with socket.create_connection((host, port), timeout=_LIVENESS_TIMEOUT_SECONDS):
+            return True
+    except OSError:
+        return False
+
+
 def _check_block(task_id: str, project_scope: str) -> HookResult | None:
     """Return a block result if the task has exceeded the memory update threshold."""
-    if should_block(task_id):
-        return HookResult(block=_MEMORY_BLOCK_TEMPLATE.format(project=project_scope))
-    return None
+    if not should_block(task_id):
+        return None
+    if not _is_memory_server_reachable():
+        return HookResult(notes=[_MEMORY_SERVER_DOWN_NOTE.format(url=get_memory_url())])
+    return HookResult(block=_MEMORY_BLOCK_TEMPLATE.format(project=project_scope))
 
 
 def _str_list(value: object) -> list[str]:
