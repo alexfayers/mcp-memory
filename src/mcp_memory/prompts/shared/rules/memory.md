@@ -47,6 +47,10 @@ Ensure you _always_ update memory as you progress through a task, and just befor
 
 **CRITICAL - mechanical trip-wire, do not rely on judgement here:** the instant a task needs a project's filesystem location, the first tool call MUST be `get_paths_for_project(project="<repo-name>")` (or `list_project_paths()` to browse all registered mappings, or `get_project_for_path(path=...)` to go the other direction) - BEFORE any `find`, `grep`, `ls`, or other disk search. This includes cases where you already ran a memory search for unrelated content in the same turn and it happened to surface a path in passing (e.g. inside a task observation) - that is not a substitute for the deliberate lookup call. Memory already tracks where projects live on disk; searching the filesystem for a project you could look up is redundant and slower. Only fall back to a disk search if `get_paths_for_project` returns empty.
 
+### Answering "what/where is X" before touching the shell
+
+This generalizes the project-location trip-wire above to any lookup, not just filesystem paths. **CRITICAL - mechanical trip-wire, do not rely on judgement here:** when the user asks "what script/tool/config does X", "where does Y happen", or otherwise asks you to locate or recall something you may have investigated before, the first tool call MUST be a memory search (`search_nodes`/`search_all_projects`, or `recall` if the question looks like it needs traversal) - BEFORE any `grep`, `find`, `ls`, `launchctl`, or other shell/tool discovery command. Only fall back to a live search once the memory search comes back empty or stale. Treat any Bash/Grep/Glob call made to answer a "what/where" question as a hard stop if it ran before a memory search did - go back and search memory first, even if the shell command would be quick. A shell command that "would be quick anyway" is not an exception; it is the exact shortcut this rule exists to close.
+
 ### If the `memory` server is unavailable
 
 If `memory` is not accessible and you need it for the current task:
