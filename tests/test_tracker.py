@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,6 +26,12 @@ class TestIncrement:
     def test_fractional_amount_accumulates(self) -> None:
         assert tracker.increment("t1", 0.25) == 0.25
         assert tracker.increment("t1", 0.25) == 0.5
+
+    def test_concurrent_increments_do_not_lose_updates(self) -> None:
+        call_count = 50
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(lambda _: tracker.increment("t1"), range(call_count)))
+        assert tracker.should_block("t1", threshold=call_count) is True
 
 
 class TestShouldBlock:
