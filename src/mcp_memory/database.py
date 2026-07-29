@@ -1065,7 +1065,8 @@ class DatabaseManager:
         sql = (
             "SELECT e.id, e.project_id, p.name AS project_name, "
             "e.name, et.name AS entity_type, e.status, "
-            "e.created_at, e.updated_at, e.vote_score, bm25(entities_fts) AS rank "
+            "e.created_at, e.updated_at, e.vote_score, "
+            "bm25(entities_fts, 10.0, 1.0, 1.0, 1.0) AS rank "
             "FROM entities_fts fts "
             "JOIN entities e ON fts.rowid = e.id "
             "JOIN entity_types et ON e.entity_type_id = et.id "

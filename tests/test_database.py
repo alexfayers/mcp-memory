@@ -1550,6 +1550,25 @@ class TestSearchNodes:
         assert len(result["entities"]) == 1
         assert result["entities"][0].name == "a"
 
+    def test_name_match_outranks_oversized_observation_match(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "widget-manager",
+                    "entityType": "task",
+                    "observations": ["manages the inventory system"],
+                },
+                {
+                    "name": "unrelated-large",
+                    "entityType": "task",
+                    "observations": [f"widget note {i}" for i in range(35)],
+                },
+            ],
+        )
+        result = db.search_nodes("proj", "widget")
+        assert [e.name for e in result["entities"]] == ["widget-manager", "unrelated-large"]
+
     def test_fts_hyphenated_query(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj",
