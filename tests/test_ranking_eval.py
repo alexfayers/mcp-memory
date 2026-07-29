@@ -107,6 +107,17 @@ class TestRecallAtK:
         assert ranking_eval.recall_at_k(["a", "b"], {"a", "b"}, 10) == 1.0
 
 
+class TestSuccessAtK:
+    def test_hit_in_top_k_scores_one(self) -> None:
+        assert ranking_eval.success_at_k(["a", "b", "c"], {"c"}, 3) == 1.0
+
+    def test_no_hit_scores_zero(self) -> None:
+        assert ranking_eval.success_at_k(["a", "b"], {"z"}, 2) == 0.0
+
+    def test_empty_ranked_scores_zero(self) -> None:
+        assert ranking_eval.success_at_k([], {"a"}, 5) == 0.0
+
+
 class TestNdcgAtK:
     def test_perfect_ranking_scores_one(self) -> None:
         assert ranking_eval.ndcg_at_k(["a", "b", "c"], {"a", "b"}, 3) == pytest.approx(1.0)
@@ -164,6 +175,16 @@ class TestIterLabelledQueries:
 
         assert {q.query for q in queries} == {"q1", "q2"}
 
+    def test_min_content_tokens_filters_out_short_queries(self, db: DatabaseManager) -> None:
+        db.record_surfaced("search_nodes", "task", "rid-short", [("proj", "task/a", 1)])
+        db.record_surfaced(
+            "search_nodes", "deploy notification", "rid-long", [("proj", "task/b", 1)]
+        )
+
+        queries = list(ranking_eval.iter_labelled_queries(db, min_content_tokens=2))
+
+        assert {q.query for q in queries} == {"deploy notification"}
+
     def test_since_filters_out_older_retrievals(self, db: DatabaseManager) -> None:
         db.record_surfaced("search_nodes", "old", "rid-old", [("proj", "task/a", 1)])
         db.record_surfaced("search_nodes", "recent", "rid-recent", [("proj", "task/b", 1)])
@@ -194,6 +215,7 @@ class TestEvaluate:
         assert report.mrr == 1.0
         assert report.mean_recall_at_k == 1.0
         assert report.mean_ndcg_at_k == pytest.approx(1.0)
+        assert report.mean_success_at_k == 1.0
 
     def test_used_entity_ranked_below_noise_lowers_scores(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -257,6 +279,24 @@ class TestEvaluate:
         assert ranking_eval.evaluate(db, k=5).query_count == 2
         assert ranking_eval.evaluate(db, k=5, since="7d").query_count == 1
 
+    def test_min_content_tokens_scopes_the_query_window(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "task/a", "entityType": "task", "observations": ["needle"]},
+                {"name": "task/b", "entityType": "task", "observations": ["needle"]},
+            ],
+        )
+        db.record_surfaced("search_nodes", "task", "rid-short", [("proj", "task/a", 1)])
+        db.record_surfaced(
+            "search_nodes", "deploy notification", "rid-long", [("proj", "task/b", 1)]
+        )
+        db._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
+        db._db.commit()
+
+        assert ranking_eval.evaluate(db, k=5).query_count == 2
+        assert ranking_eval.evaluate(db, k=5, min_content_tokens=2).query_count == 1
+
 
 class TestVoteInfluence:
     def test_upvoted_outranks_equal_unvoted(self, db: DatabaseManager) -> None:
@@ -317,6 +357,8 @@ class TestEvalCommand:
         assert "mean nDCG@5: 1.000" in out
         assert "fraction of all relevant items" in out
         assert "normalised to the true relevant-set size" in out
+        assert "mean success@5: 1.000" in out
+        assert "not subject to the precision@k ceiling" in out
 
     def test_eval_command_since_scopes_window_and_header(
         self,
@@ -345,3 +387,35 @@ class TestEvalCommand:
 
         out = capsys.readouterr().out
         assert "1 labelled queries (k=5, since 7d)" in out
+
+    def test_eval_command_min_content_tokens_scopes_window_and_header(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        db_path = tmp_path / "cli-eval-min-tokens.db"
+        seed = DatabaseManager(db_path)
+        seed.create_entities(
+            "proj",
+            [
+                {"name": "task/a", "entityType": "task", "observations": ["needle"]},
+                {"name": "task/b", "entityType": "task", "observations": ["needle"]},
+            ],
+        )
+        seed.record_surfaced("search_nodes", "task", "rid-short", [("proj", "task/a", 1)])
+        seed.record_surfaced(
+            "search_nodes", "deploy notification", "rid-long", [("proj", "task/b", 1)]
+        )
+        seed._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
+        seed._db.commit()
+        seed.close()
+
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
+        monkeypatch.setattr(
+            "sys.argv", ["mcp-memory", "eval", "--k", "5", "--min-content-tokens", "2"]
+        )
+        cli.main()
+
+        out = capsys.readouterr().out
+        assert "1 labelled queries (k=5, min_content_tokens=2)" in out

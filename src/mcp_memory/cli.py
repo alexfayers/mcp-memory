@@ -299,10 +299,12 @@ def _cmd_eval(args: argparse.Namespace) -> None:
 
     db = DatabaseManager(get_db_path())
     try:
-        report = evaluate(db, args.k, since=args.since)
+        report = evaluate(db, args.k, since=args.since, min_content_tokens=args.min_content_tokens)
     finally:
         db.close()
     window = f", since {args.since}" if args.since else ""
+    if args.min_content_tokens:
+        window += f", min_content_tokens={args.min_content_tokens}"
     print(f"Ranking quality over {report.query_count} labelled queries (k={report.k}{window}):")
     print(f"  mean precision@{report.k}: {report.mean_precision_at_k:.3f}")
     print(
@@ -326,6 +328,12 @@ def _cmd_eval(args: argparse.Namespace) -> None:
     print(
         "    ranking quality vs. the ideal order, normalised to the true relevant-set size; "
         "best case 1.0, worst case 0.0; not capped by small relevant sets like precision is"
+    )
+    print(f"  mean success@{report.k}: {report.mean_success_at_k:.3f}")
+    print(
+        f"    whether any relevant item made it into the top {report.k}; best case 1.0, "
+        "worst case 0.0; not subject to the precision@k ceiling that a single-relevant-item "
+        "query imposes on precision@k"
     )
 
 
@@ -473,6 +481,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "Only score retrievals surfaced on or after this point (relative '7d'/'2w'/'3m' "
             f"or ISO date); telemetry is pruned after ~{get_surfaced_retention_days()} days, "
             "so this cannot reach further back"
+        ),
+    )
+    evaluate_cmd.add_argument(
+        "--min-content-tokens",
+        type=int,
+        default=0,
+        help=(
+            "Exclude queries with fewer whitespace-separated tokens than this (e.g. the "
+            "single word 'task') from the labelled set (default: 0, no filtering)"
         ),
     )
 

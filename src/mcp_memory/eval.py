@@ -46,6 +46,15 @@ def reciprocal_rank(ranked: Sequence[str], relevant: set[str]) -> float:
     return 0.0
 
 
+def success_at_k(ranked: Sequence[str], relevant: set[str], k: int) -> float:
+    """Whether any relevant item appears in the top-k ranked items (binary hit-rate).
+
+    Unlike precision@k, this is not capped by a small relevant set: a query with only one
+    relevant item can still score 1.0. Returns 0.0 when there is no hit in the top-k.
+    """
+    return 1.0 if precision_at_k(ranked, relevant, k) > 0 else 0.0
+
+
 def recall_at_k(ranked: Sequence[str], relevant: set[str], k: int) -> float:
     """Fraction of the relevant items that appear in the top-k ranked items.
 
@@ -96,17 +105,22 @@ class EvalReport:
     mrr: float
     mean_recall_at_k: float
     mean_ndcg_at_k: float
+    mean_success_at_k: float
     k: int
 
 
-def iter_labelled_queries(db: DatabaseManager, since: str | None = None) -> Iterator[LabelledQuery]:
+def iter_labelled_queries(
+    db: DatabaseManager, since: str | None = None, min_content_tokens: int = 0
+) -> Iterator[LabelledQuery]:
     """Reconstruct each recorded retrieval from ``surfaced_entities`` as a labelled query.
 
     Hits are grouped by ``retrieval_id`` and ordered by their stored rank; the relevance
     label is the set of surfaced entities that were subsequently used (``used_at`` set). A
     cross-project search re-runs against all projects, so its query scope is ``None``. When
     ``since`` is given (a relative '7d'/'2w'/'3m' or ISO date string), only retrievals
-    surfaced on or after that instant are included.
+    surfaced on or after that instant are included. When ``min_content_tokens`` is given,
+    queries with fewer whitespace-separated tokens than that (e.g. the single word "task")
+    are excluded, since a degenerate query is unrankable regardless of ranking quality.
     """
     sql = (
         "SELECT retrieval_id, project, query, tool, entity_name, rank, used_at "
@@ -125,6 +139,8 @@ def iter_labelled_queries(db: DatabaseManager, since: str | None = None) -> Iter
 
     for hits in grouped.values():
         first = hits[0]
+        if len(first["query"].split()) < min_content_tokens:
+            continue
         project = None if first["tool"] == _ALL_PROJECTS_TOOL else first["project"]
         yield LabelledQuery(
             project=project,
@@ -134,20 +150,24 @@ def iter_labelled_queries(db: DatabaseManager, since: str | None = None) -> Iter
         )
 
 
-def evaluate(db: DatabaseManager, k: int = 10, since: str | None = None) -> EvalReport:
+def evaluate(
+    db: DatabaseManager, k: int = 10, since: str | None = None, min_content_tokens: int = 0
+) -> EvalReport:
     """Score current ranking quality by replaying each labelled query against the live graph.
 
     For every recorded retrieval that has at least one used (relevant) entity, the query is
     re-run on the current graph and scored with precision@k, reciprocal rank, recall@k, and
     nDCG@k against that used set. Returns the mean of each metric over those queries; a graph
     with no usable labels yields an all-zero report. When ``since`` is given, only retrievals
-    surfaced on or after that instant are scored.
+    surfaced on or after that instant are scored. When ``min_content_tokens`` is given,
+    degenerate short queries are excluded from the labelled set (see ``iter_labelled_queries``).
     """
     precisions: list[float] = []
     reciprocal_ranks: list[float] = []
     recalls: list[float] = []
     ndcgs: list[float] = []
-    for labelled in iter_labelled_queries(db, since):
+    successes: list[float] = []
+    for labelled in iter_labelled_queries(db, since, min_content_tokens):
         if not labelled.relevant:
             continue
         result = db.search_nodes(
@@ -158,6 +178,7 @@ def evaluate(db: DatabaseManager, k: int = 10, since: str | None = None) -> Eval
         reciprocal_ranks.append(reciprocal_rank(ranked_now, labelled.relevant))
         recalls.append(recall_at_k(ranked_now, labelled.relevant, k))
         ndcgs.append(ndcg_at_k(ranked_now, labelled.relevant, k))
+        successes.append(success_at_k(ranked_now, labelled.relevant, k))
 
     count = len(precisions)
     if count == 0:
@@ -167,6 +188,7 @@ def evaluate(db: DatabaseManager, k: int = 10, since: str | None = None) -> Eval
             mrr=0.0,
             mean_recall_at_k=0.0,
             mean_ndcg_at_k=0.0,
+            mean_success_at_k=0.0,
             k=k,
         )
     return EvalReport(
@@ -175,5 +197,6 @@ def evaluate(db: DatabaseManager, k: int = 10, since: str | None = None) -> Eval
         mrr=sum(reciprocal_ranks) / count,
         mean_recall_at_k=sum(recalls) / count,
         mean_ndcg_at_k=sum(ndcgs) / count,
+        mean_success_at_k=sum(successes) / count,
         k=k,
     )
