@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.database import DatabaseManager, _hash_observation
+from mcp_memory.database import DatabaseManager, _budget_observations, _hash_observation
 from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
-from mcp_memory.models import Entity, Relation
+from mcp_memory.models import Entity, Observation, Relation
 from mcp_memory.path_resolver import normalize_path
 from tests import obs_contents, obs_votes
 
@@ -2002,3 +2002,235 @@ class TestCompactMode:
         result = db.read_graph("proj", compact=True)
         assert len(result["relations"]) == 1
         assert result["relations"][0].relation_type == "belongs-to"
+
+
+SENTINEL = "[{n} lower-voted observation(s) omitted to save tokens]"
+
+
+def _obs(*contents: str) -> list[Observation]:
+    return [
+        Observation(content=c, content_hash=_hash_observation(c), vote_score=0) for c in contents
+    ]
+
+
+class TestBudgetObservations:
+    def test_negative_returns_all_unchanged(self) -> None:
+        observations = _obs("aaa", "bbb", "ccc")
+        for max_chars in (-1, -100):
+            result = _budget_observations(observations, max_chars)
+            assert obs_contents(Entity(name="e", entity_type="task", observations=result)) == [
+                "aaa",
+                "bbb",
+                "ccc",
+            ]
+            assert result is observations
+
+    def test_empty_returns_unchanged(self) -> None:
+        assert _budget_observations([], 100) == []
+
+    def test_zero_keeps_only_first_with_sentinel(self) -> None:
+        result = _budget_observations(_obs("aaa", "bbb", "ccc"), 0)
+        assert [o.content for o in result] == ["aaa", SENTINEL.format(n=2)]
+
+    def test_zero_single_observation_no_sentinel(self) -> None:
+        result = _budget_observations(_obs("aaa"), 0)
+        assert [o.content for o in result] == ["aaa"]
+
+    def test_prefix_kept_and_sentinel_appended(self) -> None:
+        result = _budget_observations(_obs("aaa", "bbb", "ccc", "ddd"), 6)
+        assert [o.content for o in result] == ["aaa", "bbb", SENTINEL.format(n=2)]
+
+    def test_budget_fitting_everything_no_sentinel(self) -> None:
+        result = _budget_observations(_obs("aaa", "bbb", "ccc"), 1000)
+        assert [o.content for o in result] == ["aaa", "bbb", "ccc"]
+
+    def test_first_observation_over_budget_still_kept(self) -> None:
+        result = _budget_observations(_obs("aaaaaaaaaa", "bbb"), 3)
+        assert [o.content for o in result] == ["aaaaaaaaaa", SENTINEL.format(n=1)]
+
+    def test_sentinel_has_empty_hash_and_zero_vote(self) -> None:
+        sentinel = _budget_observations(_obs("aaa", "bbb"), 0)[-1]
+        assert sentinel.content_hash == ""
+        assert sentinel.vote_score == 0
+
+
+def _fetch_entity_row(db: DatabaseManager, name: str) -> tuple[sqlite3.Row, int]:
+    row = db._db.execute(
+        "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at, "
+        "e.vote_score FROM entities e JOIN entity_types et ON e.entity_type_id = et.id "
+        "WHERE e.name = ? AND e.deleted_at IS NULL",
+        (name,),
+    ).fetchone()
+    return row, row["id"]
+
+
+class TestBuildEntityBudget:
+    def test_default_budget_applied_via_none(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2"]}]
+        )
+        row, entity_id = _fetch_entity_row(db, "e1")
+        entity = db._build_entity(row, entity_id, max_observation_chars=None)
+        assert obs_contents(entity) == ["obs1", "obs2"]
+
+    def test_zero_budget_keeps_first_and_sentinel(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2", "obs3"]}]
+        )
+        row, entity_id = _fetch_entity_row(db, "e1")
+        entity = db._build_entity(row, entity_id, max_observation_chars=0)
+        contents = obs_contents(entity)
+        assert len(contents) == 2
+        assert contents[1] == SENTINEL.format(n=2)
+
+    def test_negative_budget_returns_all(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2"]}]
+        )
+        row, entity_id = _fetch_entity_row(db, "e1")
+        entity = db._build_entity(row, entity_id, max_observation_chars=-1)
+        assert obs_contents(entity) == ["obs1", "obs2"]
+
+    def test_compact_wins_over_budget(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2"]}]
+        )
+        row, entity_id = _fetch_entity_row(db, "e1")
+        entity = db._build_entity(row, entity_id, compact=True, max_observation_chars=100)
+        assert entity.observations == []
+
+
+class TestSearchNodesBudget:
+    def test_small_budget_trims_and_appends_sentinel(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "task/foo", "entityType": "task", "observations": ["aaa", "bbb", "ccc"]}],
+        )
+        result = db.search_nodes("proj", "foo", max_observation_chars=6)
+        contents = obs_contents(result["entities"][0])
+        assert contents == ["aaa", "bbb", SENTINEL.format(n=1)]
+
+    def test_negative_budget_returns_all(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "task/foo", "entityType": "task", "observations": ["aaa", "bbb", "ccc"]}],
+        )
+        result = db.search_nodes("proj", "foo", max_observation_chars=-1)
+        assert obs_contents(result["entities"][0]) == ["aaa", "bbb", "ccc"]
+
+    def test_zero_budget_keeps_only_top(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "task/foo", "entityType": "task", "observations": ["aaa", "bbb", "ccc"]}],
+        )
+        result = db.search_nodes("proj", "foo", max_observation_chars=0)
+        assert obs_contents(result["entities"][0]) == ["aaa", SENTINEL.format(n=2)]
+
+    def test_default_none_uses_config(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/foo", "entityType": "task", "observations": ["aaa", "bbb"]}]
+        )
+        result = db.search_nodes("proj", "foo")
+        assert obs_contents(result["entities"][0]) == ["aaa", "bbb"]
+
+
+class TestReadGraphBudget:
+    def test_small_budget_trims_and_appends_sentinel(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["aaa", "bbb", "ccc"]}]
+        )
+        result = db.read_graph("proj", max_observation_chars=6)
+        assert obs_contents(result["entities"][0]) == ["aaa", "bbb", SENTINEL.format(n=1)]
+
+    def test_negative_budget_returns_all(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["aaa", "bbb", "ccc"]}]
+        )
+        result = db.read_graph("proj", max_observation_chars=-1)
+        assert obs_contents(result["entities"][0]) == ["aaa", "bbb", "ccc"]
+
+    def test_zero_budget_keeps_only_top(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["aaa", "bbb", "ccc"]}]
+        )
+        result = db.read_graph("proj", max_observation_chars=0)
+        assert obs_contents(result["entities"][0]) == ["aaa", SENTINEL.format(n=2)]
+
+
+def _seed_primary_and_related(db: DatabaseManager) -> None:
+    db.create_entities(
+        "proj",
+        [
+            {"name": "a", "entityType": "task", "observations": ["aaa", "bbb", "ccc"]},
+            {"name": "b", "entityType": "project", "observations": ["xxx", "yyy", "zzz"]},
+        ],
+    )
+    db.create_relations("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
+
+
+def _related(result: dict[str, object]) -> Entity:
+    return next(e for e in result["relatedEntities"] if isinstance(e, Entity))
+
+
+class TestGetEntityWithRelationsBudget:
+    def test_compact_empties_primary_and_related(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.get_entity_with_relations("proj", "a", compact=True)
+        assert result["entity"].observations == []
+        assert _related(result).observations == []
+
+    def test_small_budget_trims_primary_and_related(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.get_entity_with_relations("proj", "a", max_observation_chars=6)
+        assert obs_contents(result["entity"]) == ["aaa", "bbb", SENTINEL.format(n=1)]
+        assert obs_contents(_related(result)) == ["xxx", "yyy", SENTINEL.format(n=1)]
+
+    def test_zero_budget_keeps_only_top_on_primary_and_related(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.get_entity_with_relations("proj", "a", max_observation_chars=0)
+        assert obs_contents(result["entity"]) == ["aaa", SENTINEL.format(n=2)]
+        assert obs_contents(_related(result)) == ["xxx", SENTINEL.format(n=2)]
+
+    def test_default_none_returns_all(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.get_entity_with_relations("proj", "a")
+        assert obs_contents(result["entity"]) == ["aaa", "bbb", "ccc"]
+        assert obs_contents(_related(result)) == ["xxx", "yyy", "zzz"]
+
+    def test_negative_budget_returns_all(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.get_entity_with_relations("proj", "a", max_observation_chars=-1)
+        assert obs_contents(result["entity"]) == ["aaa", "bbb", "ccc"]
+        assert obs_contents(_related(result)) == ["xxx", "yyy", "zzz"]
+
+
+class TestSearchRelatedNodesBudget:
+    def test_compact_empties_primary_and_related(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.search_related_nodes("proj", "a", compact=True)
+        assert result["entity"].observations == []
+        assert _related(result).observations == []
+
+    def test_small_budget_trims_primary_and_related(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.search_related_nodes("proj", "a", max_observation_chars=6)
+        assert obs_contents(result["entity"]) == ["aaa", "bbb", SENTINEL.format(n=1)]
+        assert obs_contents(_related(result)) == ["xxx", "yyy", SENTINEL.format(n=1)]
+
+    def test_zero_budget_keeps_only_top_on_primary_and_related(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.search_related_nodes("proj", "a", max_observation_chars=0)
+        assert obs_contents(result["entity"]) == ["aaa", SENTINEL.format(n=2)]
+        assert obs_contents(_related(result)) == ["xxx", SENTINEL.format(n=2)]
+
+    def test_default_none_returns_all(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.search_related_nodes("proj", "a")
+        assert obs_contents(result["entity"]) == ["aaa", "bbb", "ccc"]
+        assert obs_contents(_related(result)) == ["xxx", "yyy", "zzz"]
+
+    def test_negative_budget_returns_all(self, db: DatabaseManager) -> None:
+        _seed_primary_and_related(db)
+        result = db.search_related_nodes("proj", "a", max_observation_chars=-1)
+        assert obs_contents(result["entity"]) == ["aaa", "bbb", "ccc"]
+        assert obs_contents(_related(result)) == ["xxx", "yyy", "zzz"]

@@ -23,6 +23,7 @@ _DEFAULT_DREAM_HEAVY_TIMEOUT = "600"
 _DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
 _DEFAULT_PURGE_GRACE_DAYS = "30"
 _DEFAULT_SURFACED_RETENTION_DAYS = "180"
+_DEFAULT_MAX_OBSERVATION_CHARS = "2000"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / "com.mcp-memory.plist"
@@ -227,6 +228,16 @@ def get_surfaced_retention_days() -> int:
     return int(
         os.environ.get("MCP_MEMORY_SURFACED_RETENTION_DAYS", _DEFAULT_SURFACED_RETENTION_DAYS)
     )
+
+
+def get_max_observation_chars() -> int:
+    """Return the per-entity cumulative observation-content character budget for reads.
+
+    Negative values mean unlimited (full detail). Zero means a literal zero-char budget
+    (only the single highest-voted observation is kept). Applied best-first (highest-voted
+    observations kept) so large entities stay findable without overflowing the client's context.
+    """
+    return int(os.environ.get("MCP_MEMORY_MAX_OBSERVATION_CHARS", _DEFAULT_MAX_OBSERVATION_CHARS))
 
 
 def get_gc_enabled() -> bool:

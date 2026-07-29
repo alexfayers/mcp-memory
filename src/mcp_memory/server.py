@@ -66,6 +66,12 @@ VALID_ENTITY_TYPES = frozenset(
 )
 
 # Tool descriptions
+_MAX_OBSERVATION_CHARS_DOC = (
+    " By default each entity's observations are trimmed to a character budget "
+    "(highest-voted kept first, with a note counting any omitted); pass a negative value "
+    "(e.g. -1) for full detail, 0 for just the single highest-voted observation, or a "
+    "positive integer for a custom budget."
+)
 CREATE_ENTITIES_DESC = (
     "Create or update entities with observations in the knowledge graph. "
     "All data is scoped to the given project. "
@@ -91,11 +97,12 @@ SEARCH_NODES_DESC = (
     "(see vote_observation). Each observation carries a content_hash usable with "
     "vote_observation, delete_observations, and merge_observations to address it without "
     "pasting its full content. Use compact=true to omit observations for a lightweight summary."
+    + _MAX_OBSERVATION_CHARS_DOC
 )
 READ_GRAPH_DESC = (
     "Get the most recent entities and their relations for a project. "
     "Returns up to 10 recent entities ordered by creation time. "
-    "Use compact=true to omit observations for a lightweight summary."
+    "Use compact=true to omit observations for a lightweight summary." + _MAX_OBSERVATION_CHARS_DOC
 )
 CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
@@ -112,7 +119,7 @@ RESTORE_ENTITY_DESC = (
 )
 GET_ENTITY_WITH_RELATIONS_DESC = (
     "Get an entity along with all its relations and related entities within a project. "
-    "Traverses the graph to discover linked context."
+    "Traverses the graph to discover linked context." + _MAX_OBSERVATION_CHARS_DOC
 )
 ADD_OBSERVATIONS_DESC = (
     "Append observations to an existing entity without overwriting. "
@@ -151,7 +158,7 @@ VOTE_OBSERVATION_DESC = (
 )
 SEARCH_RELATED_NODES_DESC = (
     "Get an entity along with all its directly related entities within a project. "
-    "Optionally filter by entityType and/or relationType."
+    "Optionally filter by entityType and/or relationType." + _MAX_OBSERVATION_CHARS_DOC
 )
 LIST_PROJECTS_DESC = "List all project names in the knowledge graph."
 
@@ -210,7 +217,7 @@ SEARCH_ALL_PROJECTS_DESC = (
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "
     "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
-    "Use compact=true to omit observations for a lightweight summary."
+    "Use compact=true to omit observations for a lightweight summary." + _MAX_OBSERVATION_CHARS_DOC
 )
 
 _db: DatabaseManager | None = None
@@ -394,6 +401,7 @@ def search_nodes(
     end_date: str | None = None,
     compact: bool = False,
     match_all: bool = False,
+    max_observation_chars: int | None = None,
 ) -> dict[str, object]:
     """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
     try:
@@ -408,6 +416,7 @@ def search_nodes(
             end_date=end_date,
             compact=compact,
             match_all=match_all,
+            max_observation_chars=max_observation_chars,
         )
     except Exception as e:
         return {"error": str(e)}
@@ -419,11 +428,17 @@ def read_graph(
     project: str,
     status: str | None = None,
     compact: bool = False,
+    max_observation_chars: int | None = None,
 ) -> dict[str, object]:
     """Return the most recent entities and their relations for a project."""
     try:
         db = _get_db()
-        result: dict[str, Any] = db.read_graph(project, status=status, compact=compact)  # type: ignore[arg-type]
+        result: dict[str, Any] = db.read_graph(
+            project,
+            status=status,  # type: ignore[arg-type]
+            compact=compact,
+            max_observation_chars=max_observation_chars,
+        )
         return _attach_relation_type_warnings(result)
     except Exception as e:
         return {"error": str(e)}
@@ -572,6 +587,7 @@ def search_all_projects(
     end_date: str | None = None,
     compact: bool = False,
     match_all: bool = False,
+    max_observation_chars: int | None = None,
 ) -> dict[str, object]:
     """Search entities across all projects, returning results grouped by project."""
     try:
@@ -586,6 +602,7 @@ def search_all_projects(
             end_date=end_date,
             compact=compact,
             match_all=match_all,
+            max_observation_chars=max_observation_chars,
         )
 
         grouped: dict[str, dict[str, list[object]]] = {}
@@ -690,11 +707,15 @@ def delete_relation(
 def get_entity_with_relations(
     project: str,
     name: str,
+    compact: bool = False,
+    max_observation_chars: int | None = None,
 ) -> dict[str, object]:
     """Get an entity with all its relations and related entities."""
     try:
         db = _get_db()
-        result: dict[str, Any] = db.get_entity_with_relations(project, name)
+        result: dict[str, Any] = db.get_entity_with_relations(
+            project, name, compact=compact, max_observation_chars=max_observation_chars
+        )
         return _attach_relation_type_warnings(result)
     except Exception as e:
         return {"error": str(e)}
@@ -799,12 +820,19 @@ def search_related_nodes(
     name: str,
     entityType: str | None = None,
     relationType: str | None = None,
+    compact: bool = False,
+    max_observation_chars: int | None = None,
 ) -> dict[str, object]:
     """Get an entity with filtered relations and related entities."""
     try:
         db = _get_db()
         result: dict[str, Any] = db.search_related_nodes(
-            project, name, entity_type=entityType, relation_type=relationType
+            project,
+            name,
+            entity_type=entityType,
+            relation_type=relationType,
+            compact=compact,
+            max_observation_chars=max_observation_chars,
         )
         return _attach_relation_type_warnings(result)
     except Exception as e:

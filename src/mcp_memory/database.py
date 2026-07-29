@@ -12,6 +12,7 @@ from typing import cast
 
 from .config import (
     get_gc_enabled,
+    get_max_observation_chars,
     get_purge_enabled,
     get_purge_grace_days,
     get_surfaced_retention_days,
@@ -69,6 +70,38 @@ def _parse_date(value: str) -> str:
 def _hash_observation(content: str) -> str:
     """Return the 8-char content-derived hash used to address an observation."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+
+
+def _budget_observations(observations: list[Observation], max_chars: int) -> list[Observation]:
+    """Trim an already-vote-sorted observation list to a cumulative content-char budget.
+
+    Keeps whole observations best-first while the running total of len(content) stays within
+    max_chars, always keeping at least the first observation. When any are omitted, appends a
+    single sentinel observation noting how many were dropped. A negative max_chars means
+    unlimited (returned unchanged). A max_chars of 0 naturally yields just the first
+    observation via the always-keep-first rule below - it is NOT special-cased separately.
+    """
+    if max_chars < 0 or not observations:
+        return observations
+    kept: list[Observation] = []
+    total = 0
+    for obs in observations:
+        projected = total + len(obs.content)
+        if not kept or projected <= max_chars:
+            kept.append(obs)
+            total = projected
+        else:
+            break
+    omitted = len(observations) - len(kept)
+    if omitted > 0:
+        kept.append(
+            Observation(
+                content=f"[{omitted} lower-voted observation(s) omitted to save tokens]",
+                content_hash="",
+                vote_score=0,
+            )
+        )
+    return kept
 
 
 class DatabaseManager:
@@ -365,11 +398,26 @@ class DatabaseManager:
     def _get_observations(self, entity_id: int) -> list[str]:
         return [o.content for o in self._get_observations_full(entity_id)]
 
-    def _build_entity(self, row: sqlite3.Row, entity_id: int, compact: bool = False) -> Entity:
+    def _build_entity(
+        self,
+        row: sqlite3.Row,
+        entity_id: int,
+        compact: bool = False,
+        max_observation_chars: int | None = None,
+    ) -> Entity:
+        if compact:
+            observations: list[Observation] = []
+        else:
+            budget = (
+                get_max_observation_chars()
+                if max_observation_chars is None
+                else max_observation_chars
+            )
+            observations = _budget_observations(self._get_observations_full(entity_id), budget)
         return Entity(
             name=row["name"],
             entity_type=row["entity_type"],
-            observations=[] if compact else self._get_observations_full(entity_id),
+            observations=observations,
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -967,7 +1015,13 @@ class DatabaseManager:
             )
         self._db.commit()
 
-    def get_entity(self, project: str, name: str) -> Entity:
+    def get_entity(
+        self,
+        project: str,
+        name: str,
+        compact: bool = False,
+        max_observation_chars: int | None = None,
+    ) -> Entity:
         """Get a single entity by name."""
         project_id = self._get_or_create_project_id(project)
         row = self._db.execute(
@@ -980,13 +1034,21 @@ class DatabaseManager:
         ).fetchone()
         if row is None:
             raise ValueError(f"Entity '{name}' not found in project '{project}'")
-        return self._build_entity(row, row["id"])
+        return self._build_entity(
+            row, row["id"], compact=compact, max_observation_chars=max_observation_chars
+        )
 
     def get_entity_with_relations(
-        self, project: str, name: str
+        self,
+        project: str,
+        name: str,
+        compact: bool = False,
+        max_observation_chars: int | None = None,
     ) -> dict[str, Entity | list[Relation] | list[Entity]]:
         """Get an entity with all its relations and related entities."""
-        entity = self.get_entity(project, name)
+        entity = self.get_entity(
+            project, name, compact=compact, max_observation_chars=max_observation_chars
+        )
         project_id = self._get_or_create_project_id(project)
         entity_id = self._get_entity_id(name, project_id)
 
@@ -999,7 +1061,12 @@ class DatabaseManager:
             if rel.target != name:
                 related_names.add(rel.target)
 
-        related_entities = [self.get_entity(project, n) for n in related_names]
+        related_entities = [
+            self.get_entity(
+                project, n, compact=compact, max_observation_chars=max_observation_chars
+            )
+            for n in related_names
+        ]
 
         return {
             "entity": entity,
@@ -1013,9 +1080,13 @@ class DatabaseManager:
         name: str,
         entity_type: str | None = None,
         relation_type: str | None = None,
+        compact: bool = False,
+        max_observation_chars: int | None = None,
     ) -> dict[str, Entity | list[Relation] | list[Entity]]:
         """Get an entity with filtered relations and related entities."""
-        entity = self.get_entity(project, name)
+        entity = self.get_entity(
+            project, name, compact=compact, max_observation_chars=max_observation_chars
+        )
         project_id = self._get_or_create_project_id(project)
         entity_id = self._get_entity_id(name, project_id)
 
@@ -1031,7 +1102,12 @@ class DatabaseManager:
             if rel.target != name:
                 related_names.add(rel.target)
 
-        related_entities = [self.get_entity(project, n) for n in related_names]
+        related_entities = [
+            self.get_entity(
+                project, n, compact=compact, max_observation_chars=max_observation_chars
+            )
+            for n in related_names
+        ]
 
         if entity_type is not None:
             related_entities = [e for e in related_entities if e.entity_type == entity_type]
@@ -1053,6 +1129,7 @@ class DatabaseManager:
         end_date: str | None = None,
         compact: bool = False,
         match_all: bool = False,
+        max_observation_chars: int | None = None,
     ) -> dict[str, list[Entity] | list[Relation]]:
         """Search entities using FTS5 full-text search with recency-weighted BM25 ranking.
 
@@ -1108,7 +1185,12 @@ class DatabaseManager:
         scored.sort(key=lambda x: x[0], reverse=True)
         top_rows = [row for _, row in scored[:limit]]
 
-        entities = [self._build_entity(row, row["id"], compact=compact) for row in top_rows]
+        entities = [
+            self._build_entity(
+                row, row["id"], compact=compact, max_observation_chars=max_observation_chars
+            )
+            for row in top_rows
+        ]
         entity_ids = [row["id"] for row in top_rows]
 
         if project is not None:
@@ -1120,7 +1202,11 @@ class DatabaseManager:
         return {"entities": entities, "relations": relations}
 
     def read_graph(
-        self, project: str, status: EntityStatus | None = None, compact: bool = False
+        self,
+        project: str,
+        status: EntityStatus | None = None,
+        compact: bool = False,
+        max_observation_chars: int | None = None,
     ) -> dict[str, list[Entity] | list[Relation]]:
         """Return the 10 most recently created entities and their relations."""
         project_id = self._get_or_create_project_id(project)
@@ -1142,7 +1228,12 @@ class DatabaseManager:
 
         rows = self._db.execute(sql, params).fetchall()
 
-        entities = [self._build_entity(row, row["id"], compact=compact) for row in rows]
+        entities = [
+            self._build_entity(
+                row, row["id"], compact=compact, max_observation_chars=max_observation_chars
+            )
+            for row in rows
+        ]
         entity_ids = [row["id"] for row in rows]
         relations = self._get_relations_for_entities(project_id, entity_ids)
 

@@ -298,6 +298,57 @@ class TestEvaluate:
         assert ranking_eval.evaluate(db, k=5, min_content_tokens=2).query_count == 1
 
 
+class TestBudgetingIsOrthogonalToRanking:
+    """Permanent guard: observation budgeting must never change ranking or eval metrics.
+
+    Budgeting shapes observations in _build_entity, which runs after BM25/recency/vote scoring
+    has already selected and ordered rows. This locks that orthogonality in forever: the same
+    search returns identical entity names and order at every budget value, and evaluate()'s own
+    internal (config-default-budget) search produces non-trivial metrics on a meaningful fixture.
+    """
+
+    def test_search_ranking_identical_across_budget_values(self, db: DatabaseManager) -> None:
+        long_obs = "cache eviction ttl strategy for the distributed layer " * 6
+        db.create_entities(
+            "proj",
+            [
+                {"name": f"task/cache-{i}", "entityType": "task", "observations": [long_obs]}
+                for i in range(5)
+            ],
+        )
+        k = 5
+
+        default = db.search_nodes("proj", "cache", limit=k)["entities"]
+        small = db.search_nodes("proj", "cache", limit=k, max_observation_chars=50)["entities"]
+        unlimited = db.search_nodes("proj", "cache", limit=k, max_observation_chars=-1)["entities"]
+
+        names_default = [e.name for e in default]
+        names_small = [e.name for e in small]
+        names_unlimited = [e.name for e in unlimited]
+
+        assert names_default == names_small == names_unlimited
+        assert len(names_default) == 5
+
+    def test_evaluate_yields_nontrivial_metrics_on_meaningful_fixture(
+        self, db: DatabaseManager
+    ) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle haystack"]}]
+        )
+        db.record_surfaced("search_nodes", "needle haystack", "rid-1", [("proj", "task/a", 1)])
+        db._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
+        db._db.commit()
+
+        report = ranking_eval.evaluate(db, k=5)
+
+        assert report.query_count > 0
+        assert report.mean_precision_at_k > 0
+        assert report.mrr > 0
+        assert report.mean_recall_at_k > 0
+        assert report.mean_ndcg_at_k > 0
+        assert report.mean_success_at_k > 0
+
+
 class TestVoteInfluence:
     def test_upvoted_outranks_equal_unvoted(self, db: DatabaseManager) -> None:
         db.create_entities(
