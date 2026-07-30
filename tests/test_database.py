@@ -814,6 +814,24 @@ class TestObservations:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         assert db.delete_observations("proj", "e1", hashes=["deadbeef"]) == 0
 
+    def test_trim_observations_to_outcome(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c", "d", "e"]}],
+        )
+        keep = [_hash_observation("a"), _hash_observation("c")]
+        assert db.trim_observations_to_outcome("proj", "e1", keep) == 3
+        assert obs_contents(db.get_entity("proj", "e1")) == ["a", "c"]
+
+    def test_trim_observations_to_outcome_empty_keep_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        with pytest.raises(ValueError, match="at least one"):
+            db.trim_observations_to_outcome("proj", "e1", [])
+
+    def test_trim_observations_to_outcome_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.trim_observations_to_outcome("proj", "missing", ["deadbeef"])
+
     def test_upvoted_observation_leads(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
@@ -881,6 +899,77 @@ class TestEntityStatus:
     def test_missing_entity_raises(self, db: DatabaseManager) -> None:
         with pytest.raises(ValueError, match="not found"):
             db.set_entity_status("proj", "missing", "planned")
+
+    def test_returns_observation_count(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c", "d"]}],
+        )
+        assert db.set_entity_status("proj", "e1", "resolved") == 4
+
+
+class TestRenameEntity:
+    def test_rename_in_place_preserves_relations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        db.create_relations("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
+        db.rename_entity("proj", "a", "a2")
+        assert db._get_entity_id("a", db._get_or_create_project_id("proj")) is None
+        result = db.get_entity_with_relations("proj", "a2")
+        assert result["entity"].name == "a2"
+        assert result["relations"][0].source == "a2"
+        assert result["relations"][0].target == "b"
+
+    def test_rename_collision_raises(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "task", "observations": ["y"]},
+            ],
+        )
+        with pytest.raises(ValueError, match="already exists"):
+            db.rename_entity("proj", "a", "b")
+
+    def test_rename_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.rename_entity("proj", "missing", "new")
+
+
+class TestMoveEntityCrossScope:
+    def test_move_relocates_entity(self, db: DatabaseManager) -> None:
+        db.create_entities("src", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.move_entity_cross_scope("src", "dst", "e1")
+        assert db.entity_exists_in_project("e1", "dst")
+        assert not db.entity_exists_in_project("e1", "src")
+
+    def test_move_drops_and_returns_relations(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "src",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        db.create_relations("src", [Relation(source="a", target="b", relation_type="belongs-to")])
+        dropped = db.move_entity_cross_scope("src", "dst", "a")
+        assert dropped == [{"source": "a", "target": "b", "relation_type": "belongs-to"}]
+        assert db.get_entity_with_relations("src", "b")["relations"] == []
+
+    def test_move_target_collision_raises(self, db: DatabaseManager) -> None:
+        db.create_entities("src", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        db.create_entities("dst", [{"name": "e1", "entityType": "task", "observations": ["y"]}])
+        with pytest.raises(ValueError, match="already exists"):
+            db.move_entity_cross_scope("src", "dst", "e1")
+
+    def test_move_missing_entity_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            db.move_entity_cross_scope("src", "dst", "missing")
 
 
 class TestRelations:

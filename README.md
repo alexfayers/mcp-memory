@@ -169,6 +169,10 @@ Append observations to an existing entity without overwriting. Skips duplicates.
 
 Delete specific observations from an existing entity by exact content match. Returns the count deleted. Throws if the entity does not exist. For an observation that is stale but not wrong enough to remove, prefer `vote_observation` (downvote to sink it) over deletion.
 
+### trim_observations_to_outcome
+
+Delete every observation on an entity except those whose `content_hash` is in `keep_hashes`. Use this to trim an oversized resolved entity down to its outcome summary deterministically. `keep_hashes` must be non-empty (an entity must retain at least its outcome observation). Returns the number of observations deleted.
+
 ### search_nodes
 
 FTS5 full-text search with recency- and vote-weighted BM25 ranking. Recency decay is type-aware (durable types such as `pattern` and `knowledge` decay far slower than `task`), and usefulness votes (see `vote_entity`) nudge results up or down within bounds. Multi-word queries match entities containing *any* of the terms by default (entities matching more terms rank first); pass `match_all=true` to require *all* terms. Optional `entity_type`, `status`, and time-range (`start_date`/`end_date`) filters. Date params support relative formats (`7d`, `2w`, `3m`) and ISO dates. Within each returned entity, observations are ordered best-first by their own votes (see `vote_observation`).
@@ -202,6 +206,14 @@ In addition to these explicit votes, the server casts a deterministic `+1` on it
 ### vote_observation
 
 Record a `+1` or `-1` usefulness vote on a single observation of an entity, addressed either by its exact content (like `delete_observations`) or, more cheaply, by its `content_hash` (read off the observation in tool output). Upvoted observations surface first within the entity and downvoted ones sink, so a fat entity leads with its most useful lines. This is a light alternative to `delete_observations` when an observation is stale but not wrong enough to remove, and complements `vote_entity`, which ranks whole entities. Voting does not change content or `updated_at`. Returns the observation's new net `vote_score`.
+
+### bulk_rename_entity
+
+Rename a single entity in place within a project scope. All relations and observations are preserved (relations key on entity id, not name). Fails if `new_name` already exists in the scope, or would collide across the global/project name-uniqueness boundary.
+
+### move_entity_cross_scope
+
+Move one entity from one project scope to another. Because relations cannot span scopes, all of the entity's relations are dropped and returned (as `droppedRelations`) so the caller can recreate the appropriate ones in the target scope. Fails if an entity with the same name already exists in the target scope.
 
 ### delete_entity
 
@@ -238,6 +250,14 @@ Return the filesystem path(s) registered to a project, or an empty list if the p
 ### get_paths_for_entity
 
 Find which project(s) contain an entity with the given name and return their registered filesystem paths, grouped by project. Entity names are unique only within a project, so the same name may appear in several projects; a matching project with no registered path is still listed with an empty paths list. Returns an empty `matches` list if no entity has that name.
+
+## Command-line
+
+### `mcp-memory audit`
+
+Emit a read-only structural-hygiene report of the memory graph as JSON - orphans, misused `project`-type entities, unprefixed names, ghost scopes, oversized entities, `task belongs-to project` relation violations, star-graph tasks, and strongly-downvoted entities. Scope it with `--project <scope>` or `--all-projects`.
+
+Add `--propose-plan` to emit a `{"steps": [...]}` list of concrete fix-it tool calls instead of the raw report. Deterministic fixes (e.g. `bulk_rename_entity`) carry `needs_review: false`; fixes needing human/agent judgement (orphan relinking, deletes, and `consider_split` advisories for entities that bundle multiple scopes) carry `needs_review: true`. A `trim_observations_to_outcome` step only carries `needs_review: false` when every observation it would drop is a near-duplicate of one being kept - if any dropped observation looks like a distinct fact, it carries `needs_review: true` instead, since the trim is a hard delete.
 
 ## Development
 

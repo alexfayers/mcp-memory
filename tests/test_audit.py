@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from mcp_memory import cli
-from mcp_memory.audit import audit_graph
+from mcp_memory.audit import audit_graph, propose_plan
 from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
 
@@ -21,6 +21,19 @@ def db(tmp_path: Path) -> DatabaseManager:
 
 def _names(findings: list[dict[str, object]]) -> set[str]:
     return {f["name"] for f in findings}  # type: ignore[misc]
+
+
+def _entity_id(db: DatabaseManager, name: str, project: str = "proj") -> int:
+    project_id = db._get_or_create_project_id(project)
+    entity_id = db._get_entity_id(name, project_id)
+    assert entity_id is not None
+    return entity_id
+
+
+def _vote_obs(db: DatabaseManager, name: str, content: str, times: int) -> None:
+    step = 1 if times > 0 else -1
+    for _ in range(abs(times)):
+        db.vote_observation("proj", name, step, content=content)
 
 
 class TestOrphans:
@@ -137,15 +150,14 @@ class TestOversized:
             ],
         )
         oversized = audit_graph(db, "proj")["oversized"]
-        assert oversized == [
-            {
-                "name": "task/big",
-                "entity_type": "task",
-                "project": "proj",
-                "count": 4,
-                "threshold": 3,
-            }
-        ]
+        assert len(oversized) == 1
+        finding = oversized[0]  # type: ignore[index]
+        assert finding["name"] == "task/big"
+        assert finding["entity_type"] == "task"
+        assert finding["project"] == "proj"
+        assert finding["count"] == 4
+        assert finding["threshold"] == 3
+        assert finding["status"] == "resolved"
 
     def test_unresolved_task_not_size_checked(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -263,6 +275,213 @@ class TestProjectScoping:
         assert by_name == {"orphan_a": "a", "orphan_b": "b"}
 
 
+class TestProposePlan:
+    def _plan(self, db: DatabaseManager, project: str | None) -> list[dict[str, object]]:
+        return propose_plan(db, audit_graph(db, project))
+
+    def test_oversized_trim_keeps_outcome_and_top_vote_deterministically(
+        self, db: DatabaseManager
+    ) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/big",
+                    "entityType": "task",
+                    "observations": ["low", "mid", "high", "RESOLVED: shipped"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        _vote_obs(db, "task/big", "high", 5)
+        _vote_obs(db, "task/big", "mid", 2)
+
+        by_content = {
+            o.content: o.content_hash for o in db._get_observations_full(_entity_id(db, "task/big"))
+        }
+        step = self._plan(db, "proj")[0]
+        assert step["tool"] == "trim_observations_to_outcome"
+        assert step["needs_review"] is True  # "low"/"mid" are distinct facts, not duplicates
+        keep = set(step["arguments"]["keep_hashes"])  # type: ignore[index]
+        assert by_content["RESOLVED: shipped"] in keep
+        assert by_content["high"] in keep
+        assert len(keep) <= 3
+
+        again = self._plan(db, "proj")[0]
+        assert again["arguments"]["keep_hashes"] == step["arguments"]["keep_hashes"]  # type: ignore[index]
+
+    def test_trim_uses_full_observation_list_not_budgeted(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/big",
+                    "entityType": "task",
+                    "observations": ["a", "b", "c", "RESOLVED: done"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        _vote_obs(db, "task/big", "RESOLVED: done", -3)
+
+        by_content = {
+            o.content: o.content_hash for o in db._get_observations_full(_entity_id(db, "task/big"))
+        }
+        keep = set(self._plan(db, "proj")[0]["arguments"]["keep_hashes"])  # type: ignore[index]
+        assert by_content["RESOLVED: done"] in keep
+
+    def test_unprefixed_yields_prefixed_rename(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "foo", "entityType": "task", "observations": ["o"]}])
+        step = next(s for s in self._plan(db, "proj") if s["tool"] == "bulk_rename_entity")
+        assert step["arguments"] == {  # type: ignore[comparison-overlap]
+            "project": "proj",
+            "old_name": "foo",
+            "new_name": "task/foo",
+        }
+        assert step["needs_review"] is False
+
+    def test_ghost_scope_needs_review(self, db: DatabaseManager) -> None:
+        db._get_or_create_project_id("ghost")
+        step = next(s for s in self._plan(db, None) if s["tool"] == "delete_project")
+        assert step["arguments"]["project"] == "ghost"  # type: ignore[index]
+        assert step["needs_review"] is True
+
+    def test_negative_vote_needs_review(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
+                {"name": "task/t", "entityType": "task", "observations": ["o"]},
+            ],
+        )
+        db.create_relations("proj", [Relation("task/t", "feature/f", "implements")])
+        for _ in range(5):
+            db.vote_entity("proj", "task/t", -1)
+        step = next(s for s in self._plan(db, "proj") if s["tool"] == "delete_entity")
+        assert step["arguments"]["name"] == "task/t"  # type: ignore[index]
+        assert step["needs_review"] is True
+
+    def test_orphan_needs_review(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/lonely", "entityType": "task", "observations": ["o"]}]
+        )
+        step = next(s for s in self._plan(db, "proj") if s["tool"] == "create_relations")
+        assert step["arguments"]["relations"][0]["source"] == "task/lonely"  # type: ignore[index]
+        assert step["needs_review"] is True
+
+    def test_relation_violation_needs_review(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "project/proj", "entityType": "project", "observations": ["o"]},
+                {"name": "task/t", "entityType": "task", "observations": ["o"]},
+            ],
+        )
+        db.create_relations("proj", [Relation("task/t", "project/proj", "belongs-to")])
+        steps = self._plan(db, "proj")
+        assert any(s["needs_review"] and "implements" in json.dumps(s["arguments"]) for s in steps)
+
+    def test_multiple_outcomes_yields_consider_split_not_trim(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/multi",
+                    "entityType": "task",
+                    "observations": ["RESOLVED: a", "RESOLVED: b", "Decided: c", "Resolved: d"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        steps = self._plan(db, "proj")
+        split = next(s for s in steps if s.get("action") == "consider_split")
+        assert split["needs_review"] is True
+        assert split["entity"] == "task/multi"
+        assert "relation" in split["reason"]  # type: ignore[operator]
+        assert not any(s.get("tool") == "trim_observations_to_outcome" for s in steps)
+
+    def test_oversized_non_task_yields_review_not_trim(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "project/proj", "entityType": "project", "observations": ["o"]},
+                {
+                    "name": "feature/f",
+                    "entityType": "feature",
+                    "observations": [f"fact {i}" for i in range(11)],
+                },
+            ],
+        )
+        db.create_relations("proj", [Relation("feature/f", "project/proj", "belongs-to")])
+        steps = self._plan(db, "proj")
+        review = next(s for s in steps if s.get("action") == "review_oversized")
+        assert review["entity"] == "feature/f"
+        assert review["needs_review"] is True
+        assert not any(s.get("tool") == "trim_observations_to_outcome" for s in steps)
+
+    def test_single_outcome_still_trims(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/one",
+                    "entityType": "task",
+                    "observations": ["a", "b", "c", "RESOLVED: done"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        steps = self._plan(db, "proj")
+        assert any(s.get("tool") == "trim_observations_to_outcome" for s in steps)
+        assert not any(s.get("action") == "consider_split" for s in steps)
+
+    def test_trim_dropping_a_distinct_fact_forces_review(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/facts",
+                    "entityType": "task",
+                    "observations": [
+                        "RESOLVED: shipped the graph-hygiene tools",
+                        "relation rows key on entity.id not name, so rename needed no repointing",
+                        "relation-requirement invariant confirmed intact by all 5 capabilities",
+                        "minor filler detail",
+                    ],
+                    "status": "resolved",
+                }
+            ],
+        )
+        step = next(
+            s for s in self._plan(db, "proj") if s.get("tool") == "trim_observations_to_outcome"
+        )
+        assert step["needs_review"] is True
+
+    def test_trim_dropping_only_near_duplicates_stays_auto_applied(
+        self, db: DatabaseManager
+    ) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/dupes",
+                    "entityType": "task",
+                    "observations": [
+                        "RESOLVED: shipped the graph-hygiene tools",
+                        "shipped the graph-hygiene tools",
+                        "graph-hygiene tools",
+                        "hygiene tools",
+                    ],
+                    "status": "resolved",
+                }
+            ],
+        )
+        step = next(
+            s for s in self._plan(db, "proj") if s.get("tool") == "trim_observations_to_outcome"
+        )
+        assert step["needs_review"] is False
+
+
 class TestAuditCommand:
     def test_emits_json_for_scope(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -273,11 +492,29 @@ class TestAuditCommand:
             "proj", [{"name": "task/lonely", "entityType": "task", "observations": ["o"]}]
         )
 
-        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False))
+        cli._cmd_audit(
+            cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False)
+        )
 
         report = json.loads(capsys.readouterr().out)
         assert report["project"] == "proj"
         assert _names(report["orphans"]) == {"task/lonely"}
+
+    def test_propose_plan_emits_steps(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
+        DatabaseManager(db_path).create_entities(
+            "proj", [{"name": "RandomThing", "entityType": "task", "observations": ["o"]}]
+        )
+
+        cli._cmd_audit(
+            cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=True)
+        )
+
+        payload = json.loads(capsys.readouterr().out)
+        assert "bulk_rename_entity" in [s["tool"] for s in payload["steps"]]
 
     def test_parser_requires_a_scope(self) -> None:
         parser = cli._build_parser()

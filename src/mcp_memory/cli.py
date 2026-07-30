@@ -280,16 +280,20 @@ def _cmd_migrate_db(args: argparse.Namespace) -> None:
 
 
 def _cmd_audit(args: argparse.Namespace) -> None:
-    """Emit the read-only structural-hygiene report as one JSON blob on stdout."""
-    from .audit import audit_graph
+    """Emit the read-only structural-hygiene report, or a proposed fix plan, as JSON on stdout."""
+    from .audit import audit_graph, propose_plan
     from .database import DatabaseManager
 
     db = DatabaseManager(get_db_path())
     try:
         report = audit_graph(db, None if args.all_projects else args.project)
+        plan = propose_plan(db, report) if args.propose_plan else None
     finally:
         db.close()
-    print(json.dumps(report, indent=2))
+    if plan is not None:
+        print(json.dumps({"steps": plan}, indent=2))
+    else:
+        print(json.dumps(report, indent=2))
 
 
 def _cmd_eval(args: argparse.Namespace) -> None:
@@ -463,6 +467,11 @@ def _build_parser() -> argparse.ArgumentParser:
     scope = audit.add_mutually_exclusive_group(required=True)
     scope.add_argument("--project", help="Audit a single project scope")
     scope.add_argument("--all-projects", action="store_true", help="Audit every project scope")
+    audit.add_argument(
+        "--propose-plan",
+        action="store_true",
+        help="Emit a structured plan of tool calls to fix findings, instead of the raw report",
+    )
 
     evaluate_cmd = sub.add_parser(
         "eval",

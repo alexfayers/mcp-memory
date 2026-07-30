@@ -9,12 +9,15 @@ only finds the violations. Never mutates the graph.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from .models import STRUCTURAL_ENTITY_TYPES
 
 if TYPE_CHECKING:
     from .database import DatabaseManager
+    from .models import Observation
+
+Finding = dict[str, object]
 
 # A well-formed entity name starts with one of these type prefixes; anything else
 # is a legacy unprefixed entity (create_entities rejects new ones).
@@ -39,6 +42,9 @@ _OBS_CEILINGS = {
 # A resolved task holds only an outcome summary (SKILL.md section 3: 0-3 observations).
 _RESOLVED_TASK_CEILING = 3
 
+# Case-sensitive markers of an outcome/decision observation, always kept when trimming.
+_OUTCOME_KEYWORDS = ("Decided:", "Resolved:", "RESOLVED")
+
 # vote_score at or below which an entity is surfaced as a rot-review prompt (SKILL.md
 # section 5). Section 5 gives no literal number, only "strongly negative" and a reference
 # to the dream/GC saturation floor of -10 (database.py _GC_DOWNVOTE_FLOOR); -5 is well past
@@ -46,7 +52,8 @@ _RESOLVED_TASK_CEILING = 3
 _NEGATIVE_VOTE_THRESHOLD = -5
 
 _ENTITY_SQL = (
-    "SELECT e.name, et.name AS entity_type, e.status, e.vote_score, p.name AS project, "
+    "SELECT e.id AS entity_id, e.name, et.name AS entity_type, e.status, e.vote_score, "
+    "p.name AS project, "
     "(SELECT COUNT(*) FROM observations o WHERE o.entity_id = e.id) AS obs_count, "
     "(SELECT COUNT(*) FROM relations r "
     "JOIN entities se ON r.source_id = se.id "
@@ -124,7 +131,15 @@ def audit_graph(db: DatabaseManager, project: str | None = None) -> dict[str, ob
 
         ceiling = _ceiling_for(entity_type, row["status"])
         if ceiling is not None and row["obs_count"] > ceiling:
-            oversized.append({**ref, "count": row["obs_count"], "threshold": ceiling})
+            oversized.append(
+                {
+                    **ref,
+                    "count": row["obs_count"],
+                    "threshold": ceiling,
+                    "status": row["status"],
+                    "entity_id": row["entity_id"],
+                }
+            )
 
         if row["vote_score"] <= _NEGATIVE_VOTE_THRESHOLD:
             negative_vote_entities.append({**ref, "vote_score": row["vote_score"]})
@@ -161,3 +176,240 @@ def audit_graph(db: DatabaseManager, project: str | None = None) -> dict[str, ob
         "star_graph_tasks": star_graph_tasks,
         "negative_vote_entities": negative_vote_entities,
     }
+
+
+def _keep_hashes(observations: list[Observation], ceiling: int) -> list[str]:
+    """Deterministically pick which observations to keep when trimming to the ceiling."""
+    keep = {
+        o.content_hash
+        for o in observations
+        if any(keyword in o.content for keyword in _OUTCOME_KEYWORDS)
+    }
+    top = min(observations, key=lambda o: (-o.vote_score, o.content_hash))
+    keep.add(top.content_hash)
+
+    ranked = sorted(observations, key=lambda o: (-o.vote_score, o.content_hash))
+    ordered = [o.content_hash for o in ranked if o.content_hash in keep]
+    return ordered[:ceiling] if len(ordered) > ceiling else ordered
+
+
+def _outcome_obs_count(observations: list[Observation]) -> int:
+    """Count observations that carry an outcome/decision marker."""
+    return sum(
+        1 for o in observations if any(keyword in o.content for keyword in _OUTCOME_KEYWORDS)
+    )
+
+
+def _implements_step(edge: Finding, reason: str) -> dict[str, object]:
+    """A needs-review step that relinks a task straight-to-project edge to a feature."""
+    return {
+        "tool": "create_relations",
+        "arguments": {
+            "project": edge["project"],
+            "relations": [
+                {"source": edge["task"], "relationType": "implements", "target": "<FEATURE_TBD>"}
+            ],
+        },
+        "reason": reason,
+        "needs_review": True,
+    }
+
+
+def _findings(report: dict[str, object], key: str) -> list[Finding]:
+    """Cast a report category to its list-of-findings type for the plan builder."""
+    return cast("list[Finding]", report[key])
+
+
+def _is_subsumed(dropped: Observation, kept: list[Observation]) -> bool:
+    """Whether a dropped observation is a near-duplicate of some kept observation.
+
+    Case-insensitive substring containment either way - cheap and, per the user's rule
+    that trim must never delete a distinct fact, deliberately conservative: anything not
+    caught here forces needs_review rather than risking a silent loss.
+    """
+    dropped_text = dropped.content.casefold()
+    return any(
+        dropped_text in k.content.casefold() or k.content.casefold() in dropped_text for k in kept
+    )
+
+
+def _trim_step(db: DatabaseManager, entity: Finding) -> dict[str, object]:
+    """A trim step for one oversized entity - auto-applied only if every dropped
+    observation is a near-duplicate of a kept one, else flagged for review."""
+    ceiling = (
+        _ceiling_for(cast("str", entity["entity_type"]), cast("str | None", entity["status"]))
+        or _RESOLVED_TASK_CEILING
+    )
+    observations = db._get_observations_full(cast("int", entity["entity_id"]))
+    keep_hashes = _keep_hashes(observations, ceiling)
+    kept = [o for o in observations if o.content_hash in keep_hashes]
+    dropped = [o for o in observations if o.content_hash not in keep_hashes]
+    needs_review = not all(_is_subsumed(o, kept) for o in dropped)
+    return {
+        "tool": "trim_observations_to_outcome",
+        "arguments": {
+            "project": entity["project"],
+            "name": entity["name"],
+            "keep_hashes": keep_hashes,
+        },
+        "reason": (
+            f"{entity['entity_type']} '{entity['name']}' has {entity['count']} "
+            f"observations (ceiling {ceiling})"
+            + (
+                "; some dropped observations are not near-duplicates of a kept one - review "
+                "before applying"
+                if needs_review
+                else ""
+            )
+        ),
+        "needs_review": needs_review,
+    }
+
+
+def _split_step(entity: Finding, ceiling: int, outcome_count: int) -> dict[str, object]:
+    """An advisory step: the entity bundles multiple distinct outcomes; split it, don't trim."""
+    return {
+        "action": "consider_split",
+        "entity": entity["name"],
+        "project": entity["project"],
+        "reason": (
+            f"{entity['entity_type']} '{entity['name']}' has {outcome_count} distinct outcome "
+            f"observations (ceiling {ceiling}); trimming would discard real outcomes. Consider "
+            f"splitting into separate single-scope entities - give each new entity a relation "
+            f"(e.g. implements to its feature) or create_entities will reject it."
+        ),
+        "needs_review": True,
+    }
+
+
+def _review_step(entity: Finding) -> dict[str, object]:
+    """An advisory step for a non-task oversized entity.
+
+    project/feature/pattern/knowledge/user-preferences entities hold ongoing documentation,
+    not a one-time outcome, so the Decided:/Resolved: keyword trim that works for a resolved
+    task has nothing to anchor on and would discard real, current facts. Leave curation to a
+    human/LLM instead of trimming blindly.
+    """
+    return {
+        "action": "review_oversized",
+        "entity": entity["name"],
+        "project": entity["project"],
+        "reason": (
+            f"{entity['entity_type']} '{entity['name']}' has {entity['count']} observations "
+            f"(ceiling {entity['threshold']}); this type holds ongoing documentation rather "
+            "than a one-time outcome, so it cannot be trimmed safely by outcome keyword. "
+            "Manually curate down to the ceiling (demote or merge stale observations, or "
+            "split into a new single-scope entity with its own relation)."
+        ),
+        "needs_review": True,
+    }
+
+
+def _oversized_step(db: DatabaseManager, entity: Finding) -> dict[str, object]:
+    """Propose a split for a resolved task bundling multiple outcomes, else a deterministic
+    trim - or, for non-task types, an advisory review step (see _review_step)."""
+    entity_type = cast("str", entity["entity_type"])
+    if entity_type != "task":
+        return _review_step(entity)
+    ceiling = (
+        _ceiling_for(entity_type, cast("str | None", entity["status"])) or _RESOLVED_TASK_CEILING
+    )
+    observations = db._get_observations_full(cast("int", entity["entity_id"]))
+    outcome_count = _outcome_obs_count(observations)
+    if outcome_count > ceiling:
+        return _split_step(entity, ceiling, outcome_count)
+    return _trim_step(db, entity)
+
+
+def propose_plan(db: DatabaseManager, report: dict[str, object]) -> list[dict[str, object]]:
+    """Turn an audit report into a structured, deterministic list of fix-it tool calls."""
+    steps: list[dict[str, object]] = []
+
+    steps.extend(_oversized_step(db, e) for e in _findings(report, "oversized"))
+
+    steps.extend(
+        {
+            "tool": "bulk_rename_entity",
+            "arguments": {
+                "project": e["project"],
+                "old_name": e["name"],
+                "new_name": f"{e['entity_type']}/{e['name']}",
+            },
+            "reason": f"name '{e['name']}' lacks a standard type prefix",
+            "needs_review": False,
+        }
+        for e in _findings(report, "unprefixed")
+    )
+
+    steps.extend(
+        {
+            "tool": "delete_project",
+            "arguments": {"project": scope},
+            "reason": "project scope has 0 entities",
+            "needs_review": True,
+        }
+        for scope in cast("list[str]", report["ghost_scopes"])
+    )
+
+    steps.extend(
+        {
+            "tool": "delete_entity",
+            "arguments": {"project": e["project"], "name": e["name"]},
+            "reason": f"vote_score {e['vote_score']} below threshold",
+            "needs_review": True,
+        }
+        for e in _findings(report, "negative_vote_entities")
+    )
+
+    steps.extend(
+        {
+            "tool": "create_relations",
+            "arguments": {
+                "project": e["project"],
+                "relations": [
+                    {
+                        "source": e["name"],
+                        "relationType": "<RELATION_TBD>",
+                        "target": "<TARGET_TBD>",
+                    }
+                ],
+            },
+            "reason": "entity has no relations; link it to a feature/parent",
+            "needs_review": True,
+        }
+        for e in _findings(report, "orphans")
+    )
+
+    steps.extend(
+        {
+            "tool": "delete_entity",
+            "arguments": {"project": e["project"], "name": e["name"]},
+            "reason": (
+                f"'{e['name']}' uses the reserved project type but is not the repo root; "
+                "recreate it as a task/feature/pattern with the right type and a relation"
+            ),
+            "needs_review": True,
+        }
+        for e in _findings(report, "misused_project_type")
+    )
+
+    steps.extend(
+        _implements_step(
+            edge,
+            f"task '{edge['task']}' belongs-to a project; replace with an implements edge to "
+            "the feature it modifies, then delete the belongs-to edge",
+        )
+        for edge in _findings(report, "relation_violations")
+    )
+
+    steps.extend(
+        _implements_step(
+            edge,
+            f"task '{edge['task']}' links straight to a project via "
+            f"'{edge['relation_type']}'; prefer an implements edge to a feature",
+        )
+        for edge in _findings(report, "star_graph_tasks")
+        if edge["relation_type"] != "belongs-to"
+    )
+
+    return steps

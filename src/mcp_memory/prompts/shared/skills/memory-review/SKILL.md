@@ -18,6 +18,8 @@ Work through this checklist to audit and clean up the memory graph. The `/visual
  "star_graph_tasks": [...], "negative_vote_entities": [...]}
 ```
 
+Add `--propose-plan` to emit, instead of the raw report, a `{"steps": [...]}` list of concrete fix-it tool calls (deterministic ones like `bulk_rename_entity` with `needs_review: false`, and judgement-required ones - orphan relinking, deletes, and `consider_split` advisories - with `needs_review: true`). A `trim_observations_to_outcome` step carries `needs_review: false` only when every observation it would drop is a near-duplicate of one being kept - otherwise it carries `needs_review: true`, since the trim is a hard delete with no undo. Treat it as a proposed worklist: execute the `needs_review: false` steps as-is and apply judgement to the rest.
+
 This replaces the manual enumeration in the sub-checks below - the audit *finds* the violations deterministically so you do not have to eyeball the graph for them. It does **not** decide fixes: near-duplicate/contradiction detection, what is reusable enough for a `pattern/`, memory-vs-rule-file redundancy, and every merge/delete/rename/relink decision remain your judgement. Use the audit as the worklist, then apply the judgement each section describes.
 
 **Read the graph via the read-only memory MCP tools** (`read_graph`, `get_entity_with_relations`), not curl. The "MEMORY UPDATE REQUIRED" gate (in mcp-memory's own hook plugin, `hooks/plugin.py`, NOT cline-hooks) never hard-blocks subagents - it applies to the main agent loop only - so auditors run freely regardless of agent type. (Reading via curl is fine on the MAIN thread too, where you can write to satisfy the gate.)
@@ -44,12 +46,12 @@ The audit's `orphans`, `misused_project_type`, `unprefixed`, and `ghost_scopes` 
 
 **Duplicate entities** - same concept stored with and without prefix (e.g. `MyProject` and `project/MyProject`) - are a judgement call the audit does not make: cross-reference the `unprefixed` list against prefixed names in the same scope to spot them.
 
-Fix (your judgement): rename with proper prefix (delete + recreate with relations), link orphans, or delete if stale. For a misused `project` entity, migrate its content to the correct entity type with a relation (or delete if a `task/`/`feature/` already covers it), then delete the rogue `project` entity.
+Fix (your judgement): rename with proper prefix using `bulk_rename_entity` (an in-place rename that preserves observations and relations - no delete+recreate needed), link orphans, or delete if stale. For a misused `project` entity, migrate its content to the correct entity type with a relation (a same-scope rename is `bulk_rename_entity`, while a cross-scope move is `move_entity_cross_scope`, which drops and returns the entity's relations for you to recreate in the target scope), or delete if a `task/`/`feature/` already covers it, then delete the rogue `project` entity.
 
 ## 2. Consolidate duplicates
 
 Look for:
-- Same entity in multiple project scopes (e.g. `user-preferences/` in a project scope that belongs in `global`)
+- Same entity in multiple project scopes (e.g. `user-preferences/` in a project scope that belongs in `global`) - to relocate an entity to its correct scope, use `move_entity_cross_scope(source_project, target_project, name)` rather than hand-recreating it; because relations cannot span scopes it returns the dropped relations (`droppedRelations`) for you to recreate in the target scope
 - Unprefixed duplicates of prefixed entities within one project - use `merge_entities(project, source=unprefixed, target=prefixed)` to fold the unprefixed copy into the canonical one in a single reversible step
 - `user-preferences` entities scattered across project scopes - extract useful observations into the main global preferences, then delete the project-scoped copy
 - **Near-duplicate observations** within the same entity (same fact phrased two ways) - keep the more precise one
@@ -59,7 +61,7 @@ Look for:
 
 Project and task entities accumulate session-level detail over time. Trim them:
 - **`project/` entities** should contain only current-state facts (tooling, paths, config, active TODOs) - not commit SHAs, resolved work detail, or session logs
-- **Resolved `task/` entities** should be 1-3 observations max (outcome summary) - not a play-by-play of the implementation. If a feature entity captures the result, the task can have zero observations.
+- **Resolved `task/` entities** should be 1-3 observations max (outcome summary) - not a play-by-play of the implementation. If a feature entity captures the result, the task can have zero observations. Use `trim_observations_to_outcome(project, name, keep_hashes)` to trim an oversized resolved entity down to the kept observations in one call rather than issuing individual `delete_observations`.
 - **`feature/` entities** should describe the current state of the feature, not its development history
 - **`user-preferences/` entities** should contain only preferences NOT already encoded in steering files/skills (which are always loaded). Observations duplicating rule file content are pure waste.
 - Move reusable learnings to `pattern/` entities in global scope

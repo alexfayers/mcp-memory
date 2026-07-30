@@ -385,6 +385,32 @@ class TestListProjects:
         assert db.list_projects() == []
 
 
+class TestSetEntityStatusTool:
+    def test_bloat_warning_when_resolved_over_ceiling(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c", "d"]}]
+        )
+        result = server.set_entity_status("proj", "e1", "resolved")
+        assert "bloatWarning" in result
+
+    def test_no_bloat_warning_at_or_below_ceiling(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
+        )
+        result = server.set_entity_status("proj", "e1", "resolved")
+        assert "bloatWarning" not in result
+
+    def test_no_bloat_warning_for_non_resolved_status(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c", "d"]}]
+        )
+        result = server.set_entity_status("proj", "e1", "in-progress")
+        assert "bloatWarning" not in result
+
+    def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
+        assert "error" in server.set_entity_status("proj", "nope", "resolved")
+
+
 class TestVoteEntityTool:
     def test_valid_vote_returns_new_score(self, server_db: DatabaseManager) -> None:
         server_db.create_entities(
@@ -486,6 +512,79 @@ class TestDeleteObservationsTool:
         )
         assert result["count"] == 1
         assert obs_contents(server_db.get_entity("proj", "e1")) == ["b"]
+
+
+class TestTrimObservationsToOutcomeTool:
+    def test_trim_returns_deleted_count(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}]
+        )
+        result = server.trim_observations_to_outcome("proj", "e1", [_hash_observation("a")])
+        assert result == {"message": "Trimmed 2 observation(s) from 'e1'.", "deleted": 2}
+        assert obs_contents(server_db.get_entity("proj", "e1")) == ["a"]
+
+    def test_empty_keep_hashes_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}]
+        )
+        assert "error" in server.trim_observations_to_outcome("proj", "e1", [])
+
+    def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
+        assert "error" in server.trim_observations_to_outcome("proj", "nope", ["deadbeef"])
+
+
+class TestBulkRenameEntityTool:
+    def test_rename_returns_message(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj", [{"name": "a", "entityType": "task", "observations": ["x"]}]
+        )
+        result = server.bulk_rename_entity("proj", "a", "a2")
+        assert "message" in result
+        assert server_db.entity_exists_in_project("a2", "proj")
+
+    def test_collision_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "task", "observations": ["y"]},
+            ],
+        )
+        assert "error" in server.bulk_rename_entity("proj", "a", "b")
+
+    def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
+        assert "error" in server.bulk_rename_entity("proj", "missing", "new")
+
+
+class TestMoveEntityCrossScopeTool:
+    def test_move_returns_dropped_relations(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "src",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        server_db.create_relations(
+            "src", [Relation(source="a", target="b", relation_type="belongs-to")]
+        )
+        result = server.move_entity_cross_scope("src", "dst", "a")
+        assert result["droppedRelations"] == [
+            {"source": "a", "target": "b", "relation_type": "belongs-to"}
+        ]
+        assert server_db.entity_exists_in_project("a", "dst")
+
+    def test_target_collision_returns_error(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "src", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
+        )
+        server_db.create_entities(
+            "dst", [{"name": "e1", "entityType": "task", "observations": ["y"]}]
+        )
+        assert "error" in server.move_entity_cross_scope("src", "dst", "e1")
+
+    def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
+        assert "error" in server.move_entity_cross_scope("src", "dst", "missing")
 
 
 class TestSearchNodesObservationShape:

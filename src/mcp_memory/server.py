@@ -65,6 +65,10 @@ VALID_ENTITY_TYPES = frozenset(
     }
 )
 
+# Mirrors audit._RESOLVED_TASK_CEILING and the memory-review SKILL.md resolved-task
+# size target (1-3 obs).
+_RESOLVED_OBS_CEILING = 3
+
 # Tool descriptions
 _MAX_OBSERVATION_CHARS_DOC = (
     " By default each entity's observations are trimmed to a character budget "
@@ -135,6 +139,24 @@ DELETE_OBSERVATIONS_DESC = (
     "Returns the count of deleted observations. Throws if the entity does not exist. "
     "For an observation that is stale but not wrong enough to remove, prefer vote_observation "
     "(downvote to sink it) over deletion."
+)
+TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
+    "Delete all observations on an entity except those whose content_hash is in keep_hashes. "
+    "Use this to trim an oversized resolved entity down to its outcome summary deterministically. "
+    "keep_hashes must be non-empty (an entity must retain at least its outcome observation). "
+    "Returns the number of observations deleted."
+)
+BULK_RENAME_ENTITY_DESC = (
+    "Rename a single entity in place within a project scope. "
+    "All relations and observations are preserved (relations key on entity id, not name). "
+    "Fails if new_name already exists in the scope, or would collide across the global/project "
+    "name-uniqueness boundary."
+)
+MOVE_ENTITY_CROSS_SCOPE_DESC = (
+    "Move one entity from one project scope to another. "
+    "Because relations cannot span scopes, ALL of the entity's relations are dropped and returned "
+    "(as droppedRelations) so the caller can recreate the appropriate ones in the target scope. "
+    "Fails if an entity with the same name already exists in the target scope."
 )
 SET_ENTITY_STATUS_DESC = (
     "Set or clear the status of an entity. "
@@ -760,18 +782,72 @@ def delete_observations(
         return {"error": str(e)}
 
 
+@mcp.tool(description=TRIM_OBSERVATIONS_TO_OUTCOME_DESC)
+@_track
+def trim_observations_to_outcome(
+    project: str, name: str, keep_hashes: list[str]
+) -> dict[str, object]:
+    """Delete all observations on an entity except those in keep_hashes."""
+    try:
+        db = _get_db()
+        deleted = db.trim_observations_to_outcome(project, name, keep_hashes)
+        return {"message": f"Trimmed {deleted} observation(s) from '{name}'.", "deleted": deleted}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=BULK_RENAME_ENTITY_DESC)
+@_track
+def bulk_rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
+    """Rename a single entity in place, preserving its relations and observations."""
+    try:
+        db = _get_db()
+        db.rename_entity(project, old_name, new_name)
+        return {"message": f"Renamed '{old_name}' to '{new_name}' in project '{project}'."}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=MOVE_ENTITY_CROSS_SCOPE_DESC)
+@_track
+def move_entity_cross_scope(
+    source_project: str, target_project: str, name: str
+) -> dict[str, object]:
+    """Move an entity to another scope, dropping and returning its now-cross-scope relations."""
+    try:
+        db = _get_db()
+        dropped = db.move_entity_cross_scope(source_project, target_project, name)
+        return {
+            "message": f"Moved '{name}' from '{source_project}' to '{target_project}'.",
+            "droppedRelations": dropped,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @mcp.tool(description=SET_ENTITY_STATUS_DESC)
 @_track
 def set_entity_status(
     project: str,
     name: str,
     status: str | None,
-) -> dict[str, str]:
+) -> dict[str, object]:
     """Set or clear the status of an entity."""
     try:
         db = _get_db()
-        db.set_entity_status(project, name, status)  # type: ignore[arg-type]
-        return {"message": f"Status of '{name}' set to {status!r}."}
+        count = db.set_entity_status(project, name, status)  # type: ignore[arg-type]
+        result: dict[str, object] = {"message": f"Status of '{name}' set to {status!r}."}
+        if status == "resolved" and count > _RESOLVED_OBS_CEILING:
+            result["bloatWarning"] = (
+                f"Entity has {count} observations; resolved entities should be trimmed to "
+                f"{_RESOLVED_OBS_CEILING} or fewer (outcome summary only). "
+                f"Use trim_observations_to_outcome to trim. If the observations cover several "
+                f"genuinely distinct outcomes or scopes, prefer splitting them into separate "
+                f"single-scope entities instead of trimming away real content - and give each "
+                f"new entity a relation (e.g. implements to its feature) or create_entities will "
+                f"reject it."
+            )
+        return result
     except Exception as e:
         return {"error": str(e)}
 

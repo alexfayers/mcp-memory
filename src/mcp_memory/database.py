@@ -300,6 +300,70 @@ class DatabaseManager:
                 self._refresh_fts_for_entity(entity_id, delete=False)
         return len(ids)
 
+    def rename_entity(self, project: str, old_name: str, new_name: str) -> None:
+        """Rename an entity in place, preserving its relations and observations."""
+        project_id = self._get_or_create_project_id(project)
+        entity_id = self._get_entity_id(old_name, project_id)
+        if entity_id is None:
+            raise ValueError(f"Entity '{old_name}' not found in project '{project}'")
+
+        if self._get_entity_id(new_name, project_id) is not None:
+            raise ValueError(f"Entity '{new_name}' already exists in project '{project}'")
+
+        if project == "global":
+            conflict = self.entity_exists_outside_project(new_name, "global")
+            if conflict:
+                raise ValueError(f"Entity '{new_name}' already exists in project '{conflict}'")
+        elif self.entity_exists_in_project(new_name, "global"):
+            raise ValueError(f"Entity '{new_name}' already exists in global scope")
+
+        with self._db:
+            self._refresh_fts_for_entity(entity_id, delete=True)
+            self._db.execute("UPDATE entities SET name = ? WHERE id = ?", (new_name, entity_id))
+            self._refresh_fts_for_entity(entity_id, delete=False)
+
+    def move_entity_cross_scope(
+        self, source_project: str, target_project: str, name: str
+    ) -> list[dict[str, str]]:
+        """Move an entity to another scope, dropping and returning its cross-scope relations."""
+        source_id = self._get_or_create_project_id(source_project)
+        target_id = self._get_or_create_project_id(target_project)
+        entity_id = self._get_entity_id(name, source_id)
+        if entity_id is None:
+            raise ValueError(f"Entity '{name}' not found in project '{source_project}'")
+
+        if self._get_entity_id(name, target_id) is not None:
+            raise ValueError(f"Entity '{name}' already exists in project '{target_project}'")
+
+        with self._db:
+            rows = self._db.execute(
+                "SELECT e_src.name AS source, e_tgt.name AS target, rt.name AS relation_type "
+                "FROM relations r "
+                "JOIN entities e_src ON r.source_id = e_src.id "
+                "JOIN entities e_tgt ON r.target_id = e_tgt.id "
+                "JOIN relation_types rt ON r.relation_type_id = rt.id "
+                "WHERE r.source_id = ? OR r.target_id = ?",
+                (entity_id, entity_id),
+            ).fetchall()
+            dropped = [
+                {
+                    "source": row["source"],
+                    "target": row["target"],
+                    "relation_type": row["relation_type"],
+                }
+                for row in rows
+            ]
+            self._db.execute(
+                "DELETE FROM relations WHERE source_id = ? OR target_id = ?", (entity_id, entity_id)
+            )
+            self._refresh_fts_for_entity(entity_id, delete=True)
+            self._db.execute(
+                "UPDATE entities SET project_id = ? WHERE id = ?", (target_id, entity_id)
+            )
+            self._refresh_fts_for_entity(entity_id, delete=False)
+
+        return dropped
+
     def _refresh_fts_for_entity(self, entity_id: int, delete: bool) -> None:
         """Sync the FTS row for an entity after a project change (delete old, insert new)."""
         if delete:
@@ -605,8 +669,30 @@ class DatabaseManager:
 
         return count
 
-    def set_entity_status(self, project: str, name: str, status: EntityStatus | None) -> None:
-        """Set or clear the status of an entity."""
+    def trim_observations_to_outcome(
+        self, project: str, entity_name: str, keep_hashes: list[str]
+    ) -> int:
+        """Delete all observations on an entity except those with a content_hash in keep_hashes."""
+        if not keep_hashes:
+            raise ValueError("Provide at least one hash in keep_hashes")
+
+        project_id = self._get_or_create_project_id(project)
+        entity_id = self._get_entity_id(entity_name, project_id)
+        if entity_id is None:
+            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+
+        placeholders = ",".join("?" for _ in keep_hashes)
+        with self._db:
+            cursor = self._db.execute(
+                "DELETE FROM observations WHERE entity_id = ? "
+                f"AND content_hash NOT IN ({placeholders})",
+                (entity_id, *keep_hashes),
+            )
+
+        return cursor.rowcount
+
+    def set_entity_status(self, project: str, name: str, status: EntityStatus | None) -> int:
+        """Set or clear the status of an entity and return its observation count."""
         if status is not None and status not in VALID_STATUSES:
             raise ValueError(f"Invalid status '{status}'. Must be one of: {VALID_STATUSES}")
 
@@ -617,6 +703,10 @@ class DatabaseManager:
 
         self._db.execute("UPDATE entities SET status = ? WHERE id = ?", (status, entity_id))
         self._db.commit()
+        row = self._db.execute(
+            "SELECT COUNT(*) AS n FROM observations WHERE entity_id = ?", (entity_id,)
+        ).fetchone()
+        return int(row["n"])
 
     def vote_entity(self, project: str, name: str, vote: int) -> int:
         """Apply a +1/-1 usefulness vote to an entity and return its new net score.
