@@ -730,4 +730,23 @@ MIGRATIONS: list[Migration] = [
             "ON observations(entity_id, content_hash)",
         ],
     ),
+    Migration(
+        version=25,
+        statements=[
+            # Durable per-call usage telemetry: one row per @_track-wrapped MCP tool call.
+            # input_bytes/output_bytes are payload_size() byte-count PROXIES for token cost
+            # (see payload.py), NOT a real tokenizer. options is a JSON object of the
+            # explicitly-passed, allowlisted scalar options (never raw query/content text).
+            # Not in the FTS projection, so no trigger changes are required.
+            """CREATE TABLE IF NOT EXISTS tool_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool TEXT NOT NULL,
+                called_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                input_bytes INTEGER NOT NULL,
+                output_bytes INTEGER NOT NULL,
+                options TEXT NOT NULL DEFAULT '{}'
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool, called_at)",
+        ],
+    ),
 ]

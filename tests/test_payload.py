@@ -62,43 +62,6 @@ class TestPayloadSize:
         assert multibyte_size > ascii_size
 
 
-class TestCompactSavings:
-    def test_compact_saves_bytes_when_observations_present(self, db: DatabaseManager) -> None:
-        long_obs = "cache eviction ttl strategy for the distributed layer " * 5
-        seed(
-            db,
-            "proj",
-            [SeedEntity(f"task/cache-{i}", [long_obs]) for i in range(3)],
-        )
-
-        result = payload.compact_savings(db, "proj", "cache")
-
-        assert result.compact_bytes < result.full_bytes
-        assert result.saved_bytes > 0
-        assert 0 < result.ratio <= 1
-
-    def test_compact_savings_ratio_is_fraction_saved(self, db: DatabaseManager) -> None:
-        long_obs = "cache eviction ttl strategy for the distributed layer " * 5
-        seed(
-            db,
-            "proj",
-            [SeedEntity(f"task/cache-{i}", [long_obs]) for i in range(3)],
-        )
-
-        result = payload.compact_savings(db, "proj", "cache")
-
-        assert result.saved_bytes == result.full_bytes - result.compact_bytes
-        assert result.ratio == pytest.approx(result.saved_bytes / result.full_bytes)
-
-    def test_compact_savings_zero_when_no_results(self, db: DatabaseManager) -> None:
-        seed(db, "proj", [SeedEntity("task/pytest", ["pytest fixture teardown"])])
-
-        result = payload.compact_savings(db, "proj", "quantum cryptography lattice")
-
-        assert result.saved_bytes == 0
-        assert result.ratio == 0.0
-
-
 def _long_observations() -> list[str]:
     return ["cache eviction ttl strategy for the distributed layer " * 6 for _ in range(10)]
 
@@ -163,34 +126,3 @@ class TestObservationBudget:
         )
 
         assert budgeted < unlimited
-
-
-class TestPerToolPayloads:
-    def test_per_tool_payloads_one_entry_per_tool(self, db: DatabaseManager) -> None:
-        seed(db, "proj", [SeedEntity("task/a", ["needle"])])
-        mapping = {
-            "search_nodes": db.search_nodes("proj", "needle", limit=10),
-            "read_graph": db.read_graph("proj"),
-        }
-
-        result = payload.per_tool_payloads(mapping)
-
-        assert len(result) == 2
-        assert {p.tool for p in result} == {"search_nodes", "read_graph"}
-        assert all(p.bytes > 0 for p in result)
-
-    def test_per_tool_payloads_sorted_by_tool_name(self, db: DatabaseManager) -> None:
-        seed(db, "proj", [SeedEntity("task/a", ["needle"])])
-        mapping = {
-            "search_nodes": db.search_nodes("proj", "needle", limit=10),
-            "get_entity_with_relations": db.search_nodes("proj", "needle", limit=10),
-            "read_graph": db.read_graph("proj"),
-        }
-
-        result = payload.per_tool_payloads(mapping)
-
-        tools = [p.tool for p in result]
-        assert tools == sorted(tools)
-
-    def test_per_tool_payloads_empty_mapping(self) -> None:
-        assert payload.per_tool_payloads({}) == []

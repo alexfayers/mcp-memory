@@ -64,6 +64,7 @@ ignore = [
 "src/mcp_memory/visualise.py" = ["E501", "SLF001", "ARG001", "TC002", "C901", "PLR0915"]
 "src/mcp_memory/eval.py" = ["SLF001"]
 "src/mcp_memory/audit.py" = ["SLF001"]
+"src/mcp_memory/metrics.py" = ["SLF001"]
 "src/mcp_memory/cli.py" = ["T201", "S603", "S607", "PLC0415"]
 "src/mcp_memory/agent.py" = ["S603", "S607", "ASYNC109"]
 

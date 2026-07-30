@@ -23,6 +23,7 @@ _DEFAULT_DREAM_HEAVY_TIMEOUT = "600"
 _DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
 _DEFAULT_PURGE_GRACE_DAYS = "30"
 _DEFAULT_SURFACED_RETENTION_DAYS = "180"
+_DEFAULT_CALL_METRICS_RETENTION_DAYS = "90"
 _DEFAULT_MAX_OBSERVATION_CHARS = "2000"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -238,6 +239,20 @@ def get_max_observation_chars() -> int:
     observations kept) so large entities stay findable without overflowing the client's context.
     """
     return int(os.environ.get("MCP_MEMORY_MAX_OBSERVATION_CHARS", _DEFAULT_MAX_OBSERVATION_CHARS))
+
+
+def get_call_metrics_enabled() -> bool:
+    """Return whether per-call usage metrics (byte sizes + option usage) are recorded."""
+    return os.environ.get("MCP_MEMORY_CALL_METRICS_ENABLED", "true").strip().lower() in _TRUTHY
+
+
+def get_call_metrics_retention_days() -> int:
+    """Return how long tool_calls usage telemetry is retained before pruning."""
+    return int(
+        os.environ.get(
+            "MCP_MEMORY_CALL_METRICS_RETENTION_DAYS", _DEFAULT_CALL_METRICS_RETENTION_DAYS
+        )
+    )
 
 
 def get_gc_enabled() -> bool:

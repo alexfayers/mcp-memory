@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from mcp.server.fastmcp import FastMCP
 
-from . import usefulness
+from . import metrics, usefulness
 from .activity import record_tool
 from .config import get_db_path
 from .database import DatabaseManager
@@ -40,6 +40,7 @@ def _track(fn: Callable[_P, _R]) -> Callable[_P, _R]:
             arguments = dict(bound.arguments)
             record_tool(fn.__name__, arguments, result)
             usefulness.observe(_get_db(), fn.__name__, arguments, result)
+            metrics.record(_get_db(), fn.__name__, arguments, result)
         except Exception:  # noqa: S110 - instrumentation must never break a tool call
             pass
         return result

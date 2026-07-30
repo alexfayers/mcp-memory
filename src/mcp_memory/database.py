@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 import sqlite3
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import cast
 
 from .config import (
+    get_call_metrics_retention_days,
     get_gc_enabled,
     get_max_observation_chars,
     get_purge_enabled,
@@ -129,6 +131,7 @@ class DatabaseManager:
         # locked" past busy_timeout. None of this is required for the caller's own request
         # to succeed, so skip silently on contention rather than crashing the whole command.
         try:
+            self.prune_tool_calls(get_call_metrics_retention_days())
             self.prune_surfaced_entities(get_surfaced_retention_days())
             if get_gc_enabled():
                 self.gc_downvoted_orphans()
@@ -857,6 +860,26 @@ class DatabaseManager:
         with self._db:
             cursor = self._db.execute(
                 "DELETE FROM surfaced_entities WHERE surfaced_at < datetime('now', ?)",
+                (f"-{retention_days} days",),
+            )
+        return cursor.rowcount
+
+    def record_tool_call(
+        self, tool: str, input_bytes: int, output_bytes: int, options: dict[str, object]
+    ) -> None:
+        """Record one @_track-wrapped tool call's byte-size proxies and allowlisted options."""
+        with self._db:
+            self._db.execute(
+                "INSERT INTO tool_calls (tool, input_bytes, output_bytes, options) "
+                "VALUES (?, ?, ?, ?)",
+                (tool, input_bytes, output_bytes, json.dumps(options, sort_keys=True)),
+            )
+
+    def prune_tool_calls(self, retention_days: int) -> int:
+        """Delete tool-call usage telemetry older than the retention window, returning row count."""
+        with self._db:
+            cursor = self._db.execute(
+                "DELETE FROM tool_calls WHERE called_at < datetime('now', ?)",
                 (f"-{retention_days} days",),
             )
         return cursor.rowcount

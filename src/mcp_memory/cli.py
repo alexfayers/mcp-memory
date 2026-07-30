@@ -341,6 +341,21 @@ def _cmd_eval(args: argparse.Namespace) -> None:
     )
 
 
+def _cmd_metrics(args: argparse.Namespace) -> None:
+    """Emit per-tool usage metrics (byte-size proxies + option frequencies) as JSON on stdout."""
+    from dataclasses import asdict
+
+    from .database import DatabaseManager
+    from .metrics import usage_report
+
+    db = DatabaseManager(get_db_path())
+    try:
+        report = usage_report(db, since=args.since)
+    finally:
+        db.close()
+    print(json.dumps(asdict(report), indent=2))
+
+
 def _cmd_install_kiro(args: argparse.Namespace) -> None:
     """Patch Kiro agent config with memory MCP server and allowedTools."""
     port = args.port
@@ -502,6 +517,15 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    metrics_cmd = sub.add_parser(
+        "metrics", help="Report per-tool usage metrics (byte-size proxies and option frequency)."
+    )
+    metrics_cmd.add_argument(
+        "--since",
+        default=None,
+        help="Only include calls on or after this instant (relative '7d'/'2w'/'3m' or ISO date).",
+    )
+
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument("target", choices=["kiro", "claude-code"], help="Agent to install for.")
     install.add_argument(
@@ -531,6 +555,8 @@ def main() -> None:
         _cmd_audit(args)
     elif args.command == "eval":
         _cmd_eval(args)
+    elif args.command == "metrics":
+        _cmd_metrics(args)
     elif args.command == "install":
         if args.target == "claude-code":
             _cmd_install_claude_code()

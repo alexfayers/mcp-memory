@@ -42,6 +42,8 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_MEMORY_PORT` | HTTP server port | `8000` |
 | `MCP_MEMORY_READONLY_AGENTS` | Extra agent types exempt from the memory-update gate (comma-separated) | `Explore`, `Plan` |
 | `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names counted at reduced weight toward the gate (comma-separated) | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `replace_in_file`, `write_to_file` |
+| `MCP_MEMORY_CALL_METRICS_ENABLED` | Record per-call usage metrics (byte-size proxies and option usage). | `true` |
+| `MCP_MEMORY_CALL_METRICS_RETENTION_DAYS` | Days of tool-call usage telemetry retained before pruning. | `90` |
 | `MCP_MEMORY_GC_ENABLED` | On startup, soft-delete downvoted orphan entities (score at/below `-10` with no live incoming relation). Reversible; the purge below is the only permanent removal. | off |
 | `MCP_MEMORY_PURGE_ENABLED` | On startup, hard-delete soft-deleted entities older than the grace window | off |
 | `MCP_MEMORY_PURGE_GRACE_DAYS` | How long a soft-deleted entity is retained before it may be purged | `30` |
@@ -258,6 +260,12 @@ Find which project(s) contain an entity with the given name and return their reg
 Emit a read-only structural-hygiene report of the memory graph as JSON - orphans, misused `project`-type entities, unprefixed names, ghost scopes, oversized entities, `task belongs-to project` relation violations, star-graph tasks, and strongly-downvoted entities. Scope it with `--project <scope>` or `--all-projects`.
 
 Add `--propose-plan` to emit a `{"steps": [...]}` list of concrete fix-it tool calls instead of the raw report. Deterministic fixes (e.g. `bulk_rename_entity`) carry `needs_review: false`; fixes needing human/agent judgement (orphan relinking, deletes, and `consider_split` advisories for entities that bundle multiple scopes) carry `needs_review: true`. A `trim_observations_to_outcome` step only carries `needs_review: false` when every observation it would drop is a near-duplicate of one being kept - if any dropped observation looks like a distinct fact, it carries `needs_review: true` instead, since the trim is a hard delete.
+
+### `mcp-memory metrics`
+
+Emit a JSON usage report of recorded tool calls. For each tool it reports the call count, the mean and median input and output byte-size proxies for token cost, and the frequency of each allowlisted option value. The report also totals input/output bytes across all tools and derives an input/output ratio (`null` when no output bytes were recorded). Scope the window with `--since <7d/2w/3m or ISO date>`; omit it for an all-time report (the `since` field then stays `null`, echoing back that no window was applied).
+
+The byte sizes are a byte-count proxy for token cost, not a real tokenizer, so treat them as relative magnitudes rather than exact token counts.
 
 ## Development
 
