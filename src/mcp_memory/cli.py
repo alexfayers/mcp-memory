@@ -449,6 +449,32 @@ def _cmd_install_claude_code() -> None:
     )
 
 
+def _register_codex_server(codex_bin: str, name: str, url: str) -> None:
+    """Add one HTTP MCP server to Codex if it is not already registered."""
+    result = subprocess.run(
+        [codex_bin, "mcp", "get", name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        print(f"{name} MCP server already configured in Codex.")
+    else:
+        subprocess.run([codex_bin, "mcp", "add", name, "--url", url], check=False)
+        print(f"Added {name} MCP server to Codex (url: {url}).")
+
+
+def _cmd_install_codex() -> None:
+    """Register both the memory data server and the memory-agent recall server."""
+    codex_bin = shutil.which("codex")
+    if not codex_bin:
+        print("error: codex not found on PATH", file=sys.stderr)
+        sys.exit(1)
+
+    _register_codex_server(codex_bin, "memory", f"http://127.0.0.1:{_detect_service_port()}/mcp")
+    _register_codex_server(codex_bin, "memory-agent", f"http://127.0.0.1:{get_agent_port()}/mcp")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
@@ -527,7 +553,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
-    install.add_argument("target", choices=["kiro", "claude-code"], help="Agent to install for.")
+    install.add_argument(
+        "target", choices=["kiro", "claude-code", "codex"], help="Agent to install for."
+    )
     install.add_argument(
         "agent_config",
         nargs="?",
@@ -560,6 +588,8 @@ def main() -> None:
     elif args.command == "install":
         if args.target == "claude-code":
             _cmd_install_claude_code()
+        elif args.target == "codex":
+            _cmd_install_codex()
         else:
             if not args.agent_config:
                 parser.error("agent_config is required for kiro")

@@ -88,6 +88,7 @@ Automatically configure the MCP server for your agent:
 ```bash
 mcp-memory install kiro <agent-config.json>   # patches Kiro agent JSON
 mcp-memory install claude-code                # adds via `claude mcp add`
+mcp-memory install codex                      # adds via `codex mcp add`
 ```
 
 ### Running as a service

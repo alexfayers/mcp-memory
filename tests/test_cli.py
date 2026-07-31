@@ -43,6 +43,32 @@ class TestRegisterClaudeCodeServer:
         assert any("add" in c for c in calls)
 
 
+class TestRegisterCodexServer:
+    def test_adds_server_when_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kw: object) -> object:
+            calls.append(cmd)
+            return type("R", (), {"returncode": 1, "stdout": ""})()
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        cli._register_codex_server("/usr/bin/codex", "memory-agent", "http://127.0.0.1:8100/mcp")
+
+        assert any("add" in c for c in calls)
+
+    def test_skips_add_when_already_registered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kw: object) -> object:
+            calls.append(cmd)
+            return type("R", (), {"returncode": 0, "stdout": ""})()
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        cli._register_codex_server("/usr/bin/codex", "memory-agent", "http://127.0.0.1:8100/mcp")
+
+        assert not any("add" in c for c in calls)
+
+
 class TestMemorySpec:
     def test_carries_db_and_port_env(self) -> None:
         spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
