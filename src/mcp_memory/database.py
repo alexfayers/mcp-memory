@@ -9,7 +9,7 @@ import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import TypedDict, cast
 
 from .config import (
     get_call_metrics_retention_days,
@@ -30,6 +30,18 @@ from .models import (
     Relation,
 )
 from .path_resolver import match_project_for_path, normalize_path
+
+
+class GraphResult(TypedDict):
+    entity: Entity
+    relations: list[Relation]
+    relatedEntities: list[Entity]
+
+
+class NodeList(TypedDict):
+    entities: list[Entity]
+    relations: list[Relation]
+
 
 _RECENCY_HALF_LIFE_DAYS = 30.0
 _RECENCY_FLOOR = 0.1
@@ -1157,7 +1169,7 @@ class DatabaseManager:
         name: str,
         compact: bool = False,
         max_observation_chars: int | None = None,
-    ) -> dict[str, Entity | list[Relation] | list[Entity]]:
+    ) -> GraphResult:
         """Get an entity with all its relations and related entities."""
         entity = self.get_entity(
             project, name, compact=compact, max_observation_chars=max_observation_chars
@@ -1195,7 +1207,7 @@ class DatabaseManager:
         relation_type: str | None = None,
         compact: bool = False,
         max_observation_chars: int | None = None,
-    ) -> dict[str, Entity | list[Relation] | list[Entity]]:
+    ) -> GraphResult:
         """Get an entity with filtered relations and related entities."""
         entity = self.get_entity(
             project, name, compact=compact, max_observation_chars=max_observation_chars
@@ -1243,7 +1255,7 @@ class DatabaseManager:
         compact: bool = False,
         match_all: bool = False,
         max_observation_chars: int | None = None,
-    ) -> dict[str, list[Entity] | list[Relation]]:
+    ) -> NodeList:
         """Search entities using FTS5 full-text search with recency-weighted BM25 ranking.
 
         Multi-term queries match any term by default; pass match_all to require all terms.
@@ -1320,7 +1332,7 @@ class DatabaseManager:
         status: EntityStatus | None = None,
         compact: bool = False,
         max_observation_chars: int | None = None,
-    ) -> dict[str, list[Entity] | list[Relation]]:
+    ) -> NodeList:
         """Return the 10 most recently created entities and their relations."""
         project_id = self._get_or_create_project_id(project)
 

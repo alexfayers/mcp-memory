@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -80,8 +82,9 @@ class TestGetAllGraphData:
         entity = result["entities"][0]
         assert entity["name"] == "e1"
         assert entity["entity_type"] == "task"
-        assert [o["content"] for o in entity["observations"]] == ["obs1", "obs2"]
-        assert all("content_hash" in o and "vote_score" in o for o in entity["observations"])
+        observations = cast("list[dict[str, object]]", entity["observations"])
+        assert [o["content"] for o in observations] == ["obs1", "obs2"]
+        assert all("content_hash" in o and "vote_score" in o for o in observations)
         assert entity["status"] == "planned"
         assert entity["vote_score"] == 1
 
@@ -123,7 +126,8 @@ class TestGetAllGraphData:
         )
         db.vote_observation("proj", "e1", 1, content="c")
         entity = get_all_graph_data(db, "proj")["entities"][0]
-        assert [(o["content"], o["vote_score"]) for o in entity["observations"]] == [
+        observations = cast("list[dict[str, object]]", entity["observations"])
+        assert [(o["content"], o["vote_score"]) for o in observations] == [
             ("c", 1),
             ("a", 0),
             ("b", 0),
@@ -362,14 +366,17 @@ class TestApiDream:
 
 class TestApiDreamTrigger:
     @staticmethod
-    def _patch_agent(monkeypatch: pytest.MonkeyPatch, handler: object) -> dict[str, str]:
+    def _patch_agent(
+        monkeypatch: pytest.MonkeyPatch,
+        handler: Callable[[httpx.Request], httpx.Response],
+    ) -> dict[str, str]:
         seen: dict[str, str] = {}
         real_client = httpx.AsyncClient
         monkeypatch.setattr(visualise, "get_agent_url", lambda: "http://agent:8100")
 
         def wrapped(request: httpx.Request) -> httpx.Response:
             seen["url"] = str(request.url)
-            return handler(request)  # type: ignore[operator]
+            return handler(request)
 
         monkeypatch.setattr(
             visualise.httpx,
@@ -540,7 +547,7 @@ class TestSearchGraph:
         )
         graph_names = [e["name"] for e in search_graph(db, "search", "proj")["entities"]]
         core = db.search_nodes("proj", "search")
-        core_names = [e.name for e in core["entities"]]  # type: ignore[union-attr]
+        core_names = [e.name for e in core["entities"]]
         assert graph_names == core_names
         assert [e["rank"] for e in search_graph(db, "search", "proj")["entities"]] == [
             1,
@@ -882,7 +889,8 @@ class TestApiMergeObservation:
         assert resp.json() == {"name": "e1", "project": "proj", "merged": 1}
 
         entity = get_all_graph_data(db, "proj")["entities"][0]
-        hashes = {o["content_hash"] for o in entity["observations"]}
+        observations = cast("list[dict[str, object]]", entity["observations"])
+        hashes = {o["content_hash"] for o in observations}
         assert _hash_observation("src") not in hashes
         assert _hash_observation("dst") in hashes
 

@@ -23,6 +23,8 @@ from . import SeedEntity, rank_of, seed
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from mcp_memory.recall_status import RecallRecord
+
 
 @pytest.fixture
 def db(tmp_path: Path) -> DatabaseManager:
@@ -193,7 +195,7 @@ class TestRecallVsSearchCostTradeoff:
         raw_bytes = payload_size(search_payload)
 
         distilled = "Rollback: revert deploy, run runbook step 3."
-        record = {
+        record: RecallRecord = {
             "ts": 0.0,
             "query": "deployment rollback runbook",
             "ok": True,

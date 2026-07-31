@@ -24,6 +24,8 @@ from typing import TypedDict
 
 from .config import get_data_dir
 
+__all__ = ["time"]
+
 _SCHEMA = 1
 _MAX_RECENT = 20
 _MAX_QUERY_CHARS = 80

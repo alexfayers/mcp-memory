@@ -12,6 +12,8 @@ from mcp_memory.database import DatabaseManager
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from mcp_memory.models import Entity, Relation
+
 
 @pytest.fixture
 def db(tmp_path: Path) -> DatabaseManager:
@@ -42,12 +44,12 @@ class TestObserveSurfacing:
         _seed(db, "alpha", "task/a", "shared")
         _seed(db, "beta", "task/b", "shared")
         flat = db.search_nodes(None, "shared")
-        grouped: dict[str, object] = {"results": {}, "relations": flat["relations"]}
+        results: dict[str, dict[str, list[Entity | Relation]]] = {}
         for entity in flat["entities"]:
-            group = grouped["results"].setdefault(  # type: ignore[union-attr]
-                entity.project_name, {"entities": [], "relations": []}
-            )
+            assert entity.project_name is not None
+            group = results.setdefault(entity.project_name, {"entities": [], "relations": []})
             group["entities"].append(entity)
+        grouped = {"results": results, "relations": flat["relations"]}
 
         usefulness.observe(db, "search_all_projects", {"query": "shared"}, grouped)
 

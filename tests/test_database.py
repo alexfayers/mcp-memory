@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.database import DatabaseManager, _budget_observations, _hash_observation
+from mcp_memory.database import (
+    DatabaseManager,
+    GraphResult,
+    _budget_observations,
+    _hash_observation,
+)
 from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
 from mcp_memory.models import Entity, Observation, Relation
 from mcp_memory.path_resolver import normalize_path
@@ -2257,7 +2262,7 @@ def _seed_primary_and_related(db: DatabaseManager) -> None:
     db.create_relations("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
 
 
-def _related(result: dict[str, object]) -> Entity:
+def _related(result: GraphResult) -> Entity:
     return next(e for e in result["relatedEntities"] if isinstance(e, Entity))
 
 

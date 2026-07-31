@@ -19,6 +19,8 @@ from typing import Any, Literal, TypedDict
 
 from .config import get_data_dir
 
+__all__ = ["time"]
+
 Kind = Literal["read", "create", "update", "delete"]
 
 _MAX_EVENTS = 200

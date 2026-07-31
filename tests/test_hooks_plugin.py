@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -164,6 +165,7 @@ class TestAutoRegister:
         (repo / ".git").mkdir(parents=True)
         result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
         assert self._db().get_project_for_path(str(repo)) == "acme"
+        assert result is not None
         assert any("acme" in note for note in result.notes)
 
     def test_pins_via_existing_sibling_mapping(self, tmp_path: Path) -> None:
@@ -179,6 +181,7 @@ class TestAutoRegister:
         (repo / ".git").mkdir(parents=True)
         result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
         assert "weird" not in self._db().list_projects()
+        assert result is not None
         assert any("set_project_paths" in note for note in result.notes)
 
     def test_no_clobber_when_already_mapped(self, tmp_path: Path) -> None:
@@ -232,7 +235,7 @@ class TestAutoRegister:
 
 
 @pytest.fixture
-def plugin() -> MemoryPlugin:
+def plugin() -> Iterator[MemoryPlugin]:
     """Create a fresh MemoryPlugin with tracker functions mocked out."""
     blocked_projects: set[str] = set()
 

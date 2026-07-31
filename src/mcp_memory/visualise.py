@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib.resources
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import httpx
 from starlette.requests import Request
@@ -18,7 +18,8 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
     from .database import DatabaseManager
-    from .models import Entity, Relation
+
+__all__ = ["httpx"]
 
 _VISUALISE_HTML = (
     importlib.resources.files("mcp_memory").joinpath("templates/visualise.html").read_text()
@@ -166,11 +167,11 @@ def search_graph(
                 for o in entity.observations
             ],
         }
-        for position, entity in enumerate(cast("list[Entity]", result["entities"]), start=1)
+        for position, entity in enumerate(result["entities"], start=1)
     ]
     relations: list[dict[str, object]] = [
         {"source": r.source, "target": r.target, "relation_type": r.relation_type}
-        for r in cast("list[Relation]", result["relations"])
+        for r in result["relations"]
     ]
 
     return {"entities": entities, "relations": relations}

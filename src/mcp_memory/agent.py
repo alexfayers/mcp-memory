@@ -50,6 +50,8 @@ from .config import (
 )
 from .database import _GC_DOWNVOTE_FLOOR
 
+__all__ = ["anyio", "dream_status", "shutil", "time"]
+
 logger = logging.getLogger("memory-agent")
 
 if TYPE_CHECKING:

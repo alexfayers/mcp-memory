@@ -13,13 +13,12 @@ import math
 import sqlite3
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from .database import _parse_date
 
 if TYPE_CHECKING:
     from .database import DatabaseManager
-    from .models import Entity
 
 # Tool name for a cross-project search, whose labelled query re-runs against all projects.
 _ALL_PROJECTS_TOOL = "search_all_projects"
@@ -173,7 +172,7 @@ def evaluate(
         result = db.search_nodes(
             labelled.project, labelled.query, limit=max(k, len(labelled.ranked))
         )
-        ranked_now = [entity.name for entity in cast("list[Entity]", result["entities"])]
+        ranked_now = [entity.name for entity in result["entities"]]
         precisions.append(precision_at_k(ranked_now, labelled.relevant, k))
         reciprocal_ranks.append(reciprocal_rank(ranked_now, labelled.relevant))
         recalls.append(recall_at_k(ranked_now, labelled.relevant, k))

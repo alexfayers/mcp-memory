@@ -227,6 +227,7 @@ class TestCostRegression:
         server.read_graph("bench")
         server.get_entity_with_relations("bench", "task/bench-0")
 
+        assert server._db is not None
         report = metrics.usage_report(server._db)
         assert report.total_calls == 3
 

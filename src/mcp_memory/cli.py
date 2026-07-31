@@ -24,6 +24,8 @@ from .config import (
 )
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
 
+__all__ = ["Path", "argparse", "subprocess"]
+
 _LAUNCHD_LABEL = "com.mcp-memory"
 _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{_LAUNCHD_LABEL}.plist"
 _SYSTEMD_UNIT = Path("/etc/systemd/system/mcp-memory.service")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -149,9 +150,9 @@ class TestOversized:
                 }
             ],
         )
-        oversized = audit_graph(db, "proj")["oversized"]
+        oversized = cast("list[dict[str, object]]", audit_graph(db, "proj")["oversized"])
         assert len(oversized) == 1
-        finding = oversized[0]  # type: ignore[index]
+        finding = oversized[0]
         assert finding["name"] == "task/big"
         assert finding["entity_type"] == "task"
         assert finding["project"] == "proj"
@@ -198,8 +199,10 @@ class TestRelationViolationsAndStarGraph:
         )
         db.create_relations("proj", [Relation("task/t", "project/proj", "belongs-to")])
         report = audit_graph(db, "proj")
-        assert [v["task"] for v in report["relation_violations"]] == ["task/t"]  # type: ignore[index,union-attr]
-        assert [v["task"] for v in report["star_graph_tasks"]] == ["task/t"]  # type: ignore[index,union-attr]
+        violations = cast("list[dict[str, object]]", report["relation_violations"])
+        stars = cast("list[dict[str, object]]", report["star_graph_tasks"])
+        assert [v["task"] for v in violations] == ["task/t"]
+        assert [v["task"] for v in stars] == ["task/t"]
 
     def test_task_to_project_via_other_relation_is_star_not_violation(
         self, db: DatabaseManager
@@ -214,7 +217,8 @@ class TestRelationViolationsAndStarGraph:
         db.create_relations("proj", [Relation("task/t", "project/proj", "relates-to")])
         report = audit_graph(db, "proj")
         assert report["relation_violations"] == []
-        assert [v["task"] for v in report["star_graph_tasks"]] == ["task/t"]  # type: ignore[index,union-attr]
+        stars = cast("list[dict[str, object]]", report["star_graph_tasks"])
+        assert [v["task"] for v in stars] == ["task/t"]
 
     def test_task_implements_feature_is_neither(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -270,8 +274,8 @@ class TestProjectScoping:
     def test_all_projects_reports_project_on_each_finding(self, db: DatabaseManager) -> None:
         db.create_entities("a", [{"name": "orphan_a", "entityType": "task", "observations": ["o"]}])
         db.create_entities("b", [{"name": "orphan_b", "entityType": "task", "observations": ["o"]}])
-        orphans = audit_graph(db, None)["orphans"]
-        by_name = {f["name"]: f["project"] for f in orphans}  # type: ignore[union-attr]
+        orphans = cast("list[dict[str, object]]", audit_graph(db, None)["orphans"])
+        by_name = {f["name"]: f["project"] for f in orphans}
         assert by_name == {"orphan_a": "a", "orphan_b": "b"}
 
 
@@ -333,7 +337,7 @@ class TestProposePlan:
     def test_unprefixed_yields_prefixed_rename(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "foo", "entityType": "task", "observations": ["o"]}])
         step = next(s for s in self._plan(db, "proj") if s["tool"] == "bulk_rename_entity")
-        assert step["arguments"] == {  # type: ignore[comparison-overlap]
+        assert step["arguments"] == {
             "project": "proj",
             "old_name": "foo",
             "new_name": "task/foo",

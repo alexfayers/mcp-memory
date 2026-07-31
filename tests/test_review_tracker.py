@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ from mcp_memory.hooks import review_tracker
 
 
 @pytest.fixture(autouse=True)
-def _sandbox_state(tmp_path: Path) -> None:
+def _sandbox_state(tmp_path: Path) -> Iterator[None]:
     """Point the tracker's state file at a temp directory."""
     with patch.object(review_tracker, "get_data_dir", return_value=tmp_path):
         yield

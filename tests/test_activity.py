@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mcp_memory import activity
-from mcp_memory.models import Entity
+from mcp_memory.database import _hash_observation
+from mcp_memory.models import Entity, Observation
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -71,7 +72,14 @@ class TestRecordAndRecent:
         activity.record_tool(
             "get_entity_with_relations",
             {"project": "p", "name": "e1"},
-            {"entity": Entity(name="e1", entity_type="task", observations=["o"]), "relations": []},
+            {
+                "entity": Entity(
+                    name="e1",
+                    entity_type="task",
+                    observations=[Observation(content="o", content_hash=_hash_observation("o"))],
+                ),
+                "relations": [],
+            },
         )
         event = activity.recent(0)[0]
         for value in event.values():

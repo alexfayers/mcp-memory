@@ -21,6 +21,8 @@ from typing import NotRequired, TypedDict, cast
 
 from .config import get_data_dir
 
+__all__ = ["time"]
+
 _SCHEMA = 3
 _OPERATION_RE = re.compile(r"\[([^/\]]+)/([^\]#]+)(?:#([0-9a-f]+))?\]")
 # A standalone "observation"/"observations"/"obs" token marks an observation-level

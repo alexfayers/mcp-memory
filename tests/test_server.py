@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,7 @@ def db(tmp_path: Path) -> DatabaseManager:
 
 
 @pytest.fixture
-def server_db(tmp_path: Path) -> DatabaseManager:
+def server_db(tmp_path: Path) -> Iterator[DatabaseManager]:
     """Point the server's module-level db singleton at a fresh database."""
     manager = DatabaseManager(tmp_path / "server.db")
     original = server._db
@@ -170,14 +171,18 @@ class TestScopeUniqueness:
     def test_rejects_project_entity_in_global_if_exists_in_project(
         self, db: DatabaseManager
     ) -> None:
-        entity = [{"name": "task/abc", "entityType": "task", "observations": ["x"]}]
+        entity: list[dict[str, object]] = [
+            {"name": "task/abc", "entityType": "task", "observations": ["x"]}
+        ]
         db.create_entities("my-proj", entity)
         assert db.entity_exists_in_project("task/abc", "my-proj")
         conflict = db.entity_exists_outside_project("task/abc", _GLOBAL_PROJECT)
         assert conflict == "my-proj"
 
     def test_allows_same_name_in_two_project_scopes(self, db: DatabaseManager) -> None:
-        entity = [{"name": "task/abc", "entityType": "task", "observations": ["x"]}]
+        entity: list[dict[str, object]] = [
+            {"name": "task/abc", "entityType": "task", "observations": ["x"]}
+        ]
         db.create_entities("proj-a", entity)
         assert db.entity_exists_outside_project("task/abc", "proj-b") == "proj-a"
         # But the check only applies to global, so proj-b should be allowed
@@ -872,7 +877,9 @@ class TestGraphToolsObservationBudget:
         )
 
     def _related(self, result: dict[str, object]) -> Entity:
-        return next(e for e in result["relatedEntities"] if isinstance(e, Entity))
+        related = result["relatedEntities"]
+        assert isinstance(related, list)
+        return next(e for e in related if isinstance(e, Entity))
 
     def test_get_entity_with_relations_compact_empties_both(
         self, server_db: DatabaseManager

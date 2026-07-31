@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import httpx
 import pytest
@@ -347,7 +347,10 @@ class TestBuildHeavyDreamCommand:
 
 class TestFetchIdleSeconds:
     @staticmethod
-    def _patch_transport(monkeypatch: pytest.MonkeyPatch, handler: object) -> None:
+    def _patch_transport(
+        monkeypatch: pytest.MonkeyPatch,
+        handler: Callable[[httpx.Request], httpx.Response],
+    ) -> None:
         real_client = httpx.AsyncClient
         monkeypatch.setattr(agent, "get_memory_url", lambda: "http://localhost:3000/mcp")
         monkeypatch.setattr(
@@ -840,7 +843,8 @@ class TestSpawnEnv:
 
     def test_isolated_settings_preapprove_memory_without_hooks(self) -> None:
         settings = agent.AGENT_SETTINGS
-        assert "mcp__memory__*" in settings["permissions"]["allow"]
+        permissions = cast("dict[str, list[str]]", settings["permissions"])
+        assert "mcp__memory__*" in permissions["allow"]
         assert "hooks" not in settings
 
 

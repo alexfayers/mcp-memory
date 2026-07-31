@@ -5,18 +5,18 @@ from __future__ import annotations
 import functools
 import inspect
 import os
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
 from mcp.server.fastmcp import FastMCP
 
 from . import metrics, usefulness
 from .activity import record_tool
 from .config import get_db_path
-from .database import DatabaseManager
+from .database import DatabaseManager, GraphResult, NodeList
 from .models import (
     STRUCTURAL_ENTITY_TYPES,
     VALID_RELATION_TYPES,
-    Entity,
     Relation,
     normalize_relation_type,
 )
@@ -279,13 +279,14 @@ register_visualise_routes(mcp, _get_db)
 # Transitional: surfaces legacy relation types that predate the canonical
 # vocabulary so the agent recreates them. Remove once all memory DBs conform
 # (tracked by task/remove-relation-type-warning).
-def _attach_relation_type_warnings(result: dict[str, Any]) -> dict[str, Any]:
+def _attach_relation_type_warnings(result: Mapping[str, object]) -> dict[str, object]:
     """Flag any relation types in a read result that fall outside the canonical vocabulary."""
-    if "error" in result:
-        return result
-    relations = result.get("relations")
+    output: dict[str, object] = dict(result)
+    if "error" in output:
+        return output
+    relations = output.get("relations")
     if not isinstance(relations, list):
-        return result
+        return output
     offenders = sorted(
         {
             rel.relation_type
@@ -294,8 +295,8 @@ def _attach_relation_type_warnings(result: dict[str, Any]) -> dict[str, Any]:
         }
     )
     if offenders:
-        result["relationTypeWarnings"] = offenders
-    return result
+        output["relationTypeWarnings"] = offenders
+    return output
 
 
 def _validate_relation_type(raw: str) -> str:
@@ -456,7 +457,7 @@ def read_graph(
     """Return the most recent entities and their relations for a project."""
     try:
         db = _get_db()
-        result: dict[str, Any] = db.read_graph(
+        result: NodeList = db.read_graph(
             project,
             status=status,  # type: ignore[arg-type]
             compact=compact,
@@ -630,7 +631,7 @@ def search_all_projects(
 
         grouped: dict[str, dict[str, list[object]]] = {}
         entity_names_by_project: dict[str, set[str]] = {}
-        for entity in cast("list[Entity]", result["entities"]):
+        for entity in result["entities"]:
             project_name = entity.project_name or "unknown"
             if project_name not in grouped:
                 grouped[project_name] = {"entities": [], "relations": []}
@@ -638,14 +639,14 @@ def search_all_projects(
             grouped[project_name]["entities"].append(entity)
             entity_names_by_project[project_name].add(entity.name)
 
-        relations = cast("list[Relation]", result["relations"])
+        relations = result["relations"]
         for relation in relations:
             for project_name, names in entity_names_by_project.items():
                 if relation.source in names or relation.target in names:
                     grouped[project_name]["relations"].append(relation)
                     break
 
-        grouped_result: dict[str, Any] = {"results": grouped, "relations": relations}
+        grouped_result: dict[str, object] = {"results": grouped, "relations": relations}
         return _attach_relation_type_warnings(grouped_result)
     except Exception as e:
         return {"error": str(e)}
@@ -736,7 +737,7 @@ def get_entity_with_relations(
     """Get an entity with all its relations and related entities."""
     try:
         db = _get_db()
-        result: dict[str, Any] = db.get_entity_with_relations(
+        result: GraphResult = db.get_entity_with_relations(
             project, name, compact=compact, max_observation_chars=max_observation_chars
         )
         return _attach_relation_type_warnings(result)
@@ -903,7 +904,7 @@ def search_related_nodes(
     """Get an entity with filtered relations and related entities."""
     try:
         db = _get_db()
-        result: dict[str, Any] = db.search_related_nodes(
+        result: GraphResult = db.search_related_nodes(
             project,
             name,
             entity_type=entityType,

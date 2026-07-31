@@ -7,10 +7,15 @@ and carries the recorded cost/latency through unchanged.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from mcp_memory.payload import payload_size
 from mcp_memory.recall_efficiency import recall_efficiency
+
+if TYPE_CHECKING:
+    from mcp_memory.recall_status import RecallRecord
 
 
 class TestRecallEfficiency:
@@ -35,7 +40,7 @@ class TestRecallEfficiency:
 
     def test_compression_ratio_on_large_graph(self) -> None:
         graph_payload = self._large_graph()
-        rec = {
+        rec: RecallRecord = {
             "ts": 0.0,
             "query": "q",
             "ok": True,
@@ -54,7 +59,7 @@ class TestRecallEfficiency:
         assert result.output_bytes == len(b"short distilled answer")
 
     def test_metrics_carried_through(self) -> None:
-        rec = {
+        rec: RecallRecord = {
             "ts": 0.0,
             "query": "q",
             "ok": True,
@@ -70,7 +75,7 @@ class TestRecallEfficiency:
         assert result.cost_usd == pytest.approx(0.0042)
 
     def test_none_metrics_preserved(self) -> None:
-        rec = {
+        rec: RecallRecord = {
             "ts": 0.0,
             "query": "q",
             "ok": True,
@@ -86,7 +91,7 @@ class TestRecallEfficiency:
         assert result.cost_usd is None
 
     def test_empty_graph_yields_zero_ratio(self) -> None:
-        rec = {
+        rec: RecallRecord = {
             "ts": 0.0,
             "query": "q",
             "ok": True,
@@ -101,7 +106,7 @@ class TestRecallEfficiency:
         assert result.ratio == result.saved_bytes / result.input_bytes
 
     def test_output_measured_as_raw_utf8_not_reserialized(self) -> None:
-        rec = {
+        rec: RecallRecord = {
             "ts": 0.0,
             "query": "q",
             "ok": True,
