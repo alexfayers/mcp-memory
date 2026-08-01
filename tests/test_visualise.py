@@ -158,6 +158,14 @@ class TestVisualisePage:
         assert "/api/dream/trigger" in resp.text
 
     @pytest.mark.anyio
+    async def test_dream_buttons_include_enable_tooltips(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "MCP_DREAM_ENABLED=true" in resp.text
+        assert "MCP_DREAM_HEAVY_ENABLED=true" in resp.text
+        assert "lightButton.disabled = !lightEnabled" in resp.text
+        assert "heavyButton.disabled = !heavyEnabled" in resp.text
+
+    @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert "applyDemotedRings" in resp.text
@@ -185,6 +193,16 @@ class TestVisualisePage:
         assert 'id="recall"' in resp.text
         assert "fetchRecall" in resp.text
         assert "/api/recall" in resp.text
+
+    @pytest.mark.anyio
+    async def test_renders_explicit_off_labels_for_dream_and_recall(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        resp = await client.get("/visualise")
+        assert '"dream \u00b7 on"' in resp.text
+        assert '"dream \u00b7 off"' in resp.text
+        assert '"recall \u00b7 on"' in resp.text
+        assert '"recall \u00b7 off"' in resp.text
 
 
 class TestApiProjects:

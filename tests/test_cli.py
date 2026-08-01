@@ -69,6 +69,79 @@ class TestRegisterCodexServer:
         assert not any("add" in c for c in calls)
 
 
+class TestRegisterCopilotServer:
+    def test_adds_memory_servers_to_empty_config(self, tmp_path: cli.Path) -> None:
+        mcp_path = tmp_path / "mcp.json"
+        cli._register_copilot_server(mcp_path, "memory", "http://localhost:8000/mcp")
+        cli._register_copilot_server(mcp_path, "memory-agent", "http://localhost:8100/mcp")
+
+        data = json.loads(mcp_path.read_text(encoding="utf-8"))
+        assert data["servers"]["memory"]["url"] == "http://localhost:8000/mcp"
+        assert data["servers"]["memory-agent"]["url"] == "http://localhost:8100/mcp"
+
+    def test_keeps_existing_jsonc_config(self, tmp_path: cli.Path) -> None:
+        mcp_path = tmp_path / "mcp.json"
+        mcp_path.write_text(
+            """
+{
+    // existing server
+    "servers": {
+        "github": {
+            "type": "http",
+            "url": "https://api.githubcopilot.com/mcp/",
+        },
+    },
+}
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        cli._register_copilot_server(mcp_path, "memory", "http://localhost:8000/mcp")
+        data = json.loads(mcp_path.read_text(encoding="utf-8"))
+
+        assert "github" in data["servers"]
+        assert data["servers"]["memory"]["url"] == "http://localhost:8000/mcp"
+
+
+class TestCopilotPathSelection:
+    def test_prefers_local_vscode_path_before_wsl_fallback(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+        monkeypatch.setenv("USERNAME", "alex")
+        monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path))
+        remote = tmp_path / ".vscode-server" / "data" / "User"
+        remote.mkdir(parents=True)
+        (remote / "mcp.json").write_text("{}\n", encoding="utf-8")
+        local = tmp_path / ".config" / "Code" / "User"
+        local.mkdir(parents=True)
+        (local / "mcp.json").write_text("{}\n", encoding="utf-8")
+        resolved = cli._default_copilot_mcp_config_path()
+        assert str(resolved) == str(remote / "mcp.json")
+
+    def test_prefers_xdg_config_home_on_linux(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path / "home"))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        xdg = tmp_path / "xdg" / "Code" / "User"
+        xdg.mkdir(parents=True)
+        (xdg / "mcp.json").write_text("{}\n", encoding="utf-8")
+
+        resolved = cli._default_copilot_mcp_config_path()
+        assert str(resolved) == str(xdg / "mcp.json")
+
+    def test_uses_macos_user_path(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path))
+        monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+        mac = tmp_path / "Library" / "Application Support" / "Code" / "User"
+        mac.mkdir(parents=True)
+        (mac / "mcp.json").write_text("{}\n", encoding="utf-8")
+
+        resolved = cli._default_copilot_mcp_config_path()
+        assert str(resolved) == str(mac / "mcp.json")
+
 class TestMemorySpec:
     def test_carries_db_and_port_env(self) -> None:
         spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))

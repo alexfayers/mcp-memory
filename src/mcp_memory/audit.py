@@ -11,13 +11,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from .models import STRUCTURAL_ENTITY_TYPES
-
 if TYPE_CHECKING:
     from .database import DatabaseManager
     from .models import Observation
 
 Finding = dict[str, object]
+_ORPHAN_EXEMPT_ENTITY_TYPES = frozenset({"project"})
 
 # A well-formed entity name starts with one of these type prefixes; anything else
 # is a legacy unprefixed entity (create_entities rejects new ones).
@@ -120,7 +119,7 @@ def audit_graph(db: DatabaseManager, project: str | None = None) -> dict[str, ob
         ref = {"name": row["name"], "entity_type": row["entity_type"], "project": row["project"]}
         entity_type = row["entity_type"]
 
-        if entity_type not in STRUCTURAL_ENTITY_TYPES and row["rel_count"] == 0:
+        if entity_type not in _ORPHAN_EXEMPT_ENTITY_TYPES and row["rel_count"] == 0:
             orphans.append(ref)
 
         if entity_type == "project" and row["name"] != f"project/{row['project']}":

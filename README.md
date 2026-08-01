@@ -89,6 +89,7 @@ Automatically configure the MCP server for your agent:
 mcp-memory install kiro <agent-config.json>   # patches Kiro agent JSON
 mcp-memory install claude-code                # adds via `claude mcp add`
 mcp-memory install codex                      # adds via `codex mcp add`
+mcp-memory install copilot                    # patches VS Code User mcp.json
 ```
 
 ### Running as a service
@@ -162,7 +163,7 @@ All tools require a `project` parameter to scope data.
 
 ### create_entities
 
-Create or update entities with observations. Overwrites all existing observations for an entity - use `add_observations` to append instead. Non-exempt entity types (not `user-preferences` or `project`) must include at least one relation. Entity names must start with their type prefix (e.g. `task/`, `feature/`), and a `project` entity must be named exactly `project/<project>` (one root per scope).
+Create or update entities with observations. Overwrites all existing observations for an entity - use `add_observations` to append instead. Non-exempt entity types (everything except `project`) must include at least one relation. Entity names must start with their type prefix (e.g. `task/`, `feature/`), and a `project` entity must be named exactly `project/<project>` (one root per scope).
 
 ### add_observations
 

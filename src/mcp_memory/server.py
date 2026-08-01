@@ -15,7 +15,6 @@ from .activity import record_tool
 from .config import get_db_path
 from .database import DatabaseManager, GraphResult, NodeList
 from .models import (
-    STRUCTURAL_ENTITY_TYPES,
     VALID_RELATION_TYPES,
     Relation,
     normalize_relation_type,
@@ -65,6 +64,7 @@ VALID_ENTITY_TYPES = frozenset(
         "knowledge",
     }
 )
+_RELATION_EXEMPT_ENTITY_TYPES = frozenset({"project"})
 
 # Mirrors audit._RESOLVED_TASK_CEILING and the memory-review SKILL.md resolved-task
 # size target (1-3 obs).
@@ -84,7 +84,7 @@ CREATE_ENTITIES_DESC = (
     "Valid entity types: project, feature, task, user-preferences, pattern, knowledge. "
     "Each entity name MUST start with its type prefix (e.g. task/<id>, feature/<area>); "
     "a 'project' entity MUST be named exactly 'project/<project>' (one root per scope). "
-    "Non-exempt entity types (everything except user-preferences and project) MUST include at "
+    "Non-exempt entity types (everything except project) MUST include at "
     "least one relation. "
     "Each entity dict must have keys: name (str), entityType (str), observations (list[str]). "
     "Optional keys: status (str), relations (list of {target, type} dicts)."
@@ -356,11 +356,11 @@ def _validate_and_extract_relations(
 
         _validate_entity_type_and_name(project, entity_type, name)
 
-        if entity_type not in STRUCTURAL_ENTITY_TYPES:
+        if entity_type not in _RELATION_EXEMPT_ENTITY_TYPES:
             if not relations_raw or not isinstance(relations_raw, list):
                 raise ValueError(
                     f"Entity type '{entity_type}' requires at least one relation. "
-                    f"Only {sorted(STRUCTURAL_ENTITY_TYPES)} are exempt."
+                    f"Only {sorted(_RELATION_EXEMPT_ENTITY_TYPES)} are exempt."
                 )
 
         if isinstance(relations_raw, list):

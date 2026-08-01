@@ -56,12 +56,18 @@ class TestValidateEntityTypes:
                 "proj", [{"name": "x", "entityType": "changelog", "observations": []}]
             )
 
-    def test_accepts_user_preferences_without_relation(self) -> None:
-        result = _validate_and_extract_relations(
-            "proj",
-            [{"name": "user-preferences/x", "entityType": "user-preferences", "observations": []}],
-        )
-        assert result == []
+    def test_user_preferences_requires_relation(self) -> None:
+        with pytest.raises(ValueError, match="requires at least one relation"):
+            _validate_and_extract_relations(
+                "proj",
+                [
+                    {
+                        "name": "user-preferences/x",
+                        "entityType": "user-preferences",
+                        "observations": [],
+                    }
+                ],
+            )
 
     def test_pattern_requires_relation(self) -> None:
         with pytest.raises(ValueError, match="requires at least one relation"):

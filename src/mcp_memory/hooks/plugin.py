@@ -168,6 +168,10 @@ def _extract_mcp_suffix(tool_name: str) -> str:
     """Extract the bare tool name from a prefixed MCP tool call."""
     if "__" in tool_name:
         return tool_name.rsplit("__", 1)[-1]
+    if tool_name.startswith("mcp_"):
+        parts = tool_name.split("_", 2)
+        if len(parts) == 3 and parts[1]:
+            return parts[2]
     return tool_name
 
 
@@ -527,9 +531,10 @@ class MemoryPlugin(HooksPlugin):
         tool_name = str(kwargs.get("tool_name", ""))
         parameters = _str_dict(kwargs.get("parameters", {}))
         is_state_write = bool(kwargs.get("is_state_write", False))
+        is_memory_write = _is_memory_write(tool_name, parameters)
         self._derive_scope_from_workspace_roots(kwargs)
 
-        if is_state_write:
+        if is_state_write or is_memory_write:
             reset(task_id)
             self._reminder.reset()
             record_write()

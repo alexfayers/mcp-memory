@@ -721,12 +721,28 @@ function renderDream(d) {
   head.classList.toggle("on", !!anyEnabled);
   head.classList.toggle("running", !!d.running);
   document.getElementById("dream-state").textContent =
-    !d.available ? "dream · unknown" : anyEnabled ? "dream · on" : "dream · off";
+    anyEnabled ? "dream · on" : "dream · off";
   document.getElementById("dream-idle").textContent =
     d.running ? `${d.running} running` : `idle ${formatDuration(d.idle_seconds)}`;
 
   const body = document.getElementById("dream-body");
   const lines = [];
+  const lightEnabled = !!(tiers.light && tiers.light.enabled);
+  const heavyEnabled = !!(tiers.heavy && tiers.heavy.enabled);
+  const lightButton = document.getElementById("dream-run-light");
+  const heavyButton = document.getElementById("dream-run-heavy");
+  lightButton.disabled = !lightEnabled;
+  heavyButton.disabled = !heavyEnabled;
+  lightButton.title = d.available
+    ? lightEnabled
+      ? "Run a light dream pass now"
+      : "Enable with MCP_DREAM_ENABLED=true and restart memory-agent"
+    : "Dream status unavailable. Start memory-agent, set MCP_DREAM_ENABLED=true, then restart memory-agent";
+  heavyButton.title = d.available
+    ? heavyEnabled
+      ? "Run a heavy dream pass now"
+      : "Enable with MCP_DREAM_HEAVY_ENABLED=true and restart memory-agent"
+    : "Dream status unavailable. Start memory-agent, set MCP_DREAM_HEAVY_ENABLED=true, then restart memory-agent";
   const tierLines = ["light", "heavy"].map(n => tierLine(n, tiers[n], d.idle_seconds)).join("");
   if (tierLines) {
     lines.push(tierLines);
@@ -801,7 +817,8 @@ setInterval(fetchDream, 5000);
 
 function renderRecall(d) {
   const head = document.getElementById("recall-head");
-  head.classList.toggle("on", d.active > 0);
+  head.classList.toggle("on", d.available && d.active > 0);
+  document.getElementById("recall-state").textContent = d.available && d.active > 0 ? "recall · on" : "recall · off";
   document.getElementById("recall-active").textContent = d.active > 0 ? `${d.active} running` : "";
   const feed = document.getElementById("recall-feed");
   const rows = (d.recent || []).slice().reverse().map(r => {  // newest first

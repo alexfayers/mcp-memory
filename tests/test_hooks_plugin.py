@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytest.importorskip("cline_hooks")
+
 from mcp_memory.config import get_db_path
 from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.plugin import (
@@ -361,7 +363,7 @@ class TestMemoryPluginMessages:
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",
-                tool_name="read_file",
+                tool_name="execute_command",
                 parameters={},
             )
         assert result is not None
@@ -398,7 +400,7 @@ class TestMemoryPluginServerDownGating:
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",
-                tool_name="read_file",
+                tool_name="execute_command",
                 parameters={},
             )
         assert result is not None
@@ -412,7 +414,7 @@ class TestMemoryPluginServerDownGating:
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",
-                tool_name="read_file",
+                tool_name="execute_command",
                 parameters={},
             )
         assert result is not None
@@ -428,7 +430,7 @@ class TestMemoryPluginServerDownGating:
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",
-                tool_name="read_file",
+                tool_name="execute_command",
                 parameters={},
             )
         assert result is None
@@ -806,6 +808,10 @@ class TestIsMemoryRead:
         assert _is_memory_read(f"mcp__memory__{name}", {})
 
     @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
+    def test_prefixed_copilot_name_is_read(self, name: str) -> None:
+        assert _is_memory_read(f"mcp_mcp-memory_{name}", {})
+
+    @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
     def test_use_mcp_tool_form_is_read(self, name: str) -> None:
         assert _is_memory_read("use_mcp_tool", {"tool_name": name})
 
@@ -874,7 +880,7 @@ class TestMemoryReadsNotGated:
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",
-                tool_name="read_file",
+                tool_name="execute_command",
                 parameters={},
             )
         assert result is not None
@@ -1039,6 +1045,40 @@ class TestMemoryReviewNudge:
                 parameters={},
                 is_state_write=True,
             )
+        mock_record.assert_called_once_with()
+
+    def test_memory_write_without_state_flag_resets_counter(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset") as mock_reset,
+            patch("mcp_memory.hooks.plugin.record_write") as mock_record,
+        ):
+            plugin = MemoryPlugin()
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="mcp__memory__create_entities",
+                parameters={"project": "global", "entities": []},
+                is_state_write=False,
+            )
+        mock_reset.assert_called_once_with("t1")
+        mock_record.assert_called_once_with()
+
+    def test_copilot_memory_write_without_state_flag_resets_counter(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset") as mock_reset,
+            patch("mcp_memory.hooks.plugin.record_write") as mock_record,
+        ):
+            plugin = MemoryPlugin()
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="mcp_mcp-memory_create_entities",
+                parameters={"project": "global", "entities": []},
+                is_state_write=False,
+            )
+        mock_reset.assert_called_once_with("t1")
         mock_record.assert_called_once_with()
 
     def test_user_prompt_emits_nudge_and_resets_when_due(self) -> None:

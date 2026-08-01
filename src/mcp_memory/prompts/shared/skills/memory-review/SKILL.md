@@ -40,7 +40,7 @@ This replaces the manual enumeration in the sub-checks below - the audit *finds*
 
 The audit's `orphans`, `misused_project_type`, `unprefixed`, and `ghost_scopes` keys enumerate these deterministically - read them instead of eyeballing the graph:
 - **Orphan entities** (`orphans`) - nodes with zero relations (these float disconnected in the graph)
-- **Misused `project` type** (`misused_project_type`) - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` and `user-preferences` are the only types exempt from the relation requirement, so a legacy work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. These are always a mistake: the content belongs in a `task/`, `feature/`, or `pattern/` entity (with a relation), or should be deleted if superseded.
+- **Misused `project` type** (`misused_project_type`) - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` is the only type exempt from the relation requirement, so a legacy work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. In practice this is usually a modeling mistake: migrate the content to a `task/`, `feature/`, or `pattern/` entity (with a relation), or delete it if superseded.
 - **Unprefixed entities** (`unprefixed`) - names not starting with a standard prefix (`project/`, `feature/`, `task/`, `user-preferences/`, `pattern/`, `knowledge/`)
 - **Ghost project scopes** (`ghost_scopes`) - scopes that exist but contain zero entities (from auto-generated sessions, old renames)
 

@@ -22,6 +22,7 @@ from .config import (
     get_default_db_path,
     get_surfaced_retention_days,
 )
+from .jsonc import load_jsonc_object
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
 
 __all__ = ["Path", "argparse", "subprocess"]
@@ -477,6 +478,71 @@ def _cmd_install_codex() -> None:
     _register_codex_server(codex_bin, "memory-agent", f"http://127.0.0.1:{get_agent_port()}/mcp")
 
 
+def _default_copilot_mcp_config_path() -> Path:
+    """Return the default VS Code MCP config path for this environment."""
+    home = Path.home()
+    if platform.system() == "Darwin":
+        local_candidates = [home / "Library" / "Application Support" / "Code" / "User" / "mcp.json"]
+    else:
+        local_candidates = []
+        if os.environ.get("WSL_DISTRO_NAME"):
+            local_candidates += [
+                home / ".vscode-server" / "data" / "User" / "mcp.json",
+            ]
+        if xdg_config_home := os.environ.get("XDG_CONFIG_HOME"):
+            local_candidates.append(Path(xdg_config_home) / "Code" / "User" / "mcp.json")
+        local_candidates.append(home / ".config" / "Code" / "User" / "mcp.json")
+
+    for candidate in local_candidates:
+        if candidate.exists():
+            return candidate
+
+    if os.environ.get("WSL_DISTRO_NAME"):
+        win_user = os.environ.get("USERNAME") or os.environ.get("USER")
+        if win_user:
+            candidate = Path("/mnt/c/Users") / win_user / "AppData/Roaming/Code/User/mcp.json"
+            if candidate.exists():
+                return candidate
+        matches = sorted(Path("/mnt/c/Users").glob("*/AppData/Roaming/Code/User/mcp.json"))
+        if matches:
+            return matches[0]
+    return local_candidates[0]
+
+
+def _register_copilot_server(mcp_path: Path, name: str, url: str) -> None:
+    """Add one HTTP MCP server entry to VS Code's mcp.json if missing."""
+    if mcp_path.exists() and mcp_path.stat().st_size > 0:
+        config = load_jsonc_object(mcp_path)
+    else:
+        config = {}
+
+    servers_obj = config.setdefault("servers", {})
+    if not isinstance(servers_obj, dict):
+        msg = f"error: {mcp_path} has non-object 'servers'"
+        raise ValueError(msg)
+
+    servers: dict[str, object] = servers_obj
+    if name in servers:
+        print(f"{name} MCP server already configured in VS Code Copilot.")
+        return
+
+    servers[name] = {"type": "http", "url": url}
+    mcp_path.parent.mkdir(parents=True, exist_ok=True)
+    mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(f"Added {name} MCP server to VS Code Copilot (url: {url}).")
+
+
+def _cmd_install_copilot(args: argparse.Namespace) -> None:
+    """Register memory servers in VS Code Copilot MCP config."""
+    mcp_path = Path(args.mcp_config).expanduser() if args.mcp_config else _default_copilot_mcp_config_path()
+    try:
+        _register_copilot_server(mcp_path, "memory", f"http://localhost:{_detect_service_port()}/mcp")
+        _register_copilot_server(mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
@@ -556,7 +622,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument(
-        "target", choices=["kiro", "claude-code", "codex"], help="Agent to install for."
+        "target", choices=["kiro", "claude-code", "codex", "copilot"], help="Agent to install for."
     )
     install.add_argument(
         "agent_config",
@@ -567,6 +633,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--port",
         default=_detect_service_port(),
         help=f"HTTP port (default: auto-detected from service, or {_DEFAULT_PORT})",
+    )
+    install.add_argument(
+        "--mcp-config",
+        default=None,
+        help=(
+            "Path to VS Code mcp.json for the copilot target "
+            "(default: current-OS VS Code user config path (Linux/XDG/macOS); "
+            "else WSL Windows fallback under /mnt/c/Users)"
+        ),
     )
 
     return parser
@@ -592,6 +667,8 @@ def main() -> None:
             _cmd_install_claude_code()
         elif args.target == "codex":
             _cmd_install_codex()
+        elif args.target == "copilot":
+            _cmd_install_copilot(args)
         else:
             if not args.agent_config:
                 parser.error("agent_config is required for kiro")

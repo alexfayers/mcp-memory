@@ -866,20 +866,13 @@ async def _dream_trigger_route(request: Request) -> JSONResponse:
 
 
 async def _coordinator_loop() -> None:
-    """Snapshot each enabled tier's config, then poll and coordinate their passes.
+    """Poll and coordinate dream passes for whichever tiers are enabled.
 
     One loop drives both tiers, so it polls at the finest enabled cadence and the
     per-session decision (which tier is due, when the session ended) is made by
     ``_due_tiers`` each tick.
     """
     tiers = _enabled_tiers()
-    for spec in tiers:
-        dream_status.record_startup(
-            tier=spec.name,
-            enabled=spec.enabled_getter(),
-            idle_threshold_seconds=spec.idle_getter(),
-            poll_seconds=spec.poll_getter(),
-        )
     poll = min(spec.poll_getter() for spec in tiers)
     while True:
         await asyncio.sleep(poll)
@@ -896,6 +889,15 @@ async def _serve() -> None:
     would be spawned and cancelled on every request. Cancelled cleanly on shutdown.
     """
     recall_status.record_startup()
+    # Snapshot tier config on every boot so the visualiser reflects current
+    # enabled/disabled state even when autonomous dream scheduling is off.
+    for spec in _ALL_TIERS:
+        dream_status.record_startup(
+            tier=spec.name,
+            enabled=spec.enabled_getter(),
+            idle_threshold_seconds=spec.idle_getter(),
+            poll_seconds=spec.poll_getter(),
+        )
     run_coordinator = _claude_bin() is not None and bool(_enabled_tiers())
     coordinator = asyncio.create_task(_coordinator_loop()) if run_coordinator else None
     try:

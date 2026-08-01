@@ -10,8 +10,7 @@ EntityStatus = Literal["planned", "in-progress", "blocked", "resolved", "archive
 
 VALID_STATUSES = get_args(EntityStatus)
 
-# Entity types exempt from the relation requirement and from autonomous GC: a project root or
-# user-preferences singleton is structurally load-bearing.
+# Entity types exempt from autonomous orphan GC.
 STRUCTURAL_ENTITY_TYPES = frozenset({"project", "user-preferences"})
 
 VALID_VOTES = (1, -1)

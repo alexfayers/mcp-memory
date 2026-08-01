@@ -701,13 +701,9 @@ class TestCoordinatorLoop:
             asyncio.run(drive())
         assert ticks  # the loop ran at least one tick before cancellation
 
-    def test_records_startup_for_each_enabled_tier(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_records_no_startup_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
         monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
-        monkeypatch.setattr(agent, "get_dream_idle_seconds", lambda: 1800.0)
-        monkeypatch.setattr(agent, "get_dream_poll_seconds", lambda: 300.0)
-        monkeypatch.setattr(agent, "get_dream_heavy_idle_seconds", lambda: 5400.0)
-        monkeypatch.setattr(agent, "get_dream_heavy_poll_seconds", lambda: 900.0)
         recorded: list[dict[str, object]] = []
         monkeypatch.setattr(
             agent.dream_status, "record_startup", lambda **kwargs: recorded.append(kwargs)
@@ -726,20 +722,7 @@ class TestCoordinatorLoop:
 
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(drive())
-        assert recorded == [
-            {
-                "tier": "light",
-                "enabled": True,
-                "idle_threshold_seconds": 1800.0,
-                "poll_seconds": 300.0,
-            },
-            {
-                "tier": "heavy",
-                "enabled": True,
-                "idle_threshold_seconds": 5400.0,
-                "poll_seconds": 900.0,
-            },
-        ]
+        assert recorded == []
 
 
 class TestAgentCli:
@@ -827,6 +810,41 @@ class TestServe:
         status = recall_status.read_status()
         assert status is not None
         assert status["active"] == 0
+
+    def test_records_dream_startup_for_both_tiers_on_boot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
+        monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
+        monkeypatch.setattr(agent, "get_dream_idle_seconds", lambda: 1800.0)
+        monkeypatch.setattr(agent, "get_dream_poll_seconds", lambda: 300.0)
+        monkeypatch.setattr(agent, "get_dream_heavy_idle_seconds", lambda: 5400.0)
+        monkeypatch.setattr(agent, "get_dream_heavy_poll_seconds", lambda: 900.0)
+        monkeypatch.setattr(agent.shutil, "which", lambda _: None)
+        recorded: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            agent.dream_status, "record_startup", lambda **kwargs: recorded.append(kwargs)
+        )
+
+        async def fake_serve_http() -> None:
+            await asyncio.sleep(0.01)
+
+        monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
+        asyncio.run(agent._serve())
+        assert recorded == [
+            {
+                "tier": "light",
+                "enabled": True,
+                "idle_threshold_seconds": 1800.0,
+                "poll_seconds": 300.0,
+            },
+            {
+                "tier": "heavy",
+                "enabled": False,
+                "idle_threshold_seconds": 5400.0,
+                "poll_seconds": 900.0,
+            },
+        ]
 
 
 class TestSpawnEnv:

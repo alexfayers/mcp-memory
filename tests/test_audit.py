@@ -44,10 +44,13 @@ class TestOrphans:
         )
         assert _names(audit_graph(db, "proj")["orphans"]) == {"task/lonely"}  # type: ignore[arg-type]
 
-    def test_exempt_types_never_orphaned(self, db: DatabaseManager) -> None:
+    def test_project_root_never_orphaned(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj", [{"name": "project/proj", "entityType": "project", "observations": ["o"]}]
         )
+        assert audit_graph(db, "proj")["orphans"] == []
+
+    def test_user_preferences_without_relation_is_orphaned(self, db: DatabaseManager) -> None:
         db.create_entities(
             "global",
             [
@@ -58,8 +61,7 @@ class TestOrphans:
                 }
             ],
         )
-        assert audit_graph(db, "proj")["orphans"] == []
-        assert audit_graph(db, "global")["orphans"] == []
+        assert _names(audit_graph(db, "global")["orphans"]) == {"user-preferences/x"}  # type: ignore[arg-type]
 
     def test_related_entity_not_orphaned(self, db: DatabaseManager) -> None:
         db.create_entities(
