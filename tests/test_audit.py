@@ -37,6 +37,20 @@ def _vote_obs(db: DatabaseManager, name: str, content: str, times: int) -> None:
         db.vote_observation("proj", name, step, content=content)
 
 
+def _insert_relation_row(db: DatabaseManager, project: str, relation: Relation) -> None:
+    project_id = db._get_or_create_project_id(project)
+    source_id = db._get_entity_id(relation.source, project_id)
+    target_id = db._get_entity_id(relation.target, project_id)
+    assert source_id is not None
+    assert target_id is not None
+    relation_type_id = db._get_or_create_relation_type_id(relation.relation_type)
+    db._db.execute(
+        "INSERT INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
+        (source_id, target_id, relation_type_id),
+    )
+    db._db.commit()
+
+
 class TestOrphans:
     def test_flags_non_exempt_entity_with_no_relations(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -199,7 +213,7 @@ class TestRelationViolationsAndStarGraph:
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        db.create_relations("proj", [Relation("task/t", "project/proj", "belongs-to")])
+        _insert_relation_row(db, "proj", Relation("task/t", "project/proj", "belongs-to"))
         report = audit_graph(db, "proj")
         violations = cast("list[dict[str, object]]", report["relation_violations"])
         stars = cast("list[dict[str, object]]", report["star_graph_tasks"])
@@ -216,7 +230,7 @@ class TestRelationViolationsAndStarGraph:
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        db.create_relations("proj", [Relation("task/t", "project/proj", "relates-to")])
+        _insert_relation_row(db, "proj", Relation("task/t", "project/proj", "relates-to"))
         report = audit_graph(db, "proj")
         assert report["relation_violations"] == []
         stars = cast("list[dict[str, object]]", report["star_graph_tasks"])
@@ -383,7 +397,7 @@ class TestProposePlan:
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        db.create_relations("proj", [Relation("task/t", "project/proj", "belongs-to")])
+        _insert_relation_row(db, "proj", Relation("task/t", "project/proj", "belongs-to"))
         steps = self._plan(db, "proj")
         assert any(s["needs_review"] and "implements" in json.dumps(s["arguments"]) for s in steps)
 

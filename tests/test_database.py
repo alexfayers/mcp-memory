@@ -918,7 +918,7 @@ class TestRenameEntity:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
             ],
         )
@@ -957,7 +957,7 @@ class TestMoveEntityCrossScope:
         db.create_entities(
             "src",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
             ],
         )
@@ -982,7 +982,7 @@ class TestRelations:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
             ],
         )
@@ -999,7 +999,7 @@ class TestRelations:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
             ],
         )
@@ -1008,6 +1008,32 @@ class TestRelations:
         db.create_relations("proj", [rel])
         result = db.get_entity_with_relations("proj", "a")
         assert len(result["relations"]) == 1
+
+    def test_relation_type_alias_normalized_on_insert(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        db.create_relations("proj", [Relation(source="a", target="b", relation_type="extends")])
+        result = db.get_entity_with_relations("proj", "a")
+        assert len(result["relations"]) == 1
+        assert result["relations"][0].relation_type == "implements"
+
+    def test_unknown_relation_type_rejected(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        with pytest.raises(ValueError, match="Invalid relation type"):
+            db.create_relations(
+                "proj", [Relation(source="a", target="b", relation_type="frobnicates")]
+            )
 
     def test_missing_source_raises(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "b", "entityType": "task", "observations": ["x"]}])
@@ -1018,14 +1044,63 @@ class TestRelations:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
+                {"name": "c", "entityType": "project", "observations": ["z"]},
             ],
         )
         db.create_relations("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
+        db.create_relations("proj", [Relation(source="a", target="c", relation_type="used-in")])
         db.delete_relation("proj", "a", "b", "belongs-to")
         result = db.get_entity_with_relations("proj", "a")
-        assert len(result["relations"]) == 0
+        assert len(result["relations"]) == 1
+
+    def test_task_to_project_belongs_to_rejected(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "task/a", "entityType": "task", "observations": ["x"]},
+                {"name": "project/proj", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        with pytest.raises(ValueError, match="task -> project 'belongs-to' relations"):
+            db.create_relations(
+                "proj",
+                [Relation(source="task/a", target="project/proj", relation_type="belongs-to")],
+            )
+
+    def test_strict_policy_rejects_any_task_to_project_relation(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_STRICT_POLICY", "true")
+        db.create_entities(
+            "proj",
+            [
+                {"name": "task/a", "entityType": "task", "observations": ["x"]},
+                {"name": "project/proj", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        with pytest.raises(ValueError, match="Direct task -> project relations are forbidden"):
+            db.create_relations(
+                "proj",
+                [Relation(source="task/a", target="project/proj", relation_type="relates-to")],
+            )
+
+    def test_delete_relation_blocked_when_it_would_orphan_non_structural_entities(
+        self, db: DatabaseManager
+    ) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "pattern/a", "entityType": "pattern", "observations": ["x"]},
+                {"name": "knowledge/b", "entityType": "knowledge", "observations": ["y"]},
+            ],
+        )
+        db.create_relations(
+            "proj", [Relation(source="pattern/a", target="knowledge/b", relation_type="relates-to")]
+        )
+        with pytest.raises(ValueError, match="would orphan non-structural entities"):
+            db.delete_relation("proj", "pattern/a", "knowledge/b", "relates-to")
 
     def test_delete_nonexistent_relation_raises(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -1055,7 +1130,7 @@ class TestDeleteEntity:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
             ],
         )
@@ -1063,6 +1138,36 @@ class TestDeleteEntity:
         db.delete_entity("proj", "a")
         result = db.get_entity_with_relations("proj", "b")
         assert len(result["relations"]) == 0
+
+    def test_delete_entity_blocked_when_it_would_orphan_neighbor(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "pattern/a", "entityType": "pattern", "observations": ["x"]},
+                {"name": "knowledge/b", "entityType": "knowledge", "observations": ["y"]},
+            ],
+        )
+        db.create_relations(
+            "proj", [Relation(source="pattern/a", target="knowledge/b", relation_type="relates-to")]
+        )
+        with pytest.raises(ValueError, match="would orphan non-structural entity"):
+            db.delete_entity("proj", "pattern/a")
+
+    def test_strict_policy_rejects_project_scoped_user_preferences(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_STRICT_POLICY", "true")
+        with pytest.raises(ValueError, match="Project-scoped 'user-preferences' entities are forbidden"):
+            db.create_entities(
+                "proj",
+                [
+                    {
+                        "name": "user-preferences/local",
+                        "entityType": "user-preferences",
+                        "observations": ["x"],
+                    }
+                ],
+            )
 
     def test_delete_missing_entity_raises(self, db: DatabaseManager) -> None:
         with pytest.raises(ValueError, match="not found"):
@@ -1072,7 +1177,7 @@ class TestDeleteEntity:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
             ],
         )
@@ -1482,7 +1587,7 @@ class TestGetEntityWithRelations:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
                 {"name": "c", "entityType": "feature", "observations": ["z"]},
             ],
@@ -1506,7 +1611,7 @@ class TestSearchRelatedNodes:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
                 {"name": "c", "entityType": "feature", "observations": ["z"]},
             ],
@@ -1526,7 +1631,7 @@ class TestSearchRelatedNodes:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
                 {"name": "c", "entityType": "feature", "observations": ["z"]},
             ],
@@ -1858,7 +1963,7 @@ class TestReadGraph:
         db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
             ],
         )
@@ -2086,12 +2191,12 @@ class TestCompactMode:
         db.create_entities(
             "proj",
             [
-                {"name": "task/x", "entityType": "task", "observations": ["o"]},
+                {"name": "feature/x", "entityType": "feature", "observations": ["o"]},
                 {"name": "project/p", "entityType": "project", "observations": ["o"]},
             ],
         )
         db.create_relations(
-            "proj", [Relation(source="task/x", target="project/p", relation_type="belongs-to")]
+            "proj", [Relation(source="feature/x", target="project/p", relation_type="belongs-to")]
         )
         result = db.read_graph("proj", compact=True)
         assert len(result["relations"]) == 1
@@ -2255,7 +2360,7 @@ def _seed_primary_and_related(db: DatabaseManager) -> None:
     db.create_entities(
         "proj",
         [
-            {"name": "a", "entityType": "task", "observations": ["aaa", "bbb", "ccc"]},
+            {"name": "a", "entityType": "feature", "observations": ["aaa", "bbb", "ccc"]},
             {"name": "b", "entityType": "project", "observations": ["xxx", "yyy", "zzz"]},
         ],
     )

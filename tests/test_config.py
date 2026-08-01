@@ -190,6 +190,22 @@ class TestGcConfig:
         assert config.get_gc_enabled() is False
 
 
+class TestStrictPolicyConfig:
+    def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_STRICT_POLICY", raising=False)
+        assert config.get_strict_policy_enabled() is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", "TRUE"])
+    def test_enabled_by_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_STRICT_POLICY", value)
+        assert config.get_strict_policy_enabled() is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "nonsense"])
+    def test_disabled_by_non_truthy_env(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_STRICT_POLICY", value)
+        assert config.get_strict_policy_enabled() is False
+
+
 class TestWorkspaceMarkers:
     def test_empty_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_MEMORY_WORKSPACE_MARKERS", raising=False)

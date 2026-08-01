@@ -104,7 +104,7 @@ class TestGetAllGraphData:
         assert result["relations"][0] == {
             "source": "e1",
             "target": "e2",
-            "relation_type": "related-to",
+            "relation_type": "relates-to",
         }
 
     def test_project_isolation(self, db: DatabaseManager) -> None:

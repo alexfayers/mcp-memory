@@ -47,6 +47,7 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_MEMORY_GC_ENABLED` | On startup, soft-delete downvoted orphan entities (score at/below `-10` with no live incoming relation). Reversible; the purge below is the only permanent removal. | off |
 | `MCP_MEMORY_PURGE_ENABLED` | On startup, hard-delete soft-deleted entities older than the grace window | off |
 | `MCP_MEMORY_PURGE_GRACE_DAYS` | How long a soft-deleted entity is retained before it may be purged | `30` |
+| `MCP_MEMORY_STRICT_POLICY` | Reject stricter write-time policy violations such as project-scoped `user-preferences` and any direct `task -> project` relation | off |
 | `MCP_DREAM_ENABLED` | Run the autonomous light dream tier (downvotes stale/duplicate entities in idle windows) | off |
 | `MCP_DREAM_IDLE_SECONDS` | Genuine-idle window before the light dream pass fires (once per idle session) | `1800` |
 | `MCP_DREAM_POLL_SECONDS` | How often the coordinator checks whether the light pass is due | `300` |

@@ -263,3 +263,12 @@ def get_gc_enabled() -> bool:
     the sole path to permanent removal.
     """
     return os.environ.get("MCP_MEMORY_GC_ENABLED", "false").strip().lower() in _TRUTHY
+
+
+def get_strict_policy_enabled() -> bool:
+    """Return whether stricter write-time memory policy checks are enforced.
+
+    Off by default so existing local databases continue to work unless the user
+    explicitly opts into tighter scope and relation constraints.
+    """
+    return os.environ.get("MCP_MEMORY_STRICT_POLICY", "false").strip().lower() in _TRUTHY

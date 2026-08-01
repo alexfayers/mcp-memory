@@ -18,16 +18,19 @@ from .config import (
     get_purge_enabled,
     get_purge_grace_days,
     get_surfaced_retention_days,
+    get_strict_policy_enabled,
 )
 from .migrations.runner import run_migrations
 from .models import (
     STRUCTURAL_ENTITY_TYPES,
+    VALID_RELATION_TYPES,
     VALID_STATUSES,
     VALID_VOTES,
     Entity,
     EntityStatus,
     Observation,
     Relation,
+    normalize_relation_type,
 )
 from .path_resolver import match_project_for_path, normalize_path
 
@@ -604,6 +607,16 @@ class DatabaseManager:
                         f"Must be one of: {VALID_STATUSES}"
                     )
 
+                if (
+                    get_strict_policy_enabled()
+                    and project != "global"
+                    and entity_type == "user-preferences"
+                ):
+                    raise ValueError(
+                        "Project-scoped 'user-preferences' entities are forbidden when "
+                        "MCP_MEMORY_STRICT_POLICY is enabled; store them in global scope instead."
+                    )
+
                 entity_type_id = self._get_or_create_entity_type_id(str(entity_type))
                 existing_id = self._get_entity_id(str(name), project_id)
 
@@ -913,7 +926,30 @@ class DatabaseManager:
                 raise ValueError(
                     f"Target entity '{relation.target}' not found in project '{project}'"
                 )
-            relation_type_id = self._get_or_create_relation_type_id(relation.relation_type)
+            source_type = self._get_entity_type_name(source_id)
+            target_type = self._get_entity_type_name(target_id)
+            if (
+                source_type == "task"
+                and target_type == "project"
+                and relation.relation_type == "belongs-to"
+            ):
+                raise ValueError(
+                    "task -> project 'belongs-to' relations are not allowed; link the task "
+                    "to the feature it implements instead."
+                )
+            if get_strict_policy_enabled() and source_type == "task" and target_type == "project":
+                raise ValueError(
+                    "Direct task -> project relations are forbidden when MCP_MEMORY_STRICT_POLICY "
+                    "is enabled; use a feature or knowledge entity as the parent instead."
+                )
+            relation_type = normalize_relation_type(relation.relation_type)
+            if relation_type not in VALID_RELATION_TYPES:
+                raise ValueError(
+                    f"Invalid relation type '{relation.relation_type}' "
+                    f"(normalized to '{relation_type}'). "
+                    f"Valid types: {sorted(VALID_RELATION_TYPES)}"
+                )
+            relation_type_id = self._get_or_create_relation_type_id(relation_type)
             self._db.execute(
                 "INSERT OR IGNORE INTO relations "
                 "(source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
@@ -958,6 +994,13 @@ class DatabaseManager:
             raise ValueError(
                 f"Cannot delete '{name}': {len(sources)} incoming relation(s) from: "
                 + ", ".join(sources)
+            )
+
+        orphaned = self._orphaned_neighbors_if_entity_deleted(entity_id)
+        if orphaned:
+            raise ValueError(
+                f"Cannot delete '{name}': it would orphan non-structural "
+                f"entit{'y' if len(orphaned) == 1 else 'ies'}: {', '.join(orphaned)}"
             )
 
         with self._db:
@@ -1129,6 +1172,17 @@ class DatabaseManager:
         if row is None:
             raise ValueError(f"Relation type '{relation_type}' not found")
 
+        orphaned: list[str] = []
+        if self._would_be_orphaned_by_relation_delete(source_id, source_id, target_id, row["id"]):
+            orphaned.append(source)
+        if self._would_be_orphaned_by_relation_delete(target_id, source_id, target_id, row["id"]):
+            orphaned.append(target)
+        if orphaned:
+            raise ValueError(
+                "Cannot delete relation: it would orphan non-structural "
+                + f"entit{'y' if len(orphaned) == 1 else 'ies'}: {', '.join(orphaned)}"
+            )
+
         cursor = self._db.execute(
             "DELETE FROM relations WHERE source_id = ? AND target_id = ? AND relation_type_id = ?",
             (source_id, target_id, row["id"]),
@@ -1139,6 +1193,66 @@ class DatabaseManager:
                 f"not found in project '{project}'"
             )
         self._db.commit()
+
+    def _get_entity_type_name(self, entity_id: int) -> str:
+        """Return the entity type name for an entity id."""
+        row = self._db.execute(
+            "SELECT et.name FROM entities e JOIN entity_types et ON e.entity_type_id = et.id "
+            "WHERE e.id = ?",
+            (entity_id,),
+        ).fetchone()
+        return str(row["name"])
+
+    def _is_structural_entity(self, entity_id: int) -> bool:
+        """Return whether an entity is exempt from orphan checks."""
+        return self._get_entity_type_name(entity_id) in STRUCTURAL_ENTITY_TYPES
+
+    def _would_be_orphaned_by_relation_delete(
+        self, entity_id: int, source_id: int, target_id: int, relation_type_id: int
+    ) -> bool:
+        """Return whether deleting one specific relation would leave the entity orphaned."""
+        if self._is_structural_entity(entity_id):
+            return False
+        row = self._db.execute(
+            "SELECT COUNT(*) AS n FROM relations r "
+            "JOIN entities src ON r.source_id = src.id "
+            "JOIN entities tgt ON r.target_id = tgt.id "
+            "WHERE src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
+            "AND (r.source_id = ? OR r.target_id = ?) "
+            "AND NOT (r.source_id = ? AND r.target_id = ? AND r.relation_type_id = ?)",
+            (entity_id, entity_id, source_id, target_id, relation_type_id),
+        ).fetchone()
+        return int(row["n"]) == 0
+
+    def _orphaned_neighbors_if_entity_deleted(self, entity_id: int) -> list[str]:
+        """Return neighbors that would be orphaned if the entity were deleted."""
+        rows = self._db.execute(
+            "SELECT DISTINCT other.id AS id, other.name AS name "
+            "FROM relations r "
+            "JOIN entities src ON r.source_id = src.id "
+            "JOIN entities tgt ON r.target_id = tgt.id "
+            "JOIN entities other ON other.id = CASE WHEN r.source_id = ? THEN r.target_id ELSE r.source_id END "
+            "WHERE src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
+            "AND (r.source_id = ? OR r.target_id = ?)",
+            (entity_id, entity_id, entity_id),
+        ).fetchall()
+        orphaned: list[str] = []
+        for row in rows:
+            other_id = int(row["id"])
+            if self._is_structural_entity(other_id):
+                continue
+            remaining = self._db.execute(
+                "SELECT COUNT(*) AS n FROM relations r "
+                "JOIN entities src ON r.source_id = src.id "
+                "JOIN entities tgt ON r.target_id = tgt.id "
+                "WHERE src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
+                "AND (r.source_id = ? OR r.target_id = ?) "
+                "AND r.source_id != ? AND r.target_id != ?",
+                (other_id, other_id, entity_id, entity_id),
+            ).fetchone()
+            if int(remaining["n"]) == 0:
+                orphaned.append(str(row["name"]))
+        return orphaned
 
     def get_entity(
         self,

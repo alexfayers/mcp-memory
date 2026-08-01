@@ -269,7 +269,7 @@ class TestRelationTypeWarnings:
         server_db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
             ],
         )
@@ -382,6 +382,41 @@ class TestInlineRelations:
                     }
                 ],
             )
+
+
+class TestRuntimePolicyErrors:
+    def test_create_relations_returns_error_for_task_project_belongs_to(
+        self, server_db: DatabaseManager
+    ) -> None:
+        server_db.create_entities(
+            "proj",
+            [
+                {"name": "task/a", "entityType": "task", "observations": ["x"]},
+                {"name": "project/proj", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        result = server.create_relations(
+            "proj",
+            [{"source": "task/a", "target": "project/proj", "type": "belongs-to"}],
+        )
+        assert "error" in result
+
+    def test_create_entities_returns_error_for_strict_project_scoped_user_preferences(
+        self, monkeypatch: pytest.MonkeyPatch, server_db: DatabaseManager
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_STRICT_POLICY", "true")
+        result = server.create_entities(
+            "proj",
+            [
+                {
+                    "name": "user-preferences/local",
+                    "entityType": "user-preferences",
+                    "observations": ["x"],
+                    "relations": [{"target": "project/proj", "type": "belongs-to"}],
+                }
+            ],
+        )
+        assert "error" in result
 
 
 class TestListProjects:
@@ -572,7 +607,7 @@ class TestMoveEntityCrossScopeTool:
         server_db.create_entities(
             "src",
             [
-                {"name": "a", "entityType": "task", "observations": ["x"]},
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
                 {"name": "b", "entityType": "project", "observations": ["y"]},
             ],
         )
@@ -874,7 +909,7 @@ class TestGraphToolsObservationBudget:
         server_db.create_entities(
             "proj",
             [
-                {"name": "a", "entityType": "task", "observations": ["aaa", "bbb", "ccc"]},
+                {"name": "a", "entityType": "feature", "observations": ["aaa", "bbb", "ccc"]},
                 {"name": "b", "entityType": "project", "observations": ["xxx", "yyy", "zzz"]},
             ],
         )
