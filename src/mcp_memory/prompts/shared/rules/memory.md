@@ -175,9 +175,10 @@ When an entity exceeds ~30 observations, it's a signal to extract domain-specifi
   - Discovering something unexpected (a bug, an API quirk, a design constraint)
   - Making a decision or trade-off
   - Receiving feedback or correction from the user
+  - **User names explicit future follow-up work** - create a separate `task/` entity for each requested follow-up immediately, rather than bundling them into one observation or waiting until session end
   - Learning new factual information from any source
   - **User confirms an external state change** (e.g. "PR merged", "deployed", "ticket closed") - update the relevant entity IMMEDIATELY in the same response
-- **CRITICAL: Hook reminders appear as `<hook_context>` blocks in the environment details. When you see one, you MUST act on it in your NEXT tool call - before doing anything else. Do NOT defer, skip, or queue it for later.**
+- **CRITICAL: Hook reminders appear as `<hook_context>` blocks in the environment details. When you see one, you MUST act on it in your NEXT tool call - before doing anything else. Do NOT defer, skip, or queue it for later. The next tool call must perform the actual required memory write; never burn turns on placeholder shell commands, no-op probes, or other fake progress while the reminder is outstanding.**
 - As you discover important facts (architecture decisions, API contracts, subtle bugs, performance findings, etc.), update memory with observations worth persisting.
 - Prefer small, precise observations over long narrative text.
 - Each observation must be **atomic** - one fact per observation. Never combine multiple distinct facts into a single observation string (e.g. do not write "X was done (Y is also true)" - instead add two separate observations).
