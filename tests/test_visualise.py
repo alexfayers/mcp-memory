@@ -266,8 +266,8 @@ class TestApiActivity:
 
     @pytest.mark.anyio
     async def test_since_filters_seen_events(self, client: httpx.AsyncClient) -> None:
-        activity.record_tool("list_projects", {}, {"projects": []})
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         resp = await client.get("/api/activity", params={"since": 1})
         data = resp.json()
         assert [e["id"] for e in data["events"]] == [2]
@@ -275,7 +275,7 @@ class TestApiActivity:
 
     @pytest.mark.anyio
     async def test_invalid_since_is_treated_as_zero(self, client: httpx.AsyncClient) -> None:
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         resp = await client.get("/api/activity", params={"since": "abc"})
         assert len(resp.json()["events"]) == 1
 
@@ -286,7 +286,7 @@ class TestApiIdle:
         self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         monkeypatch.setattr(activity.time, "time", lambda: 1030.0)
         resp = await client.get("/api/idle")
         assert resp.status_code == 200
@@ -297,7 +297,7 @@ class TestApiIdle:
         self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         monkeypatch.setattr(activity.time, "time", lambda: 1050.0)
         await client.get("/api/idle")
         await client.get("/api/idle")
@@ -311,7 +311,7 @@ class TestApiDream:
         self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         monkeypatch.setattr(activity.time, "time", lambda: 1042.0)
         resp = await client.get("/api/dream")
         assert resp.status_code == 200
@@ -774,7 +774,7 @@ class TestApiVote:
         await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": 1})
         events = (await client.get("/api/activity")).json()["events"]
         assert len(events) == 1
-        assert events[0]["tool"] == "vote_entity"
+        assert events[0]["tool"] == "vote"
         assert events[0]["kind"] == "update"
         assert events[0]["entities"] == ["e1"]
         assert events[0]["project"] == "proj"
@@ -862,7 +862,7 @@ class TestApiVoteObservation:
         )
         events = (await client.get("/api/activity")).json()["events"]
         assert len(events) == 1
-        assert events[0]["tool"] == "vote_observation"
+        assert events[0]["tool"] == "vote"
         assert events[0]["kind"] == "update"
         assert events[0]["entities"] == ["e1"]
 

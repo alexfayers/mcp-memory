@@ -143,14 +143,14 @@ enforcement is a **deny-list, not an allow-list**, for a verified reason:
   `create_entities` was blocked and no row was written.
 
 Deny for **v1 recall** (read-only): all 12 mutating memory tools **plus**
-`vote_entity`, plus built-in write/exec tools (`Bash`, `Write`, `Edit`,
+`vote`, plus built-in write/exec tools (`Bash`, `Write`, `Edit`,
 `NotebookEdit`, `Agent`) **plus** built-in read/web tools (`Read`, `Grep`,
 `Glob`, `WebFetch`, `WebSearch`). The read tools must be denied too: otherwise
 the agent answers from files on disk and cites file paths instead of the
 `[project/entity]` graph slugs the return contract requires (live-observed - it
 read this very design doc off disk on the first run).
 
-The 12 mutating memory tools to deny: `create_entities`, `set_project_paths`,
+The 12 mutating memory tools to deny: `create_entities`, `set_metadata`,
 `move_project_entities`, `merge_entities`, `delete_project`, `create_relations`,
 `delete_entity`, `delete_relation`, `add_observations`, `delete_observations`,
 `set_entity_status`, `restore_entity`. Of these, `delete_entity`,
@@ -196,8 +196,8 @@ A pass that grooms the graph while it is idle. Off by default (opt-in via
   a genuine idle window. Each tier fires at most once per session, so the dream's
   own reads/votes cannot re-arm it and it cannot spin.
 - **Mutation surface: demote-never-delete, downvote-only.** The dream's only
-  mutation is `vote_entity` with a vote of `-1` (so its deny-list is the v1
-  recall deny-list **minus** `vote_entity`). It demotes stale, superseded, or
+  mutation is `vote` with a vote of `-1` (so its deny-list is the v1
+  recall deny-list **minus** `vote`). It demotes stale, superseded, or
   duplicated entities and never casts a positive vote or deletes anything.
   Downvoting sinks an entity in ranking but never removes it - functionally
   equivalent to deletion from the reader's perspective, but reversible. Hard
@@ -248,7 +248,7 @@ daemon.
 
 ### Sole-writer: no second-writer race
 
-The dream votes by spawning `claude -p`, which calls `mcp__memory__vote_entity`
+The dream votes by spawning `claude -p`, which calls `mcp__memory__vote`
 over HTTP - exactly like v1 recall reads. That vote executes *inside* the
 mcp-memory process on its single shared connection; the memory-agent process
 never opens the DB. So mcp-memory remains the sole writer, and even a user
@@ -359,8 +359,8 @@ work the light tier cannot: it **merges duplicate entities** as well as demoting
 stale ones. Off by default (opt-in via `MCP_DREAM_HEAVY_ENABLED=true`),
 independent of the light tier's `MCP_DREAM_ENABLED`.
 
-- **Mutation surface: `vote_entity` + `merge_entities` only.** Its deny-list is
-  the light-tier deny-list minus `merge_entities` as well as `vote_entity`. Every
+- **Mutation surface: `vote` + `merge_entities` only.** Its deny-list is
+  the light-tier deny-list minus `merge_entities` as well as `vote`. Every
   `delete_*` (and `restore_entity`) stays denied, so the "agent never
   hard-deletes" guarantee holds: `merge_entities` removes the folded-away source
   by *soft*-delete only, reversible via `restore_entity` until the grace-window
@@ -418,26 +418,27 @@ entity. v4 extends each tier's mutation surface to individual observations,
 addressed by `content_hash` - the 8-char content-derived hash (`sha256(content)[:8]`)
 now carried on every observation - so the dream never pastes observation text back.
 
-- **Light tier: `vote_observation` added.** The light tier's mutation surface
-  becomes `vote_entity` + `vote_observation`, both `-1`-only (its deny-list drops
-  `vote_observation` alongside `vote_entity`). It can now sink a single stale
-  observation within an otherwise-useful entity instead of only demoting the whole
-  entity. Still demote-never-delete: an observation vote changes neither content
-  nor `updated_at`, and only downvotes are cast.
-- **Heavy tier: `vote_observation` + `merge_observations` added.** The heavy
-  tier's mutation surface becomes `vote_entity` + `merge_entities` +
-  `vote_observation` + `merge_observations` (its deny-list drops the two
-  observation tools on top of the v3 drops). It can fold a within-entity duplicate
-  observation into its twin, the observation-level analogue of the entity merge it
-  already does. **Unlike `merge_entities`, `merge_observations` hard-deletes the
-  folded-away source observation** - there is no soft-delete or `restore_entity`
-  for observations, so this removal is *not* reversible. This is the one place the
-  heavy tier does an irreversible removal; it is gated on the same clear-duplicate
-  judgement as the entity merge, and confined to observations within a single
-  entity.
+- **Light tier: observation-level voting via `vote`.** The `vote` tool already
+  covers both whole-entity and single-observation votes (pass `observation` or
+  `observationHash` to target one observation instead of the whole entity), both
+  `-1`-only for the dream (its deny-list is unchanged - `vote` was already
+  denied). It can now sink a single stale observation within an otherwise-useful
+  entity instead of only demoting the whole entity. Still demote-never-delete: an
+  observation vote changes neither content nor `updated_at`, and only downvotes
+  are cast.
+- **Heavy tier: `merge_observations` added.** The heavy tier's mutation surface
+  becomes `vote` + `merge_entities` + `merge_observations` (its deny-list drops
+  `merge_observations` on top of the v3 drops). It can fold a within-entity
+  duplicate observation into its twin, the observation-level analogue of the
+  entity merge it already does. **Unlike `merge_entities`, `merge_observations`
+  hard-deletes the folded-away source observation** - there is no soft-delete or
+  `restore_entity` for observations, so this removal is *not* reversible. This is
+  the one place the heavy tier does an irreversible removal; it is gated on the
+  same clear-duplicate judgement as the entity merge, and confined to
+  observations within a single entity.
 - **Both are hash-addressed.** The dream ritual reads each observation's
-  `content_hash` from tool output and passes it to `vote_observation` /
-  `merge_observations`, matching how the tools are addressed everywhere else.
+  `content_hash` from tool output and passes it to `vote` (as `observationHash`)
+  or `merge_observations`, matching how the tools are addressed everywhere else.
 - **Sole-writer safety is unchanged.** Both tiers still mutate only by spawning
   `claude -p` calling `mcp__memory__*` over HTTP into the single mcp-memory
   process; the single-flight guard and once-per-session rule are untouched.
@@ -506,7 +507,7 @@ The authoritative, evolving decision log is in the memory graph:
   prerequisite for the deferred synthesised-append capability.
 - `task/obs-hashing-dream-voting-merge` (project **mcp-memory**) - the shipped
   observation `content_hash`, `merge_observations` tool, and v4 dream tiers.
-- `feature/mcp-memory/server` (project **mcp-memory**) - the `vote_entity` tool
+- `feature/mcp-memory/server` (project **mcp-memory**) - the `vote` tool
   and ranking behaviour this design relies on.
 - `pattern/claude-code-custom-subagents` (project **global**) - native subagent
   capabilities considered and why a separate server was chosen instead.

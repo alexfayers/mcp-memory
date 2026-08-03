@@ -291,29 +291,6 @@ class DatabaseManager:
         ).fetchall()
         return [row["name"] for row in rows]
 
-    def paths_for_entity_name(self, name: str) -> list[tuple[str, list[str]]]:
-        """Return (project, registered_paths) for every project containing the entity name.
-
-        Entity names are unique only within a project, so the same name may appear in
-        several projects. A matching project with no registered path is included with an
-        empty path list, so an empty result unambiguously means no such entity exists.
-        """
-        rows = self._db.execute(
-            "SELECT p.name AS project_name, pp.path AS path "
-            "FROM entities e "
-            "JOIN projects p ON e.project_id = p.id "
-            "LEFT JOIN project_paths pp ON pp.project_id = p.id "
-            "WHERE e.name = ? AND e.deleted_at IS NULL "
-            "ORDER BY p.name, pp.path",
-            (name,),
-        ).fetchall()
-        grouped: dict[str, list[str]] = {}
-        for row in rows:
-            paths = grouped.setdefault(row["project_name"], [])
-            if row["path"] is not None:
-                paths.append(row["path"])
-        return list(grouped.items())
-
     def delete_project(self, project: str) -> None:
         """Delete an empty project and its paths. Refuses global or non-empty projects."""
         if project == "global":
@@ -891,7 +868,7 @@ class DatabaseManager:
 
         Consumes the newest not-yet-matched surfacing of ``name`` within ``window_seconds``:
         an in-window edit following a search is an observed "this was useful". Casts a bounded
-        ``+1`` (via the vote_score column directly, not the vote_entity tool, so instrumentation
+        ``+1`` (via the vote_score column directly, not the vote_entity method, so instrumentation
         does not recurse) unless the per-entity daily cap is already reached, in which case the
         surfacing is still consumed but no vote fires. Returns the new vote_score, or ``None``
         when there was no eligible surfacing, the cap was hit, or the entity is gone.
@@ -1339,48 +1316,22 @@ class DatabaseManager:
         self,
         project: str,
         name: str,
-        compact: bool = False,
-        max_observation_chars: int | None = None,
-    ) -> GraphResult:
-        """Get an entity with all its relations and related entities."""
-        entity = self.get_entity(
-            project, name, compact=compact, max_observation_chars=max_observation_chars
-        )
-        project_id = self._get_or_create_project_id(project)
-        entity_id = self._get_entity_id(name, project_id)
-
-        relations = self._get_relations_for_entities(project_id, [entity_id])  # type: ignore[list-item]
-
-        related_names = set()
-        for rel in relations:
-            if rel.source != name:
-                related_names.add(rel.source)
-            if rel.target != name:
-                related_names.add(rel.target)
-
-        related_entities = [
-            self.get_entity(
-                project, n, compact=compact, max_observation_chars=max_observation_chars
-            )
-            for n in related_names
-        ]
-
-        return {
-            "entity": entity,
-            "relations": relations,
-            "relatedEntities": related_entities,
-        }
-
-    def search_related_nodes(
-        self,
-        project: str,
-        name: str,
         entity_type: str | None = None,
         relation_type: str | None = None,
         compact: bool = False,
         max_observation_chars: int | None = None,
     ) -> GraphResult:
-        """Get an entity with filtered relations and related entities."""
+        """Get an entity with its relations and related entities, optionally filtered.
+
+        Args:
+            project: Project scope to look up the entity in.
+            name: Name of the entity to retrieve.
+            entity_type: If given, keep only related entities of this type (post-traversal).
+            relation_type: If given, keep only relations of this type (pre-traversal, so
+                related entities are derived only from the surviving relations).
+            compact: Omit observations from the returned entities when True.
+            max_observation_chars: Per-entity observation character budget.
+        """
         entity = self.get_entity(
             project, name, compact=compact, max_observation_chars=max_observation_chars
         )

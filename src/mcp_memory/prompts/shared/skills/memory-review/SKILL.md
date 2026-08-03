@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 **When to run: only when explicitly asked, or at a genuine lull (session wind-down, no active task).** This is a long, heavyweight audit, invoked only via the user's explicit `/memory-review`. The periodic "review due" hook reminder is a nudge to mention to the user, not an instruction to launch this skill automatically; surface it and let the user decide when to run it.
 
-Work through this checklist to audit and clean up the memory graph. The `/visualise` endpoint gives a visual overview, but auditors MUST read the graph data via the **read-only memory MCP tools** (`read_graph`, `search_nodes`, `get_entity_with_relations`, `search_related_nodes`), NOT via `curl`/`Read` of `/api/graph`.
+Work through this checklist to audit and clean up the memory graph. The `/visualise` endpoint gives a visual overview, but auditors MUST read the graph data via the **read-only memory MCP tools** (`read_graph`, `search_nodes`, `get_entity_with_relations`), NOT via `curl`/`Read` of `/api/graph`.
 
 **Start with the deterministic audit.** Run `mcp-memory audit --project <scope>` (or `mcp-memory audit --all-projects`) once up front. It reads the live database read-only and emits one JSON report of every *mechanical* violation - orphans, misused `project`-type entities, unprefixed names, ghost scopes, oversized entities (per the section 3 size targets), `task belongs-to project` relation violations, star-graph tasks, and strongly-downvoted entities:
 
@@ -18,7 +18,7 @@ Work through this checklist to audit and clean up the memory graph. The `/visual
  "star_graph_tasks": [...], "negative_vote_entities": [...]}
 ```
 
-Add `--propose-plan` to emit, instead of the raw report, a `{"steps": [...]}` list of concrete fix-it tool calls (deterministic ones like `bulk_rename_entity` with `needs_review: false`, and judgement-required ones - orphan relinking, deletes, and `consider_split` advisories - with `needs_review: true`). A `trim_observations_to_outcome` step carries `needs_review: false` only when every observation it would drop is a near-duplicate of one being kept - otherwise it carries `needs_review: true`, since the trim is a hard delete with no undo. Treat it as a proposed worklist: execute the `needs_review: false` steps as-is and apply judgement to the rest.
+Add `--propose-plan` to emit, instead of the raw report, a `{"steps": [...]}` list of concrete fix-it tool calls (deterministic ones like `rename_entity` with `needs_review: false`, and judgement-required ones - orphan relinking, deletes, and `consider_split` advisories - with `needs_review: true`). A `trim_observations_to_outcome` step carries `needs_review: false` only when every observation it would drop is a near-duplicate of one being kept - otherwise it carries `needs_review: true`, since the trim is a hard delete with no undo. Treat it as a proposed worklist: execute the `needs_review: false` steps as-is and apply judgement to the rest.
 
 This replaces the manual enumeration in the sub-checks below - the audit *finds* the violations deterministically so you do not have to eyeball the graph for them. It does **not** decide fixes: near-duplicate/contradiction detection, what is reusable enough for a `pattern/`, memory-vs-rule-file redundancy, and every merge/delete/rename/relink decision remain your judgement. Use the audit as the worklist, then apply the judgement each section describes.
 
@@ -46,7 +46,7 @@ The audit's `orphans`, `misused_project_type`, `unprefixed`, and `ghost_scopes` 
 
 **Duplicate entities** - same concept stored with and without prefix (e.g. `MyProject` and `project/MyProject`) - are a judgement call the audit does not make: cross-reference the `unprefixed` list against prefixed names in the same scope to spot them.
 
-Fix (your judgement): rename with proper prefix using `bulk_rename_entity` (an in-place rename that preserves observations and relations - no delete+recreate needed), link orphans, or delete if stale. For a misused `project` entity, migrate its content to the correct entity type with a relation (a same-scope rename is `bulk_rename_entity`, while a cross-scope move is `move_entity_cross_scope`, which drops and returns the entity's relations for you to recreate in the target scope), or delete if a `task/`/`feature/` already covers it, then delete the rogue `project` entity.
+Fix (your judgement): rename with proper prefix using `rename_entity` (an in-place rename that preserves observations and relations - no delete+recreate needed), link orphans, or delete if stale. For a misused `project` entity, migrate its content to the correct entity type with a relation (a same-scope rename is `rename_entity`, while a cross-scope move is `move_entity_cross_scope`, which drops and returns the entity's relations for you to recreate in the target scope), or delete if a `task/`/`feature/` already covers it, then delete the rogue `project` entity.
 
 ## 2. Consolidate duplicates
 

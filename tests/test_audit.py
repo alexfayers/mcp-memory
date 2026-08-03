@@ -352,7 +352,7 @@ class TestProposePlan:
 
     def test_unprefixed_yields_prefixed_rename(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "foo", "entityType": "task", "observations": ["o"]}])
-        step = next(s for s in self._plan(db, "proj") if s["tool"] == "bulk_rename_entity")
+        step = next(s for s in self._plan(db, "proj") if s["tool"] == "rename_entity")
         assert step["arguments"] == {
             "project": "proj",
             "old_name": "foo",
@@ -534,7 +534,7 @@ class TestAuditCommand:
         )
 
         payload = json.loads(capsys.readouterr().out)
-        assert "bulk_rename_entity" in [s["tool"] for s in payload["steps"]]
+        assert "rename_entity" in [s["tool"] for s in payload["steps"]]
 
     def test_parser_requires_a_scope(self) -> None:
         parser = cli._build_parser()

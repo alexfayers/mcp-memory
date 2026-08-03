@@ -95,8 +95,7 @@ class TestBuildRecallCommand:
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
         assert "mcp__memory__create_entities" in denied
-        assert "mcp__memory__vote_entity" in denied
-        assert "mcp__memory__vote_observation" in denied
+        assert "mcp__memory__vote" in denied
         assert "mcp__memory__restore_entity" in denied
         assert "mcp__memory__merge_entities" in denied
         assert "mcp__memory__merge_observations" in denied
@@ -156,13 +155,13 @@ class TestBuildRecallCommand:
 
 
 class TestBuildDreamCommand:
-    def test_allows_vote_entity_but_denies_other_mutations(self) -> None:
+    def test_allows_vote_but_denies_other_mutations(self) -> None:
         command = agent.build_dream_command(
             claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_votes=15
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
-        assert "mcp__memory__vote_entity" not in denied
+        assert "mcp__memory__vote" not in denied
         assert "mcp__memory__delete_entity" in denied
         assert "mcp__memory__create_entities" in denied
 
@@ -190,7 +189,7 @@ class TestBuildDreamCommand:
         )
         prompt = command[command.index("-p") + 1]
         assert "7" in prompt
-        assert "vote_entity" in prompt
+        assert "vote" in prompt
         assert "-1" in prompt
 
     def test_prompt_interpolates_the_gc_downvote_floor(self) -> None:
@@ -227,13 +226,13 @@ class TestBuildDreamCommand:
         denied = set(command[deny_index + 1 :])
         assert "mcp__memory__merge_entities" in denied
 
-    def test_light_allows_vote_observation_but_denies_merge_observations(self) -> None:
+    def test_light_allows_vote_but_denies_merge_observations(self) -> None:
         command = agent.build_dream_command(
             claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_votes=15
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
-        assert "mcp__memory__vote_observation" not in denied
+        assert "mcp__memory__vote" not in denied
         assert "mcp__memory__merge_observations" in denied
 
     def test_prompt_permits_observation_demotion(self) -> None:
@@ -241,7 +240,7 @@ class TestBuildDreamCommand:
             claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7
         )
         prompt = command[command.index("-p") + 1]
-        assert "vote_observation" in prompt
+        assert "vote" in prompt
         assert "content_hash" in prompt
 
     def test_ritual_observation_line_round_trips_to_obs_demote(self) -> None:
@@ -259,7 +258,7 @@ class TestBuildHeavyDreamCommand:
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
-        assert "mcp__memory__vote_entity" not in denied
+        assert "mcp__memory__vote" not in denied
         assert "mcp__memory__merge_entities" not in denied
         assert "mcp__memory__delete_entity" in denied
         assert "mcp__memory__create_entities" in denied
@@ -291,7 +290,7 @@ class TestBuildHeavyDreamCommand:
         assert "4" in prompt
         assert "merge_entities" in prompt
         assert "same project" in prompt
-        assert "vote_entity" in prompt
+        assert "vote" in prompt
 
     def test_prompt_interpolates_the_gc_downvote_floor(self) -> None:
         command = agent.build_heavy_dream_command(
@@ -325,7 +324,7 @@ class TestBuildHeavyDreamCommand:
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
-        assert "mcp__memory__vote_observation" not in denied
+        assert "mcp__memory__vote" not in denied
         assert "mcp__memory__merge_observations" not in denied
 
     def test_prompt_permits_observation_ops(self) -> None:
@@ -333,7 +332,7 @@ class TestBuildHeavyDreamCommand:
             claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
         )
         prompt = command[command.index("-p") + 1]
-        assert "vote_observation" in prompt
+        assert "vote" in prompt
         assert "merge_observations" in prompt
         assert "content_hash" in prompt
 
@@ -991,7 +990,7 @@ class TestRunDreamPass:
         assert result == "- demoted [mcp-memory/task/old]: superseded"
         command = captured["command"]
         assert isinstance(command, list)
-        assert "mcp__memory__vote_entity" not in command
+        assert "mcp__memory__vote" not in command
 
     def test_reports_missing_claude_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent.shutil, "which", lambda _: None)
@@ -1056,7 +1055,7 @@ class TestRunHeavyDreamPass:
         command = captured["command"]
         assert isinstance(command, list)
         assert "mcp__memory__merge_entities" not in command
-        assert "mcp__memory__vote_entity" not in command
+        assert "mcp__memory__vote" not in command
 
     def test_reports_missing_claude_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent.shutil, "which", lambda _: None)

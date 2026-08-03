@@ -75,7 +75,7 @@ class SpawnResult(TypedDict):
     cost_usd: float | None
 
 
-# Mutating mcp-memory tools plus vote_entity: recall is strictly read-only, so
+# Mutating mcp-memory tools plus vote: recall is strictly read-only, so
 # every one of these is denied. Deny rules override the inherited
 # permissions.allow wildcard, so this is the hard safety guarantee (an
 # allow-list cannot subtract from an inherited allow).
@@ -88,13 +88,12 @@ _MUTATING_MEMORY_TOOLS = (
     "add_observations",
     "delete_observations",
     "set_entity_status",
-    "set_project_paths",
+    "set_metadata",
     "move_project_entities",
     "merge_entities",
     "merge_observations",
     "restore_entity",
-    "vote_entity",
-    "vote_observation",
+    "vote",
 )
 # --strict-mcp-config isolates MCP servers but not built-ins. Deny the write/exec
 # ones so the agent cannot touch the filesystem or spawn processes, and the
@@ -119,21 +118,21 @@ DISALLOWED_TOOLS: tuple[str, ...] = (
     *_DISALLOWED_BUILTINS,
 )
 
-# The dream curation pass may vote entities and observations (its only mutations),
-# so vote_entity and vote_observation are the memory tools it is NOT denied; every
-# other mutation and every built-in stays denied, keeping grooming to demote-never-delete.
-_LIGHT_TIER_ALLOWED = {"vote_entity", "vote_observation"}
+# The dream curation pass may vote entities and observations (its only mutation),
+# so vote is the memory tool it is NOT denied; every other mutation and every
+# built-in stays denied, keeping grooming to demote-never-delete.
+_LIGHT_TIER_ALLOWED = {"vote"}
 DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
     *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS if tool not in _LIGHT_TIER_ALLOWED),
     *_DISALLOWED_BUILTINS,
 )
 
-# The heavy tier may also merge duplicates (entities and observations), so vote_entity,
-# vote_observation, merge_entities, and merge_observations are the memory tools it is NOT
-# denied; every delete_* (and restore_entity) stays denied, so removal is never hard -
+# The heavy tier may also merge duplicates (entities and observations), so vote,
+# merge_entities, and merge_observations are the memory tools it is NOT denied;
+# every delete_* (and restore_entity) stays denied, so removal is never hard -
 # merge only soft-deletes the folded-away source entity (observation merges hard-delete
 # the source observation, consistent with delete_observations).
-_HEAVY_TIER_ALLOWED = {"vote_entity", "vote_observation", "merge_entities", "merge_observations"}
+_HEAVY_TIER_ALLOWED = {"vote", "merge_entities", "merge_observations"}
 HEAVY_DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
     *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS if tool not in _HEAVY_TIER_ALLOWED),
     *_DISALLOWED_BUILTINS,
@@ -167,9 +166,8 @@ RECALL_RITUAL = (
     "before the call runs. NEVER conclude the tools are unavailable without "
     "actually attempting at least one search_nodes or search_all_projects call. "
     "Run one or two targeted searches (search_nodes / search_all_projects), then "
-    "traverse only the most promising hits with get_entity_with_relations / "
-    "search_related_nodes to gather linked context - do not exhaustively open every "
-    "match. "
+    "traverse only the most promising hits with get_entity_with_relations to gather "
+    "linked context - do not exhaustively open every match. "
     "When an entity is relevant, read the observations that answer the query and "
     "pull out the SPECIFIC facts - concrete numbers, dates, names, and decisions - "
     "rather than only the high-level theme. If two observations conflict, prefer the "
@@ -188,19 +186,19 @@ DREAM_RITUAL = (
     "The mcp__memory server may report as 'still connecting' on your very first "
     "turn; ignore that and CALL a memory tool anyway - the connection completes "
     "before the call runs. "
-    "Your ONLY permitted mutations are vote_entity with a vote of -1, to DEMOTE "
-    "entities in ranking, and vote_observation with a vote of -1, to DEMOTE a single "
+    "Your ONLY permitted mutations are vote with a vote of -1 on an entity, to DEMOTE "
+    "entities in ranking, and vote with a vote of -1 on an observation, to DEMOTE a single "
     "stale observation within an entity. You must NEVER delete anything and NEVER cast "
     "a positive vote. Deletion and promotion are not your job. "
     "Search broadly ACROSS ALL PROJECTS (search_all_projects, then search_nodes "
-    "and get_entity_with_relations / search_related_nodes to confirm) for entities "
+    "and get_entity_with_relations to confirm) for entities "
     "that are stale, superseded, or duplicated by a better entity. Before voting, "
     "inspect each candidate's current vote_score: do NOT downvote an entity that is "
     "already strongly negative (a score at or below {gc_floor}), because the ranking "
     "penalty has already saturated and further votes are wasted. "
     "To demote an individual observation, read the content_hash field off that "
-    "observation object in the tool results and pass it to vote_observation "
-    "(content_hash=...) - you do NOT need to paste the observation's content. "
+    "observation object in the tool results and pass it to vote "
+    "(observationHash=...) - you do NOT need to paste the observation's content. "
     "Demote at most {max_votes} entities or observations this pass - be conservative "
     "and prefer clear noise over borderline calls. "
     "When you vote, pass the entity's exact project and name slug VERBATIM from the "
@@ -220,12 +218,12 @@ HEAVY_DREAM_RITUAL = (
     "before the call runs. "
     "Your ONLY permitted mutations are: merge_entities (to fold a duplicate entity "
     "into its canonical twin), merge_observations (to fold a duplicate observation "
-    "into another WITHIN THE SAME ENTITY, by content_hash), vote_entity with a vote "
-    "of -1 (to DEMOTE a stale entity in ranking), and vote_observation with a vote of "
-    "-1 (to DEMOTE a single stale observation). You must NEVER delete anything, NEVER "
-    "create entities, and NEVER cast a positive vote. "
+    "into another WITHIN THE SAME ENTITY, by content_hash), vote with a vote "
+    "of -1 on an entity (to DEMOTE a stale entity in ranking), and vote with a vote of "
+    "-1 on an observation (to DEMOTE a single stale observation). You must NEVER delete "
+    "anything, NEVER create entities, and NEVER cast a positive vote. "
     "Search broadly ACROSS ALL PROJECTS (search_all_projects, then search_nodes and "
-    "get_entity_with_relations / search_related_nodes to confirm). "
+    "get_entity_with_relations to confirm). "
     "When you find two entities in the same project that describe the same thing, "
     "merge them: merge_entities(project, source, target) where source is the worse "
     "duplicate to fold away and target is the canonical keeper. Only merge entities "
@@ -235,7 +233,7 @@ HEAVY_DREAM_RITUAL = (
     "observations cheaply. When one entity holds two observations saying the same "
     "thing, fold the worse into the better with "
     "merge_observations(project, entity, sourceHash, targetHash). "
-    "Also demote (vote_entity, -1) entities, and demote (vote_observation, -1, by "
+    "Also demote (vote, -1) entities, and demote (vote, -1, by "
     "content_hash) individual observations, that are clearly stale or superseded but "
     "not duplicates, skipping any already at or below a score of {gc_floor} (the ranking "
     "penalty has saturated there). "

@@ -45,19 +45,19 @@ class TestRecordAndRecent:
 
     def test_latest_seq_is_monotonic(self) -> None:
         assert activity.latest_seq() == 0
-        activity.record_tool("list_projects", {}, {"projects": []})
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         assert activity.latest_seq() == 2
 
     def test_clear_resets_buffer_and_sequence(self) -> None:
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         activity.clear()
         assert activity.recent(0) == []
         assert activity.latest_seq() == 0
 
     def test_maxlen_evicts_oldest_but_sequence_keeps_climbing(self) -> None:
         for _ in range(250):
-            activity.record_tool("list_projects", {}, {"projects": []})
+            activity.record_tool("list_metadata", {}, {"projects": []})
         events = activity.recent(0)
         assert len(events) == 200
         assert events[0]["id"] == 51
@@ -96,8 +96,7 @@ class TestKindMapping:
             "add_observations": "update",
             "delete_observations": "update",
             "set_entity_status": "update",
-            "vote_entity": "update",
-            "vote_observation": "update",
+            "vote": "update",
             "merge_observations": "update",
             "delete_entity": "delete",
             "delete_relation": "delete",
@@ -154,19 +153,19 @@ class TestWriteExtraction:
         )
         assert activity.recent(0)[0]["entities"] == ["task/foo"]
 
-    def test_vote_entity_extracts_name(self) -> None:
+    def test_vote_extracts_name_for_entity_vote(self) -> None:
         activity.record_tool(
-            "vote_entity",
+            "vote",
             {"project": "p", "name": "task/foo", "vote": 1},
             {"name": "task/foo", "project": "p", "vote_score": 1},
         )
         assert activity.recent(0)[0]["entities"] == ["task/foo"]
 
-    def test_vote_observation_extracts_entity_name(self) -> None:
+    def test_vote_extracts_name_for_observation_vote(self) -> None:
         activity.record_tool(
-            "vote_observation",
-            {"project": "p", "entityName": "task/foo", "observation": "o", "vote": 1},
-            {"entityName": "task/foo", "project": "p", "observation": "o", "vote_score": 1},
+            "vote",
+            {"project": "p", "name": "task/foo", "observation": "o", "vote": 1},
+            {"name": "task/foo", "project": "p", "observation": "o", "vote_score": 1},
         )
         assert activity.recent(0)[0]["entities"] == ["task/foo"]
 
@@ -239,7 +238,7 @@ class TestReadExtraction:
         assert sorted(activity.recent(0)[0]["entities"]) == ["a", "b"]
 
     def test_read_with_no_entities_still_records(self) -> None:
-        activity.record_tool("list_projects", {}, {"projects": ["p1", "p2"]})
+        activity.record_tool("list_metadata", {}, {"projects": ["p1", "p2"]})
         event = activity.recent(0)[0]
         assert event["kind"] == "read"
         assert event["entities"] == []
@@ -248,14 +247,14 @@ class TestReadExtraction:
 class TestActivityMarker:
     def test_recording_advances_last_activity(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         assert activity.last_activity() == 1000.0
 
     def test_idle_seconds_measures_gap_since_last_activity(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         monkeypatch.setattr(activity.time, "time", lambda: 1075.0)
         assert activity.idle_seconds() == 75.0
 
@@ -269,7 +268,7 @@ class TestActivityMarker:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(activity.time, "time", lambda: 5000.0)
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         assert json.loads(activity._marker_path().read_text())["last_activity"] == 5000.0
 
         activity.clear()
@@ -282,8 +281,8 @@ class TestActivityMarker:
 
     def test_disk_write_is_throttled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         monkeypatch.setattr(activity.time, "time", lambda: 1005.0)
-        activity.record_tool("list_projects", {}, {"projects": []})
+        activity.record_tool("list_metadata", {}, {"projects": []})
         assert json.loads(activity._marker_path().read_text())["last_activity"] == 1000.0
         assert activity.last_activity() == 1005.0

@@ -48,10 +48,9 @@ _MEMORY_READ_TOOL_NAMES = frozenset(
     {
         "search_nodes",
         "read_graph",
-        "list_projects",
+        "list_metadata",
         "search_all_projects",
         "get_entity_with_relations",
-        "search_related_nodes",
     }
 )
 
@@ -100,7 +99,7 @@ _AUTO_REGISTERED_NOTE = (
 _AUTO_REGISTER_UNKNOWN_NOTE = (
     "This workspace (`{anchor}`) maps to no known memory project and its name could not"
     " be matched to an existing one, so no scope was created. If it belongs to a project,"
-    " register it with `set_project_paths(project=..., paths=['{anchor}'])`."
+    " register it with `set_metadata(project=..., kind='paths', values=['{anchor}'])`."
 )
 
 _DEFAULT_READ_ONLY_AGENT_TYPES = frozenset({"Explore", "Plan"})
@@ -370,7 +369,7 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
         "(use `search_all_projects` instead only on explicit request for the full, "
         "unrestricted scan across every project)\n"
         "3. `search_nodes` for task keywords in `<repo-name>` project\n"
-        "4. `search_related_nodes` on any relevant result"
+        "4. `get_entity_with_relations` on any relevant result"
     )
     return parts
 

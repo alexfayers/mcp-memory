@@ -172,7 +172,7 @@ Append observations to an existing entity without overwriting. Skips duplicates.
 
 ### delete_observations
 
-Delete specific observations from an existing entity by exact content match. Returns the count deleted. Throws if the entity does not exist. For an observation that is stale but not wrong enough to remove, prefer `vote_observation` (downvote to sink it) over deletion.
+Delete specific observations from an existing entity by exact content match. Returns the count deleted. Throws if the entity does not exist. For an observation that is stale but not wrong enough to remove, prefer `vote` (downvote to sink it) over deletion.
 
 ### trim_observations_to_outcome
 
@@ -180,7 +180,7 @@ Delete every observation on an entity except those whose `content_hash` is in `k
 
 ### search_nodes
 
-FTS5 full-text search with recency- and vote-weighted BM25 ranking. Recency decay is type-aware (durable types such as `pattern` and `knowledge` decay far slower than `task`), and usefulness votes (see `vote_entity`) nudge results up or down within bounds. Multi-word queries match entities containing *any* of the terms by default (entities matching more terms rank first); pass `match_all=true` to require *all* terms. Optional `entity_type`, `status`, and time-range (`start_date`/`end_date`) filters. Date params support relative formats (`7d`, `2w`, `3m`) and ISO dates. Within each returned entity, observations are ordered best-first by their own votes (see `vote_observation`).
+FTS5 full-text search with recency- and vote-weighted BM25 ranking. Recency decay is type-aware (durable types such as `pattern` and `knowledge` decay far slower than `task`), and usefulness votes (see `vote`) nudge results up or down within bounds. Multi-word queries match entities containing *any* of the terms by default (entities matching more terms rank first); pass `match_all=true` to require *all* terms. Optional `entity_type`, `status`, and time-range (`start_date`/`end_date`) filters. Date params support relative formats (`7d`, `2w`, `3m`) and ISO dates. Within each returned entity, observations are ordered best-first by their own votes (see `vote`).
 
 ### read_graph
 
@@ -192,27 +192,19 @@ Create relationships between entities. Duplicates are ignored. Relation types ar
 
 ### get_entity_with_relations
 
-Get an entity with all its relations and connected entities via graph traversal.
-
-### search_related_nodes
-
-Get an entity with directly related entities, optionally filtered by `entityType` and/or `relationType`.
+Get an entity with all its relations and connected entities via graph traversal, optionally filtered by `entityType` and/or `relationType`.
 
 ### set_entity_status
 
 Set or clear the status of an entity. Valid statuses: `planned`, `in-progress`, `blocked`, `resolved`, `archived`.
 
-### vote_entity
+### vote
 
-Record a `+1` (useful) or `-1` (stale/unhelpful) usefulness vote on an entity as you retrieve it. Votes accumulate into a net `vote_score` that nudges search ranking within bounds - useful memories surface higher, unhelpful ones sink but stay findable - without changing the entity's content or `updated_at`. Returns the new net `vote_score`.
+Record a `+1` (useful) or `-1` (stale/unhelpful) usefulness vote on an entity as you retrieve it. Votes accumulate into a net `vote_score` that nudges search ranking within bounds - useful memories surface higher, unhelpful ones sink but stay findable - without changing the entity's content or `updated_at`. Pass `observation` (exact content, like `delete_observations`) or, more cheaply, `observationHash` (the `content_hash` read off the observation in tool output) to cast the vote on a single observation instead of the whole entity - upvoted observations surface first within the entity and downvoted ones sink, so a fat entity leads with its most useful lines. This is a light alternative to `delete_observations` when an observation is stale but not wrong enough to remove. Returns the new net `vote_score`.
 
 In addition to these explicit votes, the server casts a deterministic `+1` on its own when an entity that a search surfaced is edited within a short window (default 30 minutes, `MCP_AUTO_VOTE_WINDOW_SECONDS`) - treating "searched, then acted on" as observed usefulness. Auto-votes are idempotent per surfacing and capped per entity per day (`MCP_AUTO_VOTE_MAX_PER_DAY`, default 3); the surfacings are also retained for 30 days to measure ranking quality (precision@k / MRR).
 
-### vote_observation
-
-Record a `+1` or `-1` usefulness vote on a single observation of an entity, addressed either by its exact content (like `delete_observations`) or, more cheaply, by its `content_hash` (read off the observation in tool output). Upvoted observations surface first within the entity and downvoted ones sink, so a fat entity leads with its most useful lines. This is a light alternative to `delete_observations` when an observation is stale but not wrong enough to remove, and complements `vote_entity`, which ranks whole entities. Voting does not change content or `updated_at`. Returns the observation's new net `vote_score`.
-
-### bulk_rename_entity
+### rename_entity
 
 Rename a single entity in place within a project scope. All relations and observations are preserved (relations key on entity id, not name). Fails if `new_name` already exists in the scope, or would collide across the global/project name-uniqueness boundary.
 
@@ -234,27 +226,19 @@ Fold a duplicate entity (`source`) into its canonical twin (`target`) within one
 
 ### merge_observations
 
-Fold a near-duplicate observation (`sourceHash`) into another (`targetHash`) within a single entity, both addressed by their `content_hash`. The target keeps the higher of the two vote scores and the source observation is **hard-deleted** - unlike `merge_entities`'s reversible soft-delete, this removal is not recoverable. This is the observation-level analogue of `merge_entities` for genuine within-entity duplicates; for an observation that is merely stale rather than a duplicate, prefer `vote_observation` (downvote to sink it) or `delete_observations`.
+Fold a near-duplicate observation (`sourceHash`) into another (`targetHash`) within a single entity, both addressed by their `content_hash`. The target keeps the higher of the two vote scores and the source observation is **hard-deleted** - unlike `merge_entities`'s reversible soft-delete, this removal is not recoverable. This is the observation-level analogue of `merge_entities` for genuine within-entity duplicates; for an observation that is merely stale rather than a duplicate, prefer `vote` (downvote to sink it) or `delete_observations`.
 
 ### restore_entity
 
 Restore a soft-deleted entity, making it visible to reads again. Soft-deleted entities (e.g. the loser of a `merge_entities` call) are hidden from all reads but kept intact until a grace-window purge (off by default, `MCP_MEMORY_PURGE_ENABLED`; window `MCP_MEMORY_PURGE_GRACE_DAYS`, default 30). Restore reverses the hiding while the entity still exists.
 
-### list_projects
+### list_metadata
 
-List all project names in the knowledge graph. Takes no parameters.
+List registered metadata for a `kind` (`projects`, `paths`, or `groups`). `list_metadata(kind="projects")` lists all project names in the knowledge graph. `list_metadata(kind="paths")` (optionally scoped with `project=`) lists registered (project, path) mappings. `list_metadata(kind="groups")` (optionally scoped with `project=`) lists registered (project, group) mappings.
 
 ### search_all_projects
 
 Search entities across all projects in a single call. Returns results grouped by project name. Same FTS5 search and filters as `search_nodes` (including `match_all`) but without the `project` parameter.
-
-### get_paths_for_project
-
-Return the filesystem path(s) registered to a project, or an empty list if the project is unknown or has no registered paths. Read-only - does not create the project.
-
-### get_paths_for_entity
-
-Find which project(s) contain an entity with the given name and return their registered filesystem paths, grouped by project. Entity names are unique only within a project, so the same name may appear in several projects; a matching project with no registered path is still listed with an empty paths list. Returns an empty `matches` list if no entity has that name.
 
 ## Command-line
 
@@ -262,7 +246,7 @@ Find which project(s) contain an entity with the given name and return their reg
 
 Emit a read-only structural-hygiene report of the memory graph as JSON - orphans, misused `project`-type entities, unprefixed names, ghost scopes, oversized entities, `task belongs-to project` relation violations, star-graph tasks, and strongly-downvoted entities. Scope it with `--project <scope>` or `--all-projects`.
 
-Add `--propose-plan` to emit a `{"steps": [...]}` list of concrete fix-it tool calls instead of the raw report. Deterministic fixes (e.g. `bulk_rename_entity`) carry `needs_review: false`; fixes needing human/agent judgement (orphan relinking, deletes, and `consider_split` advisories for entities that bundle multiple scopes) carry `needs_review: true`. A `trim_observations_to_outcome` step only carries `needs_review: false` when every observation it would drop is a near-duplicate of one being kept - if any dropped observation looks like a distinct fact, it carries `needs_review: true` instead, since the trim is a hard delete.
+Add `--propose-plan` to emit a `{"steps": [...]}` list of concrete fix-it tool calls instead of the raw report. Deterministic fixes (e.g. `rename_entity`) carry `needs_review: false`; fixes needing human/agent judgement (orphan relinking, deletes, and `consider_split` advisories for entities that bundle multiple scopes) carry `needs_review: true`. A `trim_observations_to_outcome` step only carries `needs_review: false` when every observation it would drop is a near-duplicate of one being kept - if any dropped observation looks like a distinct fact, it carries `needs_review: true` instead, since the trim is a hard delete.
 
 ### `mcp-memory metrics`
 

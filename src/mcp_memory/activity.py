@@ -36,21 +36,16 @@ _KIND_BY_TOOL: dict[str, Kind] = {
     "read_graph": "read",
     "search_all_projects": "read",
     "get_entity_with_relations": "read",
-    "search_related_nodes": "read",
-    "list_projects": "read",
-    "list_project_paths": "read",
+    "list_metadata": "read",
     "get_project_for_path": "read",
-    "get_paths_for_project": "read",
-    "get_paths_for_entity": "read",
     "create_entities": "create",
     "create_relations": "create",
     "add_observations": "update",
     "delete_observations": "update",
     "set_entity_status": "update",
-    "vote_entity": "update",
-    "vote_observation": "update",
+    "vote": "update",
     "merge_observations": "update",
-    "set_project_paths": "update",
+    "set_metadata": "update",
     "move_project_entities": "update",
     "delete_entity": "delete",
     "delete_relation": "delete",
@@ -183,11 +178,10 @@ def _names_from_write_kwargs(tool_name: str, kwargs: dict[str, Any]) -> list[str
     elif tool_name in (
         "add_observations",
         "delete_observations",
-        "vote_observation",
         "merge_observations",
     ) and kwargs.get("entityName"):
         names.append(str(kwargs["entityName"]))
-    elif tool_name in ("delete_entity", "set_entity_status", "vote_entity") and kwargs.get("name"):
+    elif tool_name in ("delete_entity", "set_entity_status", "vote") and kwargs.get("name"):
         names.append(str(kwargs["name"]))
     elif tool_name == "create_relations":
         for relation in kwargs.get("relations", []) or []:

@@ -32,10 +32,9 @@ from mcp_memory.path_resolver import normalize_path
 _READ_TOOL_NAMES = [
     "search_nodes",
     "read_graph",
-    "list_projects",
+    "list_metadata",
     "search_all_projects",
     "get_entity_with_relations",
-    "search_related_nodes",
 ]
 
 _EDIT_TOOL_NAMES = [
@@ -186,7 +185,7 @@ class TestAutoRegister:
         result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
         assert "weird" not in self._db().list_projects()
         assert result is not None
-        assert any("set_project_paths" in note for note in result.notes)
+        assert any("set_metadata" in note for note in result.notes)
 
     def test_no_clobber_when_already_mapped(self, tmp_path: Path) -> None:
         db = self._db()

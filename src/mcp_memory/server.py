@@ -93,14 +93,14 @@ SEARCH_NODES_DESC = (
     "Search entities and relations by text query within a project. "
     "Uses FTS5 full-text search with BM25 relevance ranking, weighted by type-aware recency "
     "(durable types like pattern/knowledge decay slower than task) and by usefulness votes "
-    "(see vote_entity: upvoted entities rank higher, downvoted ones sink but stay findable). "
+    "(see vote: upvoted entities rank higher, downvoted ones sink but stay findable). "
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "
     "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
     "Within each returned entity, observations are ordered best-first by their own votes "
-    "(see vote_observation). Each observation carries a content_hash usable with "
-    "vote_observation, delete_observations, and merge_observations to address it without "
+    "(see vote). Each observation carries a content_hash usable with "
+    "vote, delete_observations, and merge_observations to address it without "
     "pasting its full content. Use compact=true to omit observations for a lightweight summary."
     + _MAX_OBSERVATION_CHARS_DOC
 )
@@ -124,21 +124,22 @@ RESTORE_ENTITY_DESC = (
 )
 GET_ENTITY_WITH_RELATIONS_DESC = (
     "Get an entity along with all its relations and related entities within a project. "
-    "Traverses the graph to discover linked context." + _MAX_OBSERVATION_CHARS_DOC
+    "Traverses the graph to discover linked context. "
+    "Optionally filter by entityType and/or relationType." + _MAX_OBSERVATION_CHARS_DOC
 )
 ADD_OBSERVATIONS_DESC = (
     "Append observations to an existing entity without overwriting. "
     "Skips duplicates. Throws if the entity does not exist. Returns the content hashes of the "
-    "newly-added observations, usable with vote_observation/delete_observations/"
+    "newly-added observations, usable with vote/delete_observations/"
     "merge_observations. "
-    "To reorder existing observations by usefulness rather than add one, see vote_observation."
+    "To reorder existing observations by usefulness rather than add one, see vote."
 )
 DELETE_OBSERVATIONS_DESC = (
     "Delete specific observations from an existing entity by exact content match "
     "(observations) and/or by content_hash (observationHashes - the cheap alternative that "
     "avoids pasting full content; hashes come from read output). "
     "Returns the count of deleted observations. Throws if the entity does not exist. "
-    "For an observation that is stale but not wrong enough to remove, prefer vote_observation "
+    "For an observation that is stale but not wrong enough to remove, prefer vote "
     "(downvote to sink it) over deletion."
 )
 TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
@@ -147,7 +148,7 @@ TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
     "keep_hashes must be non-empty (an entity must retain at least its outcome observation). "
     "Returns the number of observations deleted."
 )
-BULK_RENAME_ENTITY_DESC = (
+RENAME_ENTITY_DESC = (
     "Rename a single entity in place within a project scope. "
     "All relations and observations are preserved (relations key on entity id, not name). "
     "Fails if new_name already exists in the scope, or would collide across the global/project "
@@ -163,58 +164,42 @@ SET_ENTITY_STATUS_DESC = (
     "Set or clear the status of an entity. "
     "Valid statuses: planned, in-progress, blocked, resolved, archived. Use null to clear."
 )
-VOTE_ENTITY_DESC = (
-    "Record a +1 or -1 usefulness vote on an entity as you retrieve it: +1 for a memory that "
-    "proved useful, -1 for one that was stale or unhelpful. Votes nudge search ranking "
-    "(useful memories surface higher, unhelpful ones sink but remain findable) and do not "
-    "change the entity's content or updated_at. A light alternative to delete_entity when a "
-    "memory is not wrong enough to remove. vote must be 1 or -1; returns the new net vote_score."
-)
-VOTE_OBSERVATION_DESC = (
-    "Record a +1 or -1 usefulness vote on a single observation of an entity, addressed by its "
-    "observationHash (the content_hash from read output - preferred, saves tokens) OR its exact "
-    "observation content; provide exactly one. Upvoted observations surface first within the "
-    "entity and downvoted ones sink, so a fat entity leads with its most useful lines. A light "
-    "alternative to delete_observations when an observation is stale but not wrong enough to "
-    "remove. Complements vote_entity, which ranks whole entities. Does not change content or "
-    "updated_at. vote must be 1 or -1; returns the observation's new net vote_score."
-)
-SEARCH_RELATED_NODES_DESC = (
-    "Get an entity along with all its directly related entities within a project. "
-    "Optionally filter by entityType and/or relationType." + _MAX_OBSERVATION_CHARS_DOC
-)
-LIST_PROJECTS_DESC = "List all project names in the knowledge graph."
-
-SET_PROJECT_PATHS_DESC = (
-    "Register filesystem paths for a project. When the working directory falls under a "
-    "registered path, that project becomes the active memory scope. Replaces any paths "
-    "previously registered to the project. A path can belong to only one project."
+VOTE_DESC = (
+    "Record a +1 or -1 usefulness vote as you retrieve a memory: +1 for one that proved useful, "
+    "-1 for one that was stale or unhelpful. Omit both observation and observationHash to vote on "
+    "the whole entity named by name. Supply exactly one of observation (exact content) or "
+    "observationHash (the content_hash from read output - preferred, saves tokens) to vote on "
+    "that single observation of the entity instead. Votes nudge ranking (useful memories surface "
+    "higher, unhelpful ones sink but remain findable) and do not change content or updated_at. "
+    "An entity vote is a light alternative to delete_entity; an observation vote is a light "
+    "alternative to delete_observations - neither is wrong enough to remove outright. vote must "
+    "be 1 or -1; returns the new net vote_score."
 )
 GET_PROJECT_FOR_PATH_DESC = (
     "Return the project whose registered path contains the given filesystem path, "
     "or null if none match. The longest matching registered path wins."
 )
-LIST_PROJECT_PATHS_DESC = "List all registered (project, path) mappings in the knowledge graph."
-GET_PATHS_FOR_PROJECT_DESC = (
-    "Return the filesystem path(s) registered to a project, or an empty list if the project "
-    "is unknown or has no registered paths. Read-only: does not create the project."
-)
-GET_PATHS_FOR_ENTITY_DESC = (
-    "Find which project(s) contain an entity with the given name and return their registered "
-    "filesystem paths, grouped by project. Entity names are unique only within a project, so "
-    "the same name may appear in several projects. A matching project with no registered path "
-    "is still listed (with an empty paths list). Returns an empty matches list if no entity "
-    "has that name."
-)
-SET_PROJECT_GROUPS_DESC = (
-    "Register the groups a project belongs to (e.g. sibling repos in one tooling system), "
-    "replacing any groups previously set for it. A project may belong to several groups. "
-    "Use get_group_members to resolve a project's group siblings."
-)
-LIST_PROJECT_GROUPS_DESC = "List all registered (project, group) mappings in the knowledge graph."
 GET_GROUP_MEMBERS_DESC = (
     "Return the other projects sharing a group with the given project, or an empty list if "
     "the project belongs to no group."
+)
+LIST_METADATA_DESC = (
+    "List registry metadata. kind='projects' returns every project name in the knowledge "
+    "graph (project is ignored). kind='paths': omit project to list all (project, path) "
+    "mappings, or pass project to get just that project's registered filesystem path(s). "
+    "kind='groups': omit project to list all (project, group) mappings, or pass project to "
+    "get just that project's registered group name(s). Returns an error listing valid kinds "
+    "if kind is not one of 'projects', 'paths', 'groups'."
+)
+SET_METADATA_DESC = (
+    "Replace registry metadata for a project - does NOT append, the given values list fully "
+    "replaces whatever was previously set. kind='paths' registers filesystem paths for the "
+    "project (when the working directory falls under a registered path, that project becomes "
+    "the active memory scope; a path can belong to only one project) and returns the "
+    "project's resulting paths. kind='groups' registers the groups the project belongs to "
+    "(e.g. sibling repos in one tooling system, resolved via get_group_members) and returns "
+    "the project's resulting group members. Auto-creates the project's root entity if "
+    "needed. Returns an error listing valid kinds if kind is not one of 'paths', 'groups'."
 )
 DELETE_PROJECT_DESC = (
     "Delete an empty project and its registered paths. Refuses to delete the 'global' "
@@ -245,7 +230,7 @@ SEARCH_ALL_PROJECTS_DESC = (
     "Search entities and relations across ALL projects in a single call. "
     "Returns results grouped by project name. "
     "Uses FTS5 full-text search with BM25 relevance ranking, weighted by type-aware recency "
-    "and usefulness votes (see vote_entity). "
+    "and usefulness votes (see vote). "
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status, and/or date range "
@@ -478,29 +463,51 @@ def read_graph(
         return {"error": str(e)}
 
 
-@mcp.tool(description=LIST_PROJECTS_DESC)
+@mcp.tool(description=LIST_METADATA_DESC)
 @_track
-def list_projects() -> dict[str, object]:
-    """List all project names in the knowledge graph."""
+def list_metadata(kind: str, project: str | None = None) -> dict[str, object]:
+    """List registry metadata (projects, paths, or groups)."""
     try:
         db = _get_db()
-        return {"projects": db.list_projects()}
+        result: dict[str, object]
+        if kind == "projects":
+            result = {"projects": db.list_projects()}
+        elif kind == "paths" and project is None:
+            result = {"mappings": [{"project": n, "path": p} for n, p in db.list_project_paths()]}
+        elif kind == "paths" and project is not None:
+            result = {"paths": db.get_paths_for_project(project)}
+        elif kind == "groups" and project is None:
+            result = {
+                "mappings": [{"project": n, "group": g} for n, g in db.list_project_groups()]
+            }
+        elif kind == "groups" and project is not None:
+            result = {
+                "mappings": [
+                    {"project": n, "group": g} for n, g in db.list_project_groups(project)
+                ]
+            }
+        else:
+            result = {"error": f"Invalid kind '{kind}'. Must be one of: projects, paths, groups."}
+        return result
     except Exception as e:
         return {"error": str(e)}
 
 
-@mcp.tool(description=SET_PROJECT_PATHS_DESC)
+@mcp.tool(description=SET_METADATA_DESC)
 @_track
-def set_project_paths(
-    project: str,
-    paths: list[str],
-) -> dict[str, object]:
-    """Register filesystem paths for a project, replacing any existing ones."""
+def set_metadata(project: str, kind: str, values: list[str]) -> dict[str, object]:
+    """Replace registry metadata (paths or groups) for a project."""
     try:
         db = _get_db()
-        _ensure_project_root(db, project)
-        db.set_project_paths(project, paths)
-        return {"project": project, "paths": db.get_paths_for_project(project)}
+        if kind == "paths":
+            _ensure_project_root(db, project)
+            db.set_project_paths(project, values)
+            return {"project": project, "paths": db.get_paths_for_project(project)}
+        if kind == "groups":
+            _ensure_project_root(db, project)
+            db.set_project_groups(project, values)
+            return {"project": project, "members": db.get_group_members(project)}
+        return {"error": f"Invalid kind '{kind}'. Must be one of: paths, groups."}
     except Exception as e:
         return {"error": str(e)}
 
@@ -516,55 +523,6 @@ def get_project_for_path(path: str) -> dict[str, object]:
         return {"error": str(e)}
 
 
-@mcp.tool(description=LIST_PROJECT_PATHS_DESC)
-@_track
-def list_project_paths() -> dict[str, object]:
-    """List all registered project-path mappings."""
-    try:
-        db = _get_db()
-        return {"mappings": [{"project": n, "path": p} for n, p in db.list_project_paths()]}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@mcp.tool(description=GET_PATHS_FOR_PROJECT_DESC)
-@_track
-def get_paths_for_project(project: str) -> dict[str, object]:
-    """Return the registered filesystem path(s) for a project."""
-    try:
-        db = _get_db()
-        return {"paths": db.get_paths_for_project(project)}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@mcp.tool(description=SET_PROJECT_GROUPS_DESC)
-@_track
-def set_project_groups(
-    project: str,
-    groups: list[str],
-) -> dict[str, object]:
-    """Register the groups a project belongs to, replacing any existing ones."""
-    try:
-        db = _get_db()
-        _ensure_project_root(db, project)
-        db.set_project_groups(project, groups)
-        return {"project": project, "members": db.get_group_members(project)}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@mcp.tool(description=LIST_PROJECT_GROUPS_DESC)
-@_track
-def list_project_groups() -> dict[str, object]:
-    """List all registered project-group mappings."""
-    try:
-        db = _get_db()
-        return {"mappings": [{"project": n, "group": g} for n, g in db.list_project_groups()]}
-    except Exception as e:
-        return {"error": str(e)}
-
-
 @mcp.tool(description=GET_GROUP_MEMBERS_DESC)
 @_track
 def get_group_members(project: str) -> dict[str, object]:
@@ -572,22 +530,6 @@ def get_group_members(project: str) -> dict[str, object]:
     try:
         db = _get_db()
         return {"members": db.get_group_members(project)}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@mcp.tool(description=GET_PATHS_FOR_ENTITY_DESC)
-@_track
-def get_paths_for_entity(name: str) -> dict[str, object]:
-    """Return the project(s) and registered path(s) for an entity name."""
-    try:
-        db = _get_db()
-        return {
-            "matches": [
-                {"project": project, "paths": paths}
-                for project, paths in db.paths_for_entity_name(name)
-            ]
-        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -779,14 +721,21 @@ def delete_relation(
 def get_entity_with_relations(
     project: str,
     name: str,
+    entityType: str | None = None,
+    relationType: str | None = None,
     compact: bool = False,
     max_observation_chars: int | None = None,
 ) -> dict[str, object]:
-    """Get an entity with all its relations and related entities."""
+    """Get an entity with all its relations and related entities, optionally filtered."""
     try:
         db = _get_db()
         result: GraphResult = db.get_entity_with_relations(
-            project, name, compact=compact, max_observation_chars=max_observation_chars
+            project,
+            name,
+            entity_type=entityType,
+            relation_type=relationType,
+            compact=compact,
+            max_observation_chars=max_observation_chars,
         )
         return _attach_relation_type_warnings(result)
     except Exception as e:
@@ -846,9 +795,9 @@ def trim_observations_to_outcome(
         return {"error": str(e)}
 
 
-@mcp.tool(description=BULK_RENAME_ENTITY_DESC)
+@mcp.tool(description=RENAME_ENTITY_DESC)
 @_track
-def bulk_rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
+def rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
     """Rename a single entity in place, preserving its relations and observations."""
     try:
         db = _get_db()
@@ -902,65 +851,34 @@ def set_entity_status(
         return {"error": str(e)}
 
 
-@mcp.tool(description=VOTE_ENTITY_DESC)
+@mcp.tool(description=VOTE_DESC)
 @_track
-def vote_entity(project: str, name: str, vote: int) -> dict[str, object]:
-    """Apply a +1/-1 usefulness vote to an entity, returning its new net vote_score."""
-    try:
-        db = _get_db()
-        return {"name": name, "project": project, "vote_score": db.vote_entity(project, name, vote)}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@mcp.tool(description=VOTE_OBSERVATION_DESC)
-@_track
-def vote_observation(
+def vote(
     project: str,
-    entityName: str,
+    name: str,
     vote: int,
     observation: str | None = None,
     observationHash: str | None = None,
 ) -> dict[str, object]:
-    """Apply a +1/-1 usefulness vote to a single observation, returning its new net vote_score."""
+    """Apply a +1/-1 usefulness vote to an entity or one of its observations."""
     try:
         db = _get_db()
+        if observation is None and observationHash is None:
+            return {
+                "name": name,
+                "project": project,
+                "vote_score": db.vote_entity(project, name, vote),
+            }
         vote_score = db.vote_observation(
-            project, entityName, vote, content=observation, content_hash=observationHash
+            project, name, vote, content=observation, content_hash=observationHash
         )
         return {
-            "entityName": entityName,
+            "entityName": name,
             "project": project,
             "observation": observation,
             "observationHash": observationHash,
             "vote_score": vote_score,
         }
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@mcp.tool(description=SEARCH_RELATED_NODES_DESC)
-@_track
-def search_related_nodes(
-    project: str,
-    name: str,
-    entityType: str | None = None,
-    relationType: str | None = None,
-    compact: bool = False,
-    max_observation_chars: int | None = None,
-) -> dict[str, object]:
-    """Get an entity with filtered relations and related entities."""
-    try:
-        db = _get_db()
-        result: GraphResult = db.search_related_nodes(
-            project,
-            name,
-            entity_type=entityType,
-            relation_type=relationType,
-            compact=compact,
-            max_observation_chars=max_observation_chars,
-        )
-        return _attach_relation_type_warnings(result)
     except Exception as e:
         return {"error": str(e)}
 

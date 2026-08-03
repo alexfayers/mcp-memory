@@ -728,46 +728,6 @@ class TestProjectPaths:
         assert db.get_project_for_path(str(repo)) == "platform"
         assert db.get_paths_for_project("other") == []
 
-    def test_paths_for_entity_name_single_project(
-        self, db: DatabaseManager, tmp_path: Path
-    ) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        db.create_entities(
-            "platform", [{"name": "task/x", "entityType": "task", "observations": ["o"]}]
-        )
-        db.set_project_paths("platform", [str(repo)])
-        assert db.paths_for_entity_name("task/x") == [("platform", [normalize_path(str(repo))])]
-
-    def test_paths_for_entity_name_groups_by_project(
-        self, db: DatabaseManager, tmp_path: Path
-    ) -> None:
-        first = tmp_path / "first"
-        second = tmp_path / "second"
-        first.mkdir()
-        second.mkdir()
-        db.create_entities(
-            "alpha", [{"name": "shared", "entityType": "task", "observations": ["o"]}]
-        )
-        db.create_entities(
-            "beta", [{"name": "shared", "entityType": "task", "observations": ["o"]}]
-        )
-        db.set_project_paths("alpha", [str(first)])
-        db.set_project_paths("beta", [str(second)])
-        assert db.paths_for_entity_name("shared") == [
-            ("alpha", [normalize_path(str(first))]),
-            ("beta", [normalize_path(str(second))]),
-        ]
-
-    def test_paths_for_entity_name_includes_pathless_project(self, db: DatabaseManager) -> None:
-        db.create_entities(
-            "platform", [{"name": "task/x", "entityType": "task", "observations": ["o"]}]
-        )
-        assert db.paths_for_entity_name("task/x") == [("platform", [])]
-
-    def test_paths_for_entity_name_missing_entity_returns_empty(self, db: DatabaseManager) -> None:
-        assert db.paths_for_entity_name("nope") == []
-
 
 class TestProjectGroups:
     def test_get_group_members_empty_when_no_group(self, db: DatabaseManager) -> None:
@@ -1307,11 +1267,6 @@ class TestSoftDelete:
         assert db.entity_exists_in_project("e1", "proj") is False
         assert db.entity_exists_outside_project("e1", "other") is None
 
-    def test_soft_deleted_hidden_from_paths_for_entity(self, db: DatabaseManager) -> None:
-        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
-        db.soft_delete_entity("proj", "e1")
-        assert db.paths_for_entity_name("e1") == []
-
     def test_soft_deleted_hidden_from_get_entity(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         db.soft_delete_entity("proj", "e1")
@@ -1676,7 +1631,7 @@ class TestGetEntityWithRelations:
         assert related_names == {"b", "c"}
 
 
-class TestSearchRelatedNodes:
+class TestGetEntityWithRelationsFilters:
     def test_filter_by_entity_type(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj",
@@ -1693,7 +1648,7 @@ class TestSearchRelatedNodes:
                 Relation(source="a", target="c", relation_type="implements"),
             ],
         )
-        result = db.search_related_nodes("proj", "a", entity_type="project")
+        result = db.get_entity_with_relations("proj", "a", entity_type="project")
         related_names = {e.name for e in result["relatedEntities"] if isinstance(e, Entity)}
         assert related_names == {"b"}
 
@@ -1713,7 +1668,7 @@ class TestSearchRelatedNodes:
                 Relation(source="a", target="c", relation_type="implements"),
             ],
         )
-        result = db.search_related_nodes("proj", "a", relation_type="implements")
+        result = db.get_entity_with_relations("proj", "a", relation_type="implements")
         assert len(result["relations"]) == 1
         assert result["relations"][0].relation_type == "implements"
 
@@ -2473,33 +2428,17 @@ class TestGetEntityWithRelationsBudget:
         assert obs_contents(_related(result)) == ["xxx", "yyy", "zzz"]
 
 
-class TestSearchRelatedNodesBudget:
+class TestGetEntityWithRelationsFilteredBudget:
     def test_compact_empties_primary_and_related(self, db: DatabaseManager) -> None:
         _seed_primary_and_related(db)
-        result = db.search_related_nodes("proj", "a", compact=True)
+        result = db.get_entity_with_relations("proj", "a", entity_type="project", compact=True)
         assert result["entity"].observations == []
         assert _related(result).observations == []
 
     def test_small_budget_trims_primary_and_related(self, db: DatabaseManager) -> None:
         _seed_primary_and_related(db)
-        result = db.search_related_nodes("proj", "a", max_observation_chars=6)
+        result = db.get_entity_with_relations(
+            "proj", "a", entity_type="project", max_observation_chars=6
+        )
         assert obs_contents(result["entity"]) == ["aaa", "bbb", SENTINEL.format(n=1)]
         assert obs_contents(_related(result)) == ["xxx", "yyy", SENTINEL.format(n=1)]
-
-    def test_zero_budget_keeps_only_top_on_primary_and_related(self, db: DatabaseManager) -> None:
-        _seed_primary_and_related(db)
-        result = db.search_related_nodes("proj", "a", max_observation_chars=0)
-        assert obs_contents(result["entity"]) == ["aaa", SENTINEL.format(n=2)]
-        assert obs_contents(_related(result)) == ["xxx", SENTINEL.format(n=2)]
-
-    def test_default_none_returns_all(self, db: DatabaseManager) -> None:
-        _seed_primary_and_related(db)
-        result = db.search_related_nodes("proj", "a")
-        assert obs_contents(result["entity"]) == ["aaa", "bbb", "ccc"]
-        assert obs_contents(_related(result)) == ["xxx", "yyy", "zzz"]
-
-    def test_negative_budget_returns_all(self, db: DatabaseManager) -> None:
-        _seed_primary_and_related(db)
-        result = db.search_related_nodes("proj", "a", max_observation_chars=-1)
-        assert obs_contents(result["entity"]) == ["aaa", "bbb", "ccc"]
-        assert obs_contents(_related(result)) == ["xxx", "yyy", "zzz"]

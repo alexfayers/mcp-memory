@@ -298,9 +298,7 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
         except ValueError:
             return JSONResponse({"error": "entity not found"}, status_code=404)
         result = {"name": name, "project": project, "vote_score": new_score}
-        activity.record_tool(
-            "vote_entity", {"project": project, "name": name, "vote": vote}, result
-        )
+        activity.record_tool("vote", {"project": project, "name": name, "vote": vote}, result)
         return JSONResponse(result)
 
     @mcp.custom_route("/api/vote-observation", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
@@ -322,10 +320,10 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
             "vote_score": new_score,
         }
         activity.record_tool(
-            "vote_observation",
+            "vote",
             {
                 "project": project,
-                "entityName": name,
+                "name": name,
                 "observationHash": observation_hash,
                 "vote": vote,
             },

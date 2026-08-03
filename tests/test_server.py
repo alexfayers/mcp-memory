@@ -280,6 +280,37 @@ class TestRelationTypeWarnings:
         assert "relationTypeWarnings" not in result
 
 
+class TestGetEntityWithRelationsFilters:
+    def _seed(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+                {"name": "c", "entityType": "feature", "observations": ["z"]},
+            ],
+        )
+        server_db.create_relations(
+            "proj",
+            [
+                Relation(source="a", target="b", relation_type="belongs-to"),
+                Relation(source="a", target="c", relation_type="implements"),
+            ],
+        )
+
+    def test_filter_by_entity_type(self, server_db: DatabaseManager) -> None:
+        self._seed(server_db)
+        result = server.get_entity_with_relations("proj", "a", entityType="project")
+        related_names = {e.name for e in result["relatedEntities"] if isinstance(e, Entity)}
+        assert related_names == {"b"}
+
+    def test_filter_by_relation_type(self, server_db: DatabaseManager) -> None:
+        self._seed(server_db)
+        result = server.get_entity_with_relations("proj", "a", relationType="implements")
+        assert len(result["relations"]) == 1
+        assert result["relations"][0].relation_type == "implements"
+
+
 class TestInlineRelations:
     def test_auto_fills_source_from_entity_name(self) -> None:
         result = _validate_and_extract_relations(
@@ -462,8 +493,8 @@ class TestVoteEntityTool:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        server.vote_entity("proj", "e1", 1)
-        assert server.vote_entity("proj", "e1", 1) == {
+        server.vote("proj", "e1", 1)
+        assert server.vote("proj", "e1", 1) == {
             "name": "e1",
             "project": "proj",
             "vote_score": 2,
@@ -473,10 +504,10 @@ class TestVoteEntityTool:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        assert "error" in server.vote_entity("proj", "e1", 5)
+        assert "error" in server.vote("proj", "e1", 5)
 
     def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
-        assert "error" in server.vote_entity("proj", "nope", 1)
+        assert "error" in server.vote("proj", "nope", 1)
 
 
 class TestVoteObservationTool:
@@ -484,8 +515,8 @@ class TestVoteObservationTool:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        server.vote_observation("proj", "e1", 1, observation="x")
-        assert server.vote_observation("proj", "e1", 1, observation="x") == {
+        server.vote("proj", "e1", 1, observation="x")
+        assert server.vote("proj", "e1", 1, observation="x") == {
             "entityName": "e1",
             "project": "proj",
             "observation": "x",
@@ -498,22 +529,26 @@ class TestVoteObservationTool:
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
         content_hash = server_db.get_entity("proj", "e1").observations[0].content_hash
-        result = server.vote_observation("proj", "e1", 1, observationHash=content_hash)
+        result = server.vote("proj", "e1", 1, observationHash=content_hash)
         assert result["vote_score"] == 1
         assert result["observationHash"] == content_hash
 
-    def test_neither_addressing_returns_error(self, server_db: DatabaseManager) -> None:
+    def test_neither_addressing_votes_entity(self, server_db: DatabaseManager) -> None:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        assert "error" in server.vote_observation("proj", "e1", 1)
+        assert server.vote("proj", "e1", 1) == {
+            "name": "e1",
+            "project": "proj",
+            "vote_score": 1,
+        }
 
     def test_both_addressing_returns_error(self, server_db: DatabaseManager) -> None:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
         content_hash = server_db.get_entity("proj", "e1").observations[0].content_hash
-        assert "error" in server.vote_observation(
+        assert "error" in server.vote(
             "proj", "e1", 1, observation="x", observationHash=content_hash
         )
 
@@ -521,13 +556,13 @@ class TestVoteObservationTool:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        assert "error" in server.vote_observation("proj", "e1", 5, observation="x")
+        assert "error" in server.vote("proj", "e1", 5, observation="x")
 
     def test_missing_observation_returns_error(self, server_db: DatabaseManager) -> None:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        assert "error" in server.vote_observation("proj", "e1", 1, observation="nope")
+        assert "error" in server.vote("proj", "e1", 1, observation="nope")
 
 
 class TestAddObservationsTool:
@@ -584,7 +619,7 @@ class TestBulkRenameEntityTool:
         server_db.create_entities(
             "proj", [{"name": "a", "entityType": "task", "observations": ["x"]}]
         )
-        result = server.bulk_rename_entity("proj", "a", "a2")
+        result = server.rename_entity("proj", "a", "a2")
         assert "message" in result
         assert server_db.entity_exists_in_project("a2", "proj")
 
@@ -596,10 +631,10 @@ class TestBulkRenameEntityTool:
                 {"name": "b", "entityType": "task", "observations": ["y"]},
             ],
         )
-        assert "error" in server.bulk_rename_entity("proj", "a", "b")
+        assert "error" in server.rename_entity("proj", "a", "b")
 
     def test_missing_entity_returns_error(self, server_db: DatabaseManager) -> None:
-        assert "error" in server.bulk_rename_entity("proj", "missing", "new")
+        assert "error" in server.rename_entity("proj", "missing", "new")
 
 
 class TestMoveEntityCrossScopeTool:
@@ -716,7 +751,7 @@ class TestProjectPathTools:
     ) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
-        result = server.set_project_paths("platform", [str(repo)])
+        result = server.set_metadata("platform", "paths", [str(repo)])
         assert result["paths"]
         assert server_db.get_entity("platform", "project/platform").entity_type == "project"
 
@@ -727,8 +762,8 @@ class TestProjectPathTools:
         repo_b = tmp_path / "b"
         repo_a.mkdir()
         repo_b.mkdir()
-        server.set_project_paths("first", [str(repo_a)])
-        result = server.set_project_paths("second", [str(repo_b)])
+        server.set_metadata("first", "paths", [str(repo_a)])
+        result = server.set_metadata("second", "paths", [str(repo_b)])
         assert result["paths"] == [normalize_path(str(repo_b))]
 
     def test_get_project_for_path_hit_and_miss(
@@ -736,7 +771,7 @@ class TestProjectPathTools:
     ) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
-        server.set_project_paths("platform", [str(repo)])
+        server.set_metadata("platform", "paths", [str(repo)])
         assert server.get_project_for_path(str(repo / "x.py")) == {"project": "platform"}
         assert server.get_project_for_path(str(tmp_path / "other")) == {"project": None}
 
@@ -745,15 +780,15 @@ class TestProjectPathTools:
     ) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
-        server.set_project_paths("platform", [str(repo)])
-        mappings = server.list_project_paths()["mappings"]
+        server.set_metadata("platform", "paths", [str(repo)])
+        mappings = server.list_metadata("paths")["mappings"]
         assert mappings == [{"project": "platform", "path": normalize_path(str(repo))}]
 
     def test_duplicate_path_returns_error(self, server_db: DatabaseManager, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
-        server.set_project_paths("platform", [str(repo)])
-        result = server.set_project_paths("other", [str(repo)])
+        server.set_metadata("platform", "paths", [str(repo)])
+        result = server.set_metadata("other", "paths", [str(repo)])
         assert "error" in result
 
     def test_delete_project_removes_empty_scope(
@@ -761,13 +796,13 @@ class TestProjectPathTools:
     ) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
-        server.set_project_paths("doomed", [str(repo)])
+        server.set_metadata("doomed", "paths", [str(repo)])
         server_db.delete_entity("doomed", "project/doomed")
         assert server.delete_project("doomed") == {"message": "Deleted project 'doomed'."}
         assert "doomed" not in server_db.list_projects()
 
     def test_delete_project_non_empty_returns_error(self, server_db: DatabaseManager) -> None:
-        server.set_project_paths("busy", [])
+        server.set_metadata("busy", "paths", [])
         result = server.delete_project("busy")
         assert "error" in result
 
@@ -800,57 +835,47 @@ class TestProjectPathTools:
     ) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
-        server.set_project_paths("platform", [str(repo)])
-        assert server.get_paths_for_project("platform") == {"paths": [normalize_path(str(repo))]}
-        assert server.get_paths_for_project("ghost") == {"paths": []}
-
-    def test_get_paths_for_entity_groups_by_project(
-        self, server_db: DatabaseManager, tmp_path: Path
-    ) -> None:
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        server_db.create_entities(
-            "platform", [{"name": "shared", "entityType": "task", "observations": ["o"]}]
-        )
-        server.set_project_paths("platform", [str(repo)])
-        assert server.get_paths_for_entity("shared") == {
-            "matches": [{"project": "platform", "paths": [normalize_path(str(repo))]}]
-        }
-
-    def test_get_paths_for_entity_missing_returns_empty_matches(
-        self, server_db: DatabaseManager
-    ) -> None:
-        assert server.get_paths_for_entity("nope") == {"matches": []}
+        server.set_metadata("platform", "paths", [str(repo)])
+        assert server.list_metadata("paths", "platform") == {"paths": [normalize_path(str(repo))]}
+        assert server.list_metadata("paths", "ghost") == {"paths": []}
 
 
 class TestProjectGroupTools:
     def test_set_project_groups_registers_and_creates_root(
         self, server_db: DatabaseManager
     ) -> None:
-        result = server.set_project_groups("platform", ["tooling"])
+        result = server.set_metadata("platform", "groups", ["tooling"])
         assert result == {"project": "platform", "members": []}
         assert server_db.get_entity("platform", "project/platform").entity_type == "project"
 
     def test_set_project_groups_returns_siblings(self, server_db: DatabaseManager) -> None:
-        server.set_project_groups("first", ["tooling"])
-        result = server.set_project_groups("second", ["tooling"])
+        server.set_metadata("first", "groups", ["tooling"])
+        result = server.set_metadata("second", "groups", ["tooling"])
         assert result == {"project": "second", "members": ["first"]}
 
     def test_list_project_groups_returns_mappings(self, server_db: DatabaseManager) -> None:
-        server.set_project_groups("platform", ["tooling"])
-        mappings = server.list_project_groups()["mappings"]
+        server.set_metadata("platform", "groups", ["tooling"])
+        mappings = server.list_metadata("groups")["mappings"]
         assert mappings == [{"project": "platform", "group": "tooling"}]
 
     def test_get_group_members_hit_and_miss(self, server_db: DatabaseManager) -> None:
-        server.set_project_groups("first", ["tooling"])
-        server.set_project_groups("second", ["tooling"])
+        server.set_metadata("first", "groups", ["tooling"])
+        server.set_metadata("second", "groups", ["tooling"])
         assert server.get_group_members("first") == {"members": ["second"]}
         assert server.get_group_members("solo") == {"members": []}
 
     def test_set_project_groups_empty_project_returns_error(
         self, server_db: DatabaseManager
     ) -> None:
-        assert "error" in server.set_project_groups("", ["tooling"])
+        assert "error" in server.set_metadata("", "groups", ["tooling"])
+
+
+class TestMetadataToolInvalidKind:
+    def test_list_metadata_invalid_kind_returns_error(self, server_db: DatabaseManager) -> None:
+        assert "error" in server.list_metadata("bogus")
+
+    def test_set_metadata_invalid_kind_returns_error(self, server_db: DatabaseManager) -> None:
+        assert "error" in server.set_metadata("platform", "bogus", ["x"])
 
 
 class TestSearchTools:
@@ -984,31 +1009,25 @@ class TestGraphToolsObservationBudget:
         assert obs_contents(result["entity"]) == ["aaa", "bbb", "ccc"]
         assert obs_contents(self._related(result)) == ["xxx", "yyy", "zzz"]
 
-    def test_search_related_nodes_compact_empties_both(self, server_db: DatabaseManager) -> None:
-        self._seed(server_db)
-        result = server.search_related_nodes("proj", "a", compact=True)
-        assert result["entity"].observations == []
-        assert self._related(result).observations == []
-
-    def test_search_related_nodes_small_budget_trims_both(self, server_db: DatabaseManager) -> None:
-        self._seed(server_db)
-        result = server.search_related_nodes("proj", "a", max_observation_chars=6)
-        assert obs_contents(result["entity"]) == ["aaa", "bbb", _BUDGET_SENTINEL.format(n=1)]
-        assert obs_contents(self._related(result)) == ["xxx", "yyy", _BUDGET_SENTINEL.format(n=1)]
-
-    def test_search_related_nodes_zero_keeps_only_top_both(
+    def test_get_entity_with_relations_filtered_compact_empties_both(
         self, server_db: DatabaseManager
     ) -> None:
         self._seed(server_db)
-        result = server.search_related_nodes("proj", "a", max_observation_chars=0)
-        assert obs_contents(result["entity"]) == ["aaa", _BUDGET_SENTINEL.format(n=2)]
-        assert obs_contents(self._related(result)) == ["xxx", _BUDGET_SENTINEL.format(n=2)]
+        result = server.get_entity_with_relations(
+            "proj", "a", entityType="project", compact=True
+        )
+        assert result["entity"].observations == []
+        assert self._related(result).observations == []
 
-    def test_search_related_nodes_negative_returns_all(self, server_db: DatabaseManager) -> None:
+    def test_get_entity_with_relations_filtered_small_budget_trims_both(
+        self, server_db: DatabaseManager
+    ) -> None:
         self._seed(server_db)
-        result = server.search_related_nodes("proj", "a", max_observation_chars=-1)
-        assert obs_contents(result["entity"]) == ["aaa", "bbb", "ccc"]
-        assert obs_contents(self._related(result)) == ["xxx", "yyy", "zzz"]
+        result = server.get_entity_with_relations(
+            "proj", "a", entityType="project", max_observation_chars=6
+        )
+        assert obs_contents(result["entity"]) == ["aaa", "bbb", _BUDGET_SENTINEL.format(n=1)]
+        assert obs_contents(self._related(result)) == ["xxx", "yyy", _BUDGET_SENTINEL.format(n=1)]
 
 
 class TestImplicitUsefulnessAutoVote:

@@ -328,7 +328,7 @@ def propose_plan(db: DatabaseManager, report: dict[str, object]) -> list[dict[st
 
     steps.extend(
         {
-            "tool": "bulk_rename_entity",
+            "tool": "rename_entity",
             "arguments": {
                 "project": e["project"],
                 "old_name": e["name"],
