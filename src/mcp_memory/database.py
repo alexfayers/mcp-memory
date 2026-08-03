@@ -1368,11 +1368,11 @@ class DatabaseManager:
 
     def search_nodes(
         self,
-        project: str | None,
+        project: str | list[str] | None,
         query: str,
         limit: int = 10,
         entity_type: str | None = None,
-        status: EntityStatus | None = None,
+        status: EntityStatus | list[EntityStatus] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         compact: bool = False,
@@ -1382,6 +1382,7 @@ class DatabaseManager:
         """Search entities using FTS5 full-text search with recency-weighted BM25 ranking.
 
         Multi-term queries match any term by default; pass match_all to require all terms.
+        A list of statuses is OR'd together. A list of projects unions results across them.
         """
         sanitized = self._sanitize_fts_query(query, match_all=match_all)
         if not sanitized:
@@ -1400,15 +1401,19 @@ class DatabaseManager:
         )
         params: list[str | int] = [sanitized]
 
-        if project is not None:
+        if isinstance(project, str):
             sql += " AND p.name = ?"
             params.append(project)
+        elif project is not None:
+            sql += f" AND p.name IN ({','.join('?' * len(project))})"
+            params.extend(project)
         if entity_type is not None:
             sql += " AND et.name = ?"
             params.append(entity_type)
         if status is not None:
-            sql += " AND e.status = ?"
-            params.append(status)
+            statuses = [status] if isinstance(status, str) else status
+            sql += f" AND e.status IN ({','.join('?' * len(statuses))})"
+            params.extend(statuses)
         if start_date is not None:
             sql += " AND e.created_at >= ?"
             params.append(_parse_date(start_date))
@@ -1441,7 +1446,7 @@ class DatabaseManager:
         ]
         entity_ids = [row["id"] for row in top_rows]
 
-        if project is not None:
+        if isinstance(project, str):
             project_id = self._get_or_create_project_id(project)
             relations = self._get_relations_for_entities(project_id, entity_ids)
         else:

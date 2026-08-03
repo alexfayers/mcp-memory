@@ -1774,6 +1774,23 @@ class TestSearchNodes:
         assert len(result["entities"]) == 1
         assert result["entities"][0].name == "a"
 
+    def test_fts_search_with_status_list_filter(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"], "status": "planned"},
+                {
+                    "name": "b",
+                    "entityType": "task",
+                    "observations": ["x"],
+                    "status": "in-progress",
+                },
+                {"name": "c", "entityType": "task", "observations": ["x"], "status": "resolved"},
+            ],
+        )
+        result = db.search_nodes("proj", "x", status=["planned", "in-progress"])
+        assert {e.name for e in result["entities"]} == {"a", "b"}
+
     def test_name_match_outranks_oversized_observation_match(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj",
@@ -1817,6 +1834,13 @@ class TestSearchNodes:
         result = db.search_nodes("p1", "hello")
         assert len(result["entities"]) == 1
         assert result["entities"][0].name == "e1"
+
+    def test_search_with_project_list_unions_named_projects(self, db: DatabaseManager) -> None:
+        db.create_entities("p1", [{"name": "e1", "entityType": "task", "observations": ["hello"]}])
+        db.create_entities("p2", [{"name": "e2", "entityType": "task", "observations": ["hello"]}])
+        db.create_entities("p3", [{"name": "e3", "entityType": "task", "observations": ["hello"]}])
+        result = db.search_nodes(["p1", "p2"], "hello")
+        assert {e.name for e in result["entities"]} == {"e1", "e2"}
 
     def test_recency_decay_favours_newer_entities(self, db: DatabaseManager) -> None:
         db.create_entities(

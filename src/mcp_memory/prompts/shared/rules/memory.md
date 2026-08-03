@@ -54,6 +54,7 @@ Distinct project scopes that form one interlocking system (e.g. sibling repos in
 - `set_metadata(project, kind="groups", values=[...])` registers the group(s) a project belongs to, replacing any it was previously in. Call it once per member with the shared group name(s) to link them.
 - `get_group_members(project)` resolves the other projects sharing a group with the given project - its siblings.
 - `list_metadata(kind="groups")` lists all registered project-group mappings.
+- `search_all_projects(query, projects=[...], expand_groups=true)` unions each named seed project with its group siblings server-side and searches all of them in one call - prefer this over chaining `get_group_members` + a `search_nodes` call per resolved project.
 
 Prefer these over inferring which projects are related - the grouping is authoritative and drives the scoped task scan below.
 
@@ -78,7 +79,7 @@ For ANY and EVERY task, you **MUST** follow ALL of these steps - no exceptions, 
 
 **CRITICAL: Do NOT respond to the user until ALL steps below are complete.** Skipping steps 3-5 defeats the purpose of having memory. `read_graph` alone is not enough - it only returns recent entities and misses deeper context.
 
-**NOTE:** The session-start skill handles the task summary using `compact=true` calls, scoped to `global` + the current repo + any group members (resolved via `get_group_members`) rather than literally every project scope. The full unrestricted `search_all_projects` scan (no project filter) remains available on explicit request. The steps below are for finding context relevant to the user's **specific request** once you know what they need - they are deeper, targeted lookups that happen after the lightweight session scan.
+**NOTE:** The session-start skill handles the task summary using a single `compact=true` `search_all_projects` call scoped to `global` + the current repo, with `expand_groups=true` resolving group siblings server-side, rather than literally every project scope. The full unrestricted `search_all_projects` scan (no `projects` filter) remains available on explicit request. The steps below are for finding context relevant to the user's **specific request** once you know what they need - they are deeper, targeted lookups that happen after the lightweight session scan.
 
 1. **ALWAYS** use `read_graph(project="global")` first - this surfaces recent global entities. Never skip this step.
 2. **ALWAYS** use `read_graph(project="<repo-name>")` second - this surfaces recent project entities.
@@ -99,7 +100,7 @@ For ANY and EVERY task, you **MUST** follow ALL of these steps - no exceptions, 
     - Briefly summarize what is already known before making a plan.
     - Highlight prior decisions, constraints, and pitfalls.
 
-**Searching effectively.** `search_nodes` and `search_all_projects` match **any** of a multi-word query's terms by default (OR), ranking entities that match more terms first - so a multi-keyword query is fine and returns the best matches at the top. Pass `match_all=true` only when you need *every* term present (strict AND). Hyphenated terms (e.g. `auth-service`) are treated as a single adjacent-token phrase and will not match compound words like `authservice`, so prefer the bare keywords (`auth service`). If a search returns nothing, retry with fewer/shorter or differently-spelled keywords before concluding the memory does not exist.
+**Searching effectively.** `search_nodes` and `search_all_projects` match **any** of a multi-word query's terms by default (OR), ranking entities that match more terms first - so a multi-keyword query is fine and returns the best matches at the top. Pass `match_all=true` only when you need *every* term present (strict AND). Hyphenated terms (e.g. `auth-service`) are treated as a single adjacent-token phrase and will not match compound words like `authservice`, so prefer the bare keywords (`auth service`). If a search returns nothing, retry with fewer/shorter or differently-spelled keywords before concluding the memory does not exist. `status` accepts either a single value or a list (OR'd together) - e.g. `status=["in-progress", "planned"]` to match either in one call instead of two.
 
 ## Entity and observation standards
 

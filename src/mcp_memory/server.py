@@ -96,8 +96,9 @@ SEARCH_NODES_DESC = (
     "(see vote: upvoted entities rank higher, downvoted ones sink but stay findable). "
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
-    "Optionally filter by entityType, status, and/or date range "
-    "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
+    "Optionally filter by entityType, status (a single value or a list, OR'd together), "
+    "and/or date range (start_date/end_date support relative formats like '7d', '2w', '3m' "
+    "and ISO dates). "
     "Within each returned entity, observations are ordered best-first by their own votes "
     "(see vote). Each observation carries a content_hash usable with "
     "vote, delete_observations, and merge_observations to address it without "
@@ -233,8 +234,14 @@ SEARCH_ALL_PROJECTS_DESC = (
     "and usefulness votes (see vote). "
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
-    "Optionally filter by entityType, status, and/or date range "
-    "(start_date/end_date support relative formats like '7d', '2w', '3m' and ISO dates). "
+    "Optionally filter by entityType, status (a single value or a list, OR'd together), "
+    "and/or date range (start_date/end_date support relative formats like '7d', '2w', '3m' "
+    "and ISO dates). "
+    "Pass projects to narrow the scan to specific project names instead of every project. "
+    "Add expand_groups=true to also union each named project with its group siblings "
+    "(resolved server-side via get_group_members) - this replaces having to call "
+    "get_group_members yourself and pass the resolved list. expand_groups=true requires "
+    "projects to be set. "
     "Use compact=true to omit observations for a lightweight summary." + _MAX_OBSERVATION_CHARS_DOC
 )
 
@@ -415,7 +422,7 @@ def search_nodes(
     query: str,
     limit: int = 10,
     entityType: str | None = None,
-    status: str | None = None,
+    status: str | list[str] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     compact: bool = False,
@@ -590,24 +597,42 @@ def delete_project(project: str) -> dict[str, str]:
         return {"error": str(e)}
 
 
+def _resolve_projects(
+    db: DatabaseManager, projects: list[str], expand_groups: bool
+) -> list[str]:
+    """Union each seed project with its group siblings when expand_groups is set."""
+    resolved = list(projects)
+    if expand_groups:
+        for seed in projects:
+            for member in db.get_group_members(seed):
+                if member not in resolved:
+                    resolved.append(member)
+    return resolved
+
+
 @mcp.tool(description=SEARCH_ALL_PROJECTS_DESC)
 @_track
 def search_all_projects(
     query: str,
     limit: int = 50,
     entityType: str | None = None,
-    status: str | None = None,
+    status: str | list[str] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     compact: bool = False,
     match_all: bool = False,
     max_observation_chars: int | None = None,
+    projects: list[str] | None = None,
+    expand_groups: bool = False,
 ) -> dict[str, object]:
     """Search entities across all projects, returning results grouped by project."""
     try:
+        if expand_groups and projects is None:
+            return {"error": "expand_groups requires projects"}
         db = _get_db()
+        resolved_projects = _resolve_projects(db, projects, expand_groups) if projects else None
         result = db.search_nodes(
-            None,
+            resolved_projects,
             query,
             limit=limit,
             entity_type=entityType,

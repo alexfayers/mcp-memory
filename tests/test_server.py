@@ -906,6 +906,62 @@ class TestSearchTools:
         assert set(default) == {"p1", "p2"}
         assert set(strict) == {"p2"}
 
+    def test_search_nodes_status_list_ors_statuses(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"], "status": "planned"},
+                {
+                    "name": "b",
+                    "entityType": "task",
+                    "observations": ["x"],
+                    "status": "in-progress",
+                },
+                {"name": "c", "entityType": "task", "observations": ["x"], "status": "resolved"},
+            ],
+        )
+        result = server.search_nodes("proj", "x", status=["planned", "in-progress"])
+        assert {e.name for e in result["entities"]} == {"a", "b"}
+
+    def test_search_all_projects_projects_filter_narrows_to_named_projects(
+        self, server_db: DatabaseManager
+    ) -> None:
+        server_db.create_entities(
+            "p1", [{"name": "a", "entityType": "task", "observations": ["hello"]}]
+        )
+        server_db.create_entities(
+            "p2", [{"name": "b", "entityType": "task", "observations": ["hello"]}]
+        )
+        server_db.create_entities(
+            "p3", [{"name": "c", "entityType": "task", "observations": ["hello"]}]
+        )
+        result = server.search_all_projects("hello", projects=["p1", "p2"])["results"]
+        assert set(result) == {"p1", "p2"}
+
+    def test_search_all_projects_expand_groups_unions_siblings(
+        self, server_db: DatabaseManager
+    ) -> None:
+        server.set_metadata("p1", "groups", ["ecosystem"])
+        server.set_metadata("p2", "groups", ["ecosystem"])
+        server_db.create_entities(
+            "p1", [{"name": "a", "entityType": "task", "observations": ["hello"]}]
+        )
+        server_db.create_entities(
+            "p2", [{"name": "b", "entityType": "task", "observations": ["hello"]}]
+        )
+        server_db.create_entities(
+            "p3", [{"name": "c", "entityType": "task", "observations": ["hello"]}]
+        )
+        result = server.search_all_projects("hello", projects=["p1"], expand_groups=True)[
+            "results"
+        ]
+        assert set(result) == {"p1", "p2"}
+
+    def test_search_all_projects_expand_groups_without_projects_errors(
+        self, server_db: DatabaseManager
+    ) -> None:
+        assert "error" in server.search_all_projects("hello", expand_groups=True)
+
 
 _BUDGET_SENTINEL = "[{n} lower-voted observation(s) omitted to save tokens]"
 
