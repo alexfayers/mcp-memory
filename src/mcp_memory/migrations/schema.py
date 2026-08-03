@@ -749,4 +749,24 @@ MIGRATIONS: list[Migration] = [
             "CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool, called_at)",
         ],
     ),
+    Migration(
+        version=26,
+        statements=[
+            # Groups distinct project scopes (e.g. sibling repos in one tooling system) so a
+            # hook/agent can resolve "which other projects belong with this one" without a
+            # cross-scope relation (relations are hard-scoped to one project) or a hardcoded
+            # name/format parsed out of observation text. A project may belong to several
+            # groups; UNIQUE(project_id, group_name) just prevents a duplicate row.
+            """CREATE TABLE IF NOT EXISTS project_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                group_name TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(project_id, group_name),
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_project_groups_project_id ON project_groups(project_id)",
+            "CREATE INDEX IF NOT EXISTS idx_project_groups_group_name ON project_groups(group_name)",
+        ],
+    ),
 ]

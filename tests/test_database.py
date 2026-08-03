@@ -769,6 +769,76 @@ class TestProjectPaths:
         assert db.paths_for_entity_name("nope") == []
 
 
+class TestProjectGroups:
+    def test_get_group_members_empty_when_no_group(self, db: DatabaseManager) -> None:
+        assert db.get_group_members("solo") == []
+
+    def test_set_and_get_group_members(self, db: DatabaseManager) -> None:
+        db.set_project_groups("llm-prompts", ["tooling"])
+        db.set_project_groups("cline-hooks", ["tooling"])
+        assert db.get_group_members("llm-prompts") == ["cline-hooks"]
+        assert db.get_group_members("cline-hooks") == ["llm-prompts"]
+
+    def test_get_group_members_excludes_self(self, db: DatabaseManager) -> None:
+        db.set_project_groups("a", ["g"])
+        assert db.get_group_members("a") == []
+
+    def test_get_group_members_unions_multiple_matching_groups(
+        self, db: DatabaseManager
+    ) -> None:
+        db.set_project_groups("a", ["g1", "g2"])
+        db.set_project_groups("b", ["g1"])
+        db.set_project_groups("c", ["g2"])
+        assert db.get_group_members("a") == ["b", "c"]
+
+    def test_set_replaces_existing_groups(self, db: DatabaseManager) -> None:
+        db.set_project_groups("a", ["g1"])
+        db.set_project_groups("b", ["g1"])
+        db.set_project_groups("a", ["g2"])
+        db.set_project_groups("c", ["g2"])
+        assert db.get_group_members("a") == ["c"]
+
+    def test_set_creates_project_row(self, db: DatabaseManager) -> None:
+        db.set_project_groups("brand-new", ["g"])
+        assert "brand-new" in db.list_projects()
+
+    def test_empty_project_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            db.set_project_groups("", ["g"])
+
+    def test_non_list_groups_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(TypeError, match="list"):
+            db.set_project_groups("a", "not-a-list")  # type: ignore[arg-type]
+
+    def test_add_project_to_group_registers_without_replacing(
+        self, db: DatabaseManager
+    ) -> None:
+        db.set_project_groups("a", ["g1"])
+        db.add_project_to_group("a", "g2")
+        db.set_project_groups("b", ["g1"])
+        db.set_project_groups("c", ["g2"])
+        assert db.get_group_members("a") == ["b", "c"]
+
+    def test_add_project_to_group_is_idempotent(self, db: DatabaseManager) -> None:
+        db.add_project_to_group("a", "g1")
+        db.add_project_to_group("a", "g1")
+        assert db.list_project_groups("a") == [("a", "g1")]
+
+    def test_add_project_to_group_creates_project_row(self, db: DatabaseManager) -> None:
+        db.add_project_to_group("brand-new", "g1")
+        assert "brand-new" in db.list_projects()
+
+    def test_list_project_groups_filters_by_project(self, db: DatabaseManager) -> None:
+        db.set_project_groups("a", ["g1"])
+        db.set_project_groups("b", ["g1"])
+        assert db.list_project_groups("a") == [("a", "g1")]
+
+    def test_list_project_groups_returns_all_when_unfiltered(self, db: DatabaseManager) -> None:
+        db.set_project_groups("a", ["g1"])
+        db.set_project_groups("b", ["g2"])
+        assert sorted(db.list_project_groups()) == [("a", "g1"), ("b", "g2")]
+
+
 class TestObservations:
     def test_add_observations(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])

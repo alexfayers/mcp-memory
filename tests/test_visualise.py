@@ -15,6 +15,7 @@ from mcp_memory.database import DatabaseManager, _hash_observation
 from mcp_memory.models import Relation
 from mcp_memory.visualise import (
     get_all_graph_data,
+    get_project_groups,
     get_project_paths,
     get_projects,
     register_visualise_routes,
@@ -507,6 +508,26 @@ class TestApiProjectPaths:
         resp = await client.get("/api/project-paths")
         assert resp.status_code == 200
         assert resp.json() == {"alpha": ["/work/one"]}
+
+
+class TestGetProjectGroups:
+    def test_empty_when_none_registered(self, db: DatabaseManager) -> None:
+        assert get_project_groups(db) == {}
+
+    def test_groups_by_project(self, db: DatabaseManager) -> None:
+        db.create_entities("alpha", [{"name": "e", "entityType": "pattern", "observations": ["o"]}])
+        db.set_project_groups("alpha", ["team-a", "team-b"])
+        assert get_project_groups(db) == {"alpha": ["team-a", "team-b"]}
+
+
+class TestApiProjectGroups:
+    @pytest.mark.anyio
+    async def test_returns_mapping(self, client: httpx.AsyncClient, db: DatabaseManager) -> None:
+        db.create_entities("alpha", [{"name": "e", "entityType": "pattern", "observations": ["o"]}])
+        db.set_project_groups("alpha", ["team-a"])
+        resp = await client.get("/api/project-groups")
+        assert resp.status_code == 200
+        assert resp.json() == {"alpha": ["team-a"]}
 
 
 class TestSearchGraph:

@@ -206,6 +206,16 @@ GET_PATHS_FOR_ENTITY_DESC = (
     "is still listed (with an empty paths list). Returns an empty matches list if no entity "
     "has that name."
 )
+SET_PROJECT_GROUPS_DESC = (
+    "Register the groups a project belongs to (e.g. sibling repos in one tooling system), "
+    "replacing any groups previously set for it. A project may belong to several groups. "
+    "Use get_group_members to resolve a project's group siblings."
+)
+LIST_PROJECT_GROUPS_DESC = "List all registered (project, group) mappings in the knowledge graph."
+GET_GROUP_MEMBERS_DESC = (
+    "Return the other projects sharing a group with the given project, or an empty list if "
+    "the project belongs to no group."
+)
 DELETE_PROJECT_DESC = (
     "Delete an empty project and its registered paths. Refuses to delete the 'global' "
     "project or any project that still has entities - delete those entities first."
@@ -524,6 +534,44 @@ def get_paths_for_project(project: str) -> dict[str, object]:
     try:
         db = _get_db()
         return {"paths": db.get_paths_for_project(project)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=SET_PROJECT_GROUPS_DESC)
+@_track
+def set_project_groups(
+    project: str,
+    groups: list[str],
+) -> dict[str, object]:
+    """Register the groups a project belongs to, replacing any existing ones."""
+    try:
+        db = _get_db()
+        _ensure_project_root(db, project)
+        db.set_project_groups(project, groups)
+        return {"project": project, "members": db.get_group_members(project)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=LIST_PROJECT_GROUPS_DESC)
+@_track
+def list_project_groups() -> dict[str, object]:
+    """List all registered project-group mappings."""
+    try:
+        db = _get_db()
+        return {"mappings": [{"project": n, "group": g} for n, g in db.list_project_groups()]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description=GET_GROUP_MEMBERS_DESC)
+@_track
+def get_group_members(project: str) -> dict[str, object]:
+    """Return the other projects sharing a group with the given project."""
+    try:
+        db = _get_db()
+        return {"members": db.get_group_members(project)}
     except Exception as e:
         return {"error": str(e)}
 

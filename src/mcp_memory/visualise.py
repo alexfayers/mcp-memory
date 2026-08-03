@@ -43,6 +43,14 @@ def get_project_paths(db: DatabaseManager) -> dict[str, list[str]]:
     return grouped
 
 
+def get_project_groups(db: DatabaseManager) -> dict[str, list[str]]:
+    """Return group memberships grouped by project name."""
+    grouped: dict[str, list[str]] = {}
+    for project, group in db.list_project_groups():
+        grouped.setdefault(project, []).append(group)
+    return grouped
+
+
 def get_dream_state() -> dict[str, object]:
     """Compose the persisted dream status with live idle so the UI polls it in one call.
 
@@ -214,6 +222,10 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
     @mcp.custom_route("/api/project-paths", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_project_paths(request: Request) -> JSONResponse:
         return JSONResponse(get_project_paths(get_db()))
+
+    @mcp.custom_route("/api/project-groups", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_project_groups(request: Request) -> JSONResponse:
+        return JSONResponse(get_project_groups(get_db()))
 
     @mcp.custom_route("/api/graph", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_graph(request: Request) -> JSONResponse:

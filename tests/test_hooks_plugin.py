@@ -16,12 +16,14 @@ from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.plugin import (
     _EDIT_TOOL_WEIGHT,
     MemoryPlugin,
+    _build_task_start_context,
     _find_project_from_path,
     _is_file_edit,
     _is_memory_read,
     _is_memory_server_reachable,
     _parse_mcp_arguments,
     _resolve_anchor,
+    _resolved_project_set,
     _safe_project,
     _workspace_entity_note,
 )
@@ -477,6 +479,73 @@ class TestRegisteredPathResolution:
         with patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value="myrepo"):
             note = _workspace_entity_note([str(repo)])
         assert note == "The project memory entity for this workspace is `project/myrepo`."
+
+
+class TestResolvedProjectSet:
+    def _db(self) -> DatabaseManager:
+        return DatabaseManager(get_db_path())
+
+    def test_empty_workspace_roots_returns_global_only(self) -> None:
+        assert _resolved_project_set([]) == ["global"]
+
+    def test_no_group_returns_global_and_repo(self, tmp_path: Path) -> None:
+        repo = tmp_path / "solo"
+        repo.mkdir()
+        assert _resolved_project_set([str(repo)]) == ["global", "solo"]
+
+    def test_single_sibling_included(self, tmp_path: Path) -> None:
+        db = self._db()
+        db.set_project_groups("llm-prompts", ["tooling"])
+        db.set_project_groups("cline-hooks", ["tooling"])
+        repo = tmp_path / "llm-prompts"
+        repo.mkdir()
+        assert _resolved_project_set([str(repo)]) == ["global", "llm-prompts", "cline-hooks"]
+
+    def test_multiple_siblings_included(self, tmp_path: Path) -> None:
+        db = self._db()
+        db.set_project_groups("a", ["tooling"])
+        db.set_project_groups("b", ["tooling"])
+        db.set_project_groups("c", ["tooling"])
+        repo = tmp_path / "a"
+        repo.mkdir()
+        assert _resolved_project_set([str(repo)]) == ["global", "a", "b", "c"]
+
+    def test_db_error_falls_back_to_global_and_repo(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _boom(_path: object) -> DatabaseManager:
+            raise OSError("db unavailable")
+
+        monkeypatch.setattr("mcp_memory.hooks.plugin.DatabaseManager", _boom)
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        assert _resolved_project_set([str(repo)]) == ["global", "acme"]
+
+
+class TestBuildTaskStartContext:
+    def test_includes_workspace_entity_note(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        parts = _build_task_start_context([str(repo)])
+        assert any("project/acme" in part for part in parts)
+
+    def test_includes_numbered_instructions(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        parts = _build_task_start_context([str(repo)])
+        instructions = next(part for part in parts if "REQUIRED before starting" in part)
+        for step in ("1. ", "2. ", "3. ", "4. "):
+            assert step in instructions
+
+    def test_project_list_reflects_resolved_scopes(self, tmp_path: Path) -> None:
+        db = DatabaseManager(get_db_path())
+        db.set_project_groups("llm-prompts", ["tooling"])
+        db.set_project_groups("cline-hooks", ["tooling"])
+        repo = tmp_path / "llm-prompts"
+        repo.mkdir()
+        parts = _build_task_start_context([str(repo)])
+        instructions = next(part for part in parts if "REQUIRED before starting" in part)
+        assert "`global`, `llm-prompts`, `cline-hooks`" in instructions
 
 
 class TestIsMemoryServerReachable:

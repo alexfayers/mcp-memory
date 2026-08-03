@@ -47,6 +47,16 @@ Ensure you _always_ update memory as you progress through a task, and just befor
 
 **CRITICAL - mechanical trip-wire, do not rely on judgement here:** the instant a task needs a project's filesystem location, the first tool call MUST be `get_paths_for_project(project="<repo-name>")` (or `list_project_paths()` to browse all registered mappings, or `get_project_for_path(path=...)` to go the other direction) - BEFORE any `find`, `grep`, `ls`, or other disk search. This includes cases where you already ran a memory search for unrelated content in the same turn and it happened to surface a path in passing (e.g. inside a task observation) - that is not a substitute for the deliberate lookup call. Memory already tracks where projects live on disk; searching the filesystem for a project you could look up is redundant and slower. Only fall back to a disk search if `get_paths_for_project` returns empty.
 
+### Grouping related project scopes
+
+Distinct project scopes that form one interlocking system (e.g. sibling repos in a shared tooling ecosystem) can declare themselves as grouped, so cross-project scans stay scoped to the projects that actually share context rather than sweeping every scope:
+
+- `set_project_groups(project, groups)` registers the group(s) a project belongs to, replacing any it was previously in. Call it once per member with the shared group name(s) to link them.
+- `get_group_members(project)` resolves the other projects sharing a group with the given project - its siblings.
+- `list_project_groups()` lists all registered project-group mappings.
+
+Prefer these over inferring which projects are related - the grouping is authoritative and drives the scoped task scan below.
+
 ### Answering "what/where is X" before touching the shell
 
 This generalizes the project-location trip-wire above to any lookup, not just filesystem paths. **CRITICAL - mechanical trip-wire, do not rely on judgement here:** when the user asks "what script/tool/config does X", "where does Y happen", or otherwise asks you to locate or recall something you may have investigated before, the first tool call MUST be a memory search (`search_nodes`/`search_all_projects`, or `recall` if the question looks like it needs traversal) - BEFORE any `grep`, `find`, `ls`, `launchctl`, or other shell/tool discovery command. Only fall back to a live search once the memory search comes back empty or stale. Treat any Bash/Grep/Glob call made to answer a "what/where" question as a hard stop if it ran before a memory search did - go back and search memory first, even if the shell command would be quick. A shell command that "would be quick anyway" is not an exception; it is the exact shortcut this rule exists to close.
@@ -68,7 +78,7 @@ For ANY and EVERY task, you **MUST** follow ALL of these steps - no exceptions, 
 
 **CRITICAL: Do NOT respond to the user until ALL steps below are complete.** Skipping steps 3-5 defeats the purpose of having memory. `read_graph` alone is not enough - it only returns recent entities and misses deeper context.
 
-**NOTE:** The session-start skill handles the cross-project task summary using `compact=true` calls. The steps below are for finding context relevant to the user's **specific request** once you know what they need - they are deeper, targeted lookups that happen after the lightweight session scan.
+**NOTE:** The session-start skill handles the task summary using `compact=true` calls, scoped to `global` + the current repo + any group members (resolved via `get_group_members`) rather than literally every project scope. The full unrestricted `search_all_projects` scan (no project filter) remains available on explicit request. The steps below are for finding context relevant to the user's **specific request** once you know what they need - they are deeper, targeted lookups that happen after the lightweight session scan.
 
 1. **ALWAYS** use `read_graph(project="global")` first - this surfaces recent global entities. Never skip this step.
 2. **ALWAYS** use `read_graph(project="<repo-name>")` second - this surfaces recent project entities.

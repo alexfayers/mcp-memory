@@ -331,18 +331,44 @@ def _workspace_entity_note(workspace_roots: list[str]) -> str | None:
     return note
 
 
+def _resolved_project_set(workspace_roots: list[str]) -> list[str]:
+    """Return [global, <repo-name>, *group siblings] for the current workspace.
+
+    Group siblings come from the project_groups table (set via set_project_groups),
+    so distinct project scopes can be scanned together without a hardcoded name or
+    a cross-scope relation (relations are hard-scoped to one project). A DB failure
+    degrades to [global, repo-name] rather than breaking task start.
+    """
+    projects = ["global"]
+    if not workspace_roots:
+        return projects
+    repo_name = _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
+    projects.append(repo_name)
+    try:
+        db = DatabaseManager(get_db_path())
+        projects.extend(db.get_group_members(repo_name))
+    except (sqlite3.Error, OSError):
+        pass
+    return projects
+
+
 def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     """Build memory-related context notes for task start."""
     parts: list[str] = []
     note = _workspace_entity_note(workspace_roots)
     if note:
         parts.append(note)
+    projects = _resolved_project_set(workspace_roots)
+    project_list = ", ".join(f"`{project}`" for project in projects)
     parts.append(
         "REQUIRED before starting:\n"
         "1. `read_graph` on BOTH `global` and `<repo-name>` projects\n"
-        "2. `search_all_projects(query='task', status='in-progress', compact=true)` and "
-        "`search_all_projects(query='task', status='planned', compact=true)` "
-        "for cross-project task summary\n"
+        f"2. For each of {project_list}, call "
+        "`search_nodes(project=<name>, query='task', status='in-progress', compact=true)` "
+        "and `search_nodes(project=<name>, query='task', status='planned', compact=true)` "
+        "for the task summary "
+        "(use `search_all_projects` instead only on explicit request for the full, "
+        "unrestricted scan across every project)\n"
         "3. `search_nodes` for task keywords in `<repo-name>` project\n"
         "4. `search_related_nodes` on any relevant result"
     )

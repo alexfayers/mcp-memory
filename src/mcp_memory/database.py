@@ -17,8 +17,8 @@ from .config import (
     get_max_observation_chars,
     get_purge_enabled,
     get_purge_grace_days,
-    get_surfaced_retention_days,
     get_strict_policy_enabled,
+    get_surfaced_retention_days,
 )
 from .migrations.runner import run_migrations
 from .models import (
@@ -233,6 +233,63 @@ class DatabaseManager:
     def get_paths_for_project(self, project: str) -> list[str]:
         """Return the filesystem paths registered to a project, empty if none or unknown."""
         return [path for _, path in self.list_project_paths(project)]
+
+    def set_project_groups(self, project: str, groups: list[str]) -> None:
+        """Replace the groups a project belongs to with the given list."""
+        if not project or not isinstance(project, str):
+            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
+        if not isinstance(groups, list):
+            raise TypeError(f"Groups must be a list, got: {groups!r}")
+
+        with self._db:
+            project_id = self._get_or_create_project_id(project)
+            self._db.execute("DELETE FROM project_groups WHERE project_id = ?", (project_id,))
+            for group_name in groups:
+                self._db.execute(
+                    "INSERT INTO project_groups (project_id, group_name) VALUES (?, ?)",
+                    (project_id, group_name),
+                )
+
+    def add_project_to_group(self, project: str, group_name: str) -> None:
+        """Add a project to one group without disturbing its other group memberships."""
+        if not project or not isinstance(project, str):
+            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
+
+        with self._db:
+            project_id = self._get_or_create_project_id(project)
+            self._db.execute(
+                "INSERT OR IGNORE INTO project_groups (project_id, group_name) VALUES (?, ?)",
+                (project_id, group_name),
+            )
+
+    def list_project_groups(self, project: str | None = None) -> list[tuple[str, str]]:
+        """Return (project_name, group_name) mappings, optionally for one project."""
+        sql = (
+            "SELECT p.name, pg.group_name FROM project_groups pg "
+            "JOIN projects p ON pg.project_id = p.id"
+        )
+        params: list[str] = []
+        if project is not None:
+            sql += " WHERE p.name = ?"
+            params.append(project)
+        rows = self._db.execute(sql, params).fetchall()
+        return [(row["name"], row["group_name"]) for row in rows]
+
+    def get_group_members(self, project: str) -> list[str]:
+        """Return the other projects sharing any group with the given project.
+
+        Empty if the project belongs to no group. The project itself is excluded.
+        """
+        rows = self._db.execute(
+            "SELECT DISTINCT p2.name FROM project_groups pg1 "
+            "JOIN projects p1 ON pg1.project_id = p1.id "
+            "JOIN project_groups pg2 ON pg2.group_name = pg1.group_name "
+            "JOIN projects p2 ON pg2.project_id = p2.id "
+            "WHERE p1.name = ? AND p2.name != ? "
+            "ORDER BY p2.name",
+            (project, project),
+        ).fetchall()
+        return [row["name"] for row in rows]
 
     def paths_for_entity_name(self, name: str) -> list[tuple[str, list[str]]]:
         """Return (project, registered_paths) for every project containing the entity name.
@@ -1180,7 +1237,7 @@ class DatabaseManager:
         if orphaned:
             raise ValueError(
                 "Cannot delete relation: it would orphan non-structural "
-                + f"entit{'y' if len(orphaned) == 1 else 'ies'}: {', '.join(orphaned)}"
+                 f"entit{'y' if len(orphaned) == 1 else 'ies'}: {', '.join(orphaned)}"
             )
 
         cursor = self._db.execute(
@@ -1231,7 +1288,8 @@ class DatabaseManager:
             "FROM relations r "
             "JOIN entities src ON r.source_id = src.id "
             "JOIN entities tgt ON r.target_id = tgt.id "
-            "JOIN entities other ON other.id = CASE WHEN r.source_id = ? THEN r.target_id ELSE r.source_id END "
+            "JOIN entities other "
+            "ON other.id = CASE WHEN r.source_id = ? THEN r.target_id ELSE r.source_id END "
             "WHERE src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
             "AND (r.source_id = ? OR r.target_id = ?)",
             (entity_id, entity_id, entity_id),

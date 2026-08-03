@@ -823,6 +823,36 @@ class TestProjectPathTools:
         assert server.get_paths_for_entity("nope") == {"matches": []}
 
 
+class TestProjectGroupTools:
+    def test_set_project_groups_registers_and_creates_root(
+        self, server_db: DatabaseManager
+    ) -> None:
+        result = server.set_project_groups("platform", ["tooling"])
+        assert result == {"project": "platform", "members": []}
+        assert server_db.get_entity("platform", "project/platform").entity_type == "project"
+
+    def test_set_project_groups_returns_siblings(self, server_db: DatabaseManager) -> None:
+        server.set_project_groups("first", ["tooling"])
+        result = server.set_project_groups("second", ["tooling"])
+        assert result == {"project": "second", "members": ["first"]}
+
+    def test_list_project_groups_returns_mappings(self, server_db: DatabaseManager) -> None:
+        server.set_project_groups("platform", ["tooling"])
+        mappings = server.list_project_groups()["mappings"]
+        assert mappings == [{"project": "platform", "group": "tooling"}]
+
+    def test_get_group_members_hit_and_miss(self, server_db: DatabaseManager) -> None:
+        server.set_project_groups("first", ["tooling"])
+        server.set_project_groups("second", ["tooling"])
+        assert server.get_group_members("first") == {"members": ["second"]}
+        assert server.get_group_members("solo") == {"members": []}
+
+    def test_set_project_groups_empty_project_returns_error(
+        self, server_db: DatabaseManager
+    ) -> None:
+        assert "error" in server.set_project_groups("", ["tooling"])
+
+
 class TestSearchTools:
     def test_search_nodes_match_all_narrows_results(self, server_db: DatabaseManager) -> None:
         server_db.create_entities(
