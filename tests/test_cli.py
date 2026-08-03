@@ -108,6 +108,7 @@ class TestCopilotPathSelection:
     def test_prefers_local_vscode_path_before_wsl_fallback(
         self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr("mcp_memory.cli.platform.system", lambda: "Linux")
         monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
         monkeypatch.setenv("USERNAME", "alex")
         monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path))
@@ -123,6 +124,8 @@ class TestCopilotPathSelection:
     def test_prefers_xdg_config_home_on_linux(
         self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr("mcp_memory.cli.platform.system", lambda: "Linux")
+        monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
         monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path / "home"))
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
         xdg = tmp_path / "xdg" / "Code" / "User"
@@ -132,9 +135,11 @@ class TestCopilotPathSelection:
         resolved = cli._default_copilot_mcp_config_path()
         assert str(resolved) == str(xdg / "mcp.json")
 
-    def test_uses_macos_user_path(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_uses_macos_user_path(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path))
-        monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr("mcp_memory.cli.platform.system", lambda: "Darwin")
         mac = tmp_path / "Library" / "Application Support" / "Code" / "User"
         mac.mkdir(parents=True)
         (mac / "mcp.json").write_text("{}\n", encoding="utf-8")
