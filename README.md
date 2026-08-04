@@ -236,6 +236,26 @@ Restore a soft-deleted entity, making it visible to reads again. Soft-deleted en
 
 List registered metadata for a `kind` (`projects`, `paths`, or `groups`). `list_metadata(kind="projects")` lists all project names in the knowledge graph. `list_metadata(kind="paths")` (optionally scoped with `project=`) lists registered (project, path) mappings. `list_metadata(kind="groups")` (optionally scoped with `project=`) lists registered (project, group) mappings.
 
+### set_metadata
+
+Replace registry metadata for a project - does NOT append, the given `values` list fully replaces whatever was previously set. `kind="paths"` registers filesystem paths for the project (when the working directory falls under a registered path, that project becomes the active memory scope; a path can belong to only one project) and returns the project's resulting paths. `kind="groups"` registers the groups the project belongs to (e.g. sibling repos in one tooling system, resolved via `get_group_members`) and returns the project's resulting group members. Auto-creates the project's root entity if needed.
+
+### get_project_for_path
+
+Return the project whose registered path contains the given filesystem path, or null if none match. The longest matching registered path wins.
+
+### get_group_members
+
+Return the other projects sharing a group with the given project, or an empty list if the project belongs to no group.
+
+### move_project_entities
+
+Move all entities (with their observations and relations) from one project scope into another. Useful for consolidating a mis-scoped folder-name project into its real project. Fails if any entity name exists in both scopes.
+
+### delete_project
+
+Delete an empty project and its registered paths. Refuses to delete the `global` project or any project that still has entities - delete those entities first.
+
 ### search_all_projects
 
 Search entities across all projects in a single call. Returns results grouped by project name. Same FTS5 search and filters as `search_nodes` (including `match_all`) but without the `project` parameter. Pass `projects` to narrow the scan to specific project names instead of every project; add `expand_groups=true` to also union each named project with its group siblings (resolved server-side via `get_group_members`), so callers no longer have to chain `get_group_members` + a per-project search themselves. `expand_groups=true` requires `projects` to be set.
