@@ -233,6 +233,8 @@ For each significant unit of work (feature implemented, bug fixed, refactor comp
 
 A memory entity's "here's the full list of X" (affected files, packages, dependencies) is a synthesis from whenever it was written, not a live fact. Restating it is not the same as verifying it. When asked whether such a list is complete - especially if the user pushes back ("are you sure that's all?") - re-derive it against the live source (grep the actual call chain, not just the wiring one layer up) before answering, rather than re-asserting the cached synthesis with more confidence.
 
+**Not all memory ages the same way - weight staleness risk by entity type.** A `user-preferences` entity (how the user likes to work) rarely changes and can generally be trusted as recorded. A `pattern`/`knowledge` entity pointing at a source of information (a file path, an API shape, a tool's behavior, a config value, a command's flags) records what was true when it was written - the actual source may have moved, been renamed, or changed behavior since. Where the cost of being wrong is non-trivial (an action you're about to take, a claim you're about to state as fact), verify the memory-recorded fact against the live source before relying on it. A cheap way to do this without spending main-thread turns is a small delegate (Haiku-tier, since this is a known-target lookup, not open-ended reasoning) sent to confirm the specific fact against the live source and report back just the verdict. If it conflicts with what you observe live, do not silently pick one - surface the discrepancy to the user rather than quietly overriding either side.
+
 ## Answering memory-related questions
 
 When the user asks questions like:
