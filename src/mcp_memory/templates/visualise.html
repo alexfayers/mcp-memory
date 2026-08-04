@@ -382,7 +382,12 @@ function render(data) {
     if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, observations: n.observations, vote_score: n.vote_score }); return old; }
     return n;
   });
-  links = newLinks;
+  // Only swap in the freshly-built (unresolved source/target string) link array when topology
+  // actually changed - it only gets resolved into real node object refs once handed to the force
+  // simulation below. Reusing it on a no-topology-change render (e.g. a vote/observation update)
+  // would rebind linkSel/labelSel to unresolved links, making d.source.x/d.target.x undefined -
+  // NaN link-label positions and vanished lines.
+  if (topologyChanged) links = newLinks;
 
   linkSel = linkLayer.selectAll(".link").data(links, d => d.source.id || d.source + "-" + (d.target.id || d.target) + "-" + d.type)
     .join("line").attr("class", "link").attr("stroke", "#30363d").attr("stroke-width", 1);
