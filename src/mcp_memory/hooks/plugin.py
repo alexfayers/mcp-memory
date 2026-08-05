@@ -361,14 +361,16 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     projects = _resolved_project_set(workspace_roots)
     project_list = ", ".join(f"`{project}`" for project in projects)
     parts.append(
-        "REQUIRED before starting:\n"
-        "1. `read_graph` on BOTH `global` and `<repo-name>` projects\n"
-        f"2. For each of {project_list}, call "
-        "`search_nodes(project=<name>, query='task', status='in-progress', compact=true)` "
-        "and `search_nodes(project=<name>, query='task', status='planned', compact=true)` "
-        "for the task summary "
-        "(use `search_all_projects` instead only on explicit request for the full, "
-        "unrestricted scan across every project)\n"
+        "Session-start guidance (see the session-start skill for the full ritual):\n"
+        "1. `read_graph` on BOTH `global` and `<repo-name>` projects - always do this\n"
+        "2. Only if the user's opening message is generic (no specific task/file/feature "
+        f"named), scan for open tasks across {project_list}: "
+        "`search_all_projects(query='task', entityType='task', "
+        "status=['in-progress','planned'], ...)` "
+        "(use unrestricted `search_all_projects`, no `projects` filter, only on explicit "
+        "request for the full picture). If the opening message already names a specific "
+        "ask, skip this scan - targeted searches for that ask still surface anything "
+        "relevant\n"
         "3. `search_nodes` for task keywords in `<repo-name>` project\n"
         "4. `get_entity_with_relations` on any relevant result"
     )

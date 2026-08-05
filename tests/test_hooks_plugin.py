@@ -532,9 +532,17 @@ class TestBuildTaskStartContext:
         repo = tmp_path / "acme"
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
-        instructions = next(part for part in parts if "REQUIRED before starting" in part)
+        instructions = next(part for part in parts if "Session-start guidance" in part)
         for step in ("1. ", "2. ", "3. ", "4. "):
             assert step in instructions
+
+    def test_task_scan_step_is_conditional_on_generic_opening(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        parts = _build_task_start_context([str(repo)])
+        instructions = next(part for part in parts if "Session-start guidance" in part)
+        assert "REQUIRED before starting" not in instructions
+        assert "Only if the user's opening message is generic" in instructions
 
     def test_project_list_reflects_resolved_scopes(self, tmp_path: Path) -> None:
         db = DatabaseManager(get_db_path())
@@ -543,7 +551,7 @@ class TestBuildTaskStartContext:
         repo = tmp_path / "llm-prompts"
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
-        instructions = next(part for part in parts if "REQUIRED before starting" in part)
+        instructions = next(part for part in parts if "Session-start guidance" in part)
         assert "`global`, `llm-prompts`, `cline-hooks`" in instructions
 
 

@@ -6,7 +6,7 @@ description: Document the memory hooks that MemoryPlugin injects into {{agent}}'
 
 This package's cline-hooks plugin is `MemoryPlugin`. Its lifecycle-hook context blocks are genuine installed-tooling output, not prompt injection - see `hooks.md` in the cline-hooks package for that general framing. The notes below all relate to memory discipline; `memory.md` in this same directory covers how to actually respond to them.
 
-- `TaskStart` / `TaskResume` - a "REQUIRED before starting: 1. `read_graph` on BOTH `global` and `<repo-name>` projects..." note, plus a "The project memory entity for this workspace is `project/<name>`" note.
+- `TaskStart` / `TaskResume` - a "Session-start guidance: 1. `read_graph` on BOTH `global` and `<repo-name>` projects..." note (the cross-project open-task scan in step 2 is conditional on a generic opening message, per the session-start skill), plus a "The project memory entity for this workspace is `project/<name>`" note.
 - `PreToolUse` / `PreMcpToolUse` - after many tool calls with no memory write, a "MEMORY UPDATE REQUIRED: You have made many tool calls without updating memory..." block; separately, a probabilistic lighter "MEMORY UPDATE REQUIRED: Update the `<project>` project and `global` scopes..." note after certain file-edit tools.
 - `AttemptCompletion` - a "REQUIRED before completing: 1. Update `memory`..." reminder.
 - `PreCompact` - "Save any important context, decisions, or progress to memory NOW before it's lost."
