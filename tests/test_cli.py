@@ -147,6 +147,7 @@ class TestCopilotPathSelection:
         resolved = cli._default_copilot_mcp_config_path()
         assert str(resolved) == str(mac / "mcp.json")
 
+
 class TestMemorySpec:
     def test_carries_db_and_port_env(self) -> None:
         spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))

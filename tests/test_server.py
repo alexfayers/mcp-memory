@@ -952,9 +952,7 @@ class TestSearchTools:
         server_db.create_entities(
             "p3", [{"name": "c", "entityType": "task", "observations": ["hello"]}]
         )
-        result = server.search_all_projects("hello", projects=["p1"], expand_groups=True)[
-            "results"
-        ]
+        result = server.search_all_projects("hello", projects=["p1"], expand_groups=True)["results"]
         assert set(result) == {"p1", "p2"}
 
     def test_search_all_projects_expand_groups_without_projects_errors(
@@ -1069,9 +1067,7 @@ class TestGraphToolsObservationBudget:
         self, server_db: DatabaseManager
     ) -> None:
         self._seed(server_db)
-        result = server.get_entity_with_relations(
-            "proj", "a", entityType="project", compact=True
-        )
+        result = server.get_entity_with_relations("proj", "a", entityType="project", compact=True)
         assert result["entity"].observations == []
         assert self._related(result).observations == []
 

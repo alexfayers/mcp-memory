@@ -7,6 +7,15 @@ import re
 from pathlib import Path
 
 
+def _consume_string_char(ch: str, escape: bool) -> tuple[bool, bool]:
+    """Return (still_in_string, new_escape) after appending ch inside a string."""
+    if escape:
+        return True, False
+    if ch == "\\":
+        return True, True
+    return ch != '"', False
+
+
 def _strip_jsonc_comments(text: str) -> str:
     """Remove // and /* */ comments from JSONC text while preserving strings."""
     out: list[str] = []
@@ -33,12 +42,7 @@ def _strip_jsonc_comments(text: str) -> str:
             continue
         if in_string:
             out.append(ch)
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
+            in_string, escape = _consume_string_char(ch, escape)
             i += 1
             continue
         if ch == '"':
@@ -71,5 +75,5 @@ def load_jsonc_object(path: Path) -> dict[str, object]:
     data = json.loads(cleaned)
     if not isinstance(data, dict):
         msg = f"error: {path} must contain a top-level object"
-        raise ValueError(msg)
+        raise TypeError(msg)
     return data

@@ -519,7 +519,7 @@ def _register_copilot_server(mcp_path: Path, name: str, url: str) -> None:
     servers_obj = config.setdefault("servers", {})
     if not isinstance(servers_obj, dict):
         msg = f"error: {mcp_path} has non-object 'servers'"
-        raise ValueError(msg)
+        raise TypeError(msg)
 
     servers: dict[str, object] = servers_obj
     if name in servers:
@@ -534,10 +534,18 @@ def _register_copilot_server(mcp_path: Path, name: str, url: str) -> None:
 
 def _cmd_install_copilot(args: argparse.Namespace) -> None:
     """Register memory servers in VS Code Copilot MCP config."""
-    mcp_path = Path(args.mcp_config).expanduser() if args.mcp_config else _default_copilot_mcp_config_path()
+    mcp_path = (
+        Path(args.mcp_config).expanduser()
+        if args.mcp_config
+        else _default_copilot_mcp_config_path()
+    )
     try:
-        _register_copilot_server(mcp_path, "memory", f"http://localhost:{_detect_service_port()}/mcp")
-        _register_copilot_server(mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
+        _register_copilot_server(
+            mcp_path, "memory", f"http://localhost:{_detect_service_port()}/mcp"
+        )
+        _register_copilot_server(
+            mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp"
+        )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -596,9 +604,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--since",
         default=None,
         help=(
-            "Only score retrievals surfaced on or after this point (relative '7d'/'2w'/'3m' "
-            f"or ISO date); telemetry is pruned after ~{get_surfaced_retention_days()} days, "
-            "so this cannot reach further back"
+            "Only score retrievals surfaced on or after this point (relative "
+            "'30m'/'1h'/'7d'/'2w'/'3mo' or ISO date); telemetry is pruned after "
+            f"~{get_surfaced_retention_days()} days, so this cannot reach further back"
         ),
     )
     evaluate_cmd.add_argument(
@@ -617,7 +625,10 @@ def _build_parser() -> argparse.ArgumentParser:
     metrics_cmd.add_argument(
         "--since",
         default=None,
-        help="Only include calls on or after this instant (relative '7d'/'2w'/'3m' or ISO date).",
+        help=(
+            "Only include calls on or after this instant (relative "
+            "'30m'/'1h'/'7d'/'2w'/'3mo' or ISO date)."
+        ),
     )
 
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
@@ -647,6 +658,20 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _cmd_install(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Dispatch the `install` subcommand to its target-specific handler."""
+    if args.target == "claude-code":
+        _cmd_install_claude_code()
+    elif args.target == "codex":
+        _cmd_install_codex()
+    elif args.target == "copilot":
+        _cmd_install_copilot(args)
+    else:
+        if not args.agent_config:
+            parser.error("agent_config is required for kiro")
+        _cmd_install_kiro(args)
+
+
 def main() -> None:
     """CLI entry point: no args = serve, setup-service = install as service."""
     parser = _build_parser()
@@ -663,16 +688,7 @@ def main() -> None:
     elif args.command == "metrics":
         _cmd_metrics(args)
     elif args.command == "install":
-        if args.target == "claude-code":
-            _cmd_install_claude_code()
-        elif args.target == "codex":
-            _cmd_install_codex()
-        elif args.target == "copilot":
-            _cmd_install_copilot(args)
-        else:
-            if not args.agent_config:
-                parser.error("agent_config is required for kiro")
-            _cmd_install_kiro(args)
+        _cmd_install(args, parser)
     else:
         from .server import main as serve
 

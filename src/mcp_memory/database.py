@@ -65,8 +65,14 @@ _TYPE_HALF_LIFE_DAYS: dict[str, float] = {
 _VOTE_WEIGHT = 0.5
 _VOTE_SCALE = 5.0
 
-_RELATIVE_DATE_RE = re.compile(r"^(\d+)([dwm])$")
-_RELATIVE_UNITS = {"d": 1, "w": 7, "m": 30}
+_RELATIVE_DATE_RE = re.compile(r"^(\d+)(m|h|d|w|mo)$")
+_RELATIVE_UNITS = {
+    "m": timedelta(minutes=1),
+    "h": timedelta(hours=1),
+    "d": timedelta(days=1),
+    "w": timedelta(weeks=1),
+    "mo": timedelta(days=30),
+}
 
 # Vote score at or below which an orphan becomes eligible for autonomous GC. agent.py imports
 # this so the dream's saturation-floor prose and the GC reap threshold share one value.
@@ -74,12 +80,13 @@ _GC_DOWNVOTE_FLOOR = -10
 
 
 def _parse_date(value: str) -> str:
-    """Parse a relative ('7d', '2w', '3m') or ISO date string to an ISO timestamp."""
+    """Parse a relative ('30m', '1h', '7d', '2w', '3mo') or ISO date/timestamp string to an
+    ISO timestamp.
+    """
     match = _RELATIVE_DATE_RE.match(value.strip())
     if match:
         amount, unit = int(match.group(1)), match.group(2)
-        days = amount * _RELATIVE_UNITS[unit]
-        dt = datetime.now(tz=UTC) - timedelta(days=days)
+        dt = datetime.now(tz=UTC) - amount * _RELATIVE_UNITS[unit]
         return dt.isoformat()
     return datetime.fromisoformat(value).isoformat()
 
@@ -609,47 +616,51 @@ class DatabaseManager:
             for row in rows
         ]
 
+    def _validate_entity_data(self, project: str, entity_data: dict[str, object]) -> None:
+        """Raise ValueError if entity_data does not meet create_entities' input contract."""
+        name = entity_data.get("name")
+        entity_type = entity_data.get("entityType")
+        observations = entity_data.get("observations")
+        status = entity_data.get("status")
+
+        if not name or not isinstance(name, str):
+            raise ValueError(f"Entity name must be a non-empty string, got: {name!r}")
+        if not entity_type or not isinstance(entity_type, str):
+            raise ValueError(f"Entity type must be a non-empty string, got: {entity_type!r}")
+        if not isinstance(observations, list) or not observations:
+            raise ValueError(f"Observations must be a non-empty list for entity '{name}'")
+        for obs in observations:
+            if not isinstance(obs, str) or not obs:
+                raise ValueError(
+                    f"Each observation must be a non-empty string for entity '{name}', got: {obs!r}"
+                )
+
+        if status is not None and status not in VALID_STATUSES:
+            raise ValueError(
+                f"Invalid status '{status}' for entity '{name}'. Must be one of: {VALID_STATUSES}"
+            )
+
+        if (
+            get_strict_policy_enabled()
+            and project != "global"
+            and entity_type == "user-preferences"
+        ):
+            raise ValueError(
+                "Project-scoped 'user-preferences' entities are forbidden when "
+                "MCP_MEMORY_STRICT_POLICY is enabled; store them in global scope instead."
+            )
+
     def create_entities(self, project: str, entities: list[dict[str, object]]) -> None:
         """Upsert entities with observations, overwriting existing observations."""
         project_id = self._get_or_create_project_id(project)
 
         with self._db:
             for entity_data in entities:
+                self._validate_entity_data(project, entity_data)
                 name = entity_data.get("name")
                 entity_type = entity_data.get("entityType")
-                observations = entity_data.get("observations")
+                observations = cast("list[str]", entity_data.get("observations"))
                 status = entity_data.get("status")
-
-                if not name or not isinstance(name, str):
-                    raise ValueError(f"Entity name must be a non-empty string, got: {name!r}")
-                if not entity_type or not isinstance(entity_type, str):
-                    raise ValueError(
-                        f"Entity type must be a non-empty string, got: {entity_type!r}"
-                    )
-                if not isinstance(observations, list) or not observations:
-                    raise ValueError(f"Observations must be a non-empty list for entity '{name}'")
-                for obs in observations:
-                    if not isinstance(obs, str) or not obs:
-                        raise ValueError(
-                            f"Each observation must be a non-empty string "
-                            f"for entity '{name}', got: {obs!r}"
-                        )
-
-                if status is not None and status not in VALID_STATUSES:
-                    raise ValueError(
-                        f"Invalid status '{status}' for entity '{name}'. "
-                        f"Must be one of: {VALID_STATUSES}"
-                    )
-
-                if (
-                    get_strict_policy_enabled()
-                    and project != "global"
-                    and entity_type == "user-preferences"
-                ):
-                    raise ValueError(
-                        "Project-scoped 'user-preferences' entities are forbidden when "
-                        "MCP_MEMORY_STRICT_POLICY is enabled; store them in global scope instead."
-                    )
 
                 entity_type_id = self._get_or_create_entity_type_id(str(entity_type))
                 existing_id = self._get_entity_id(str(name), project_id)
@@ -1214,7 +1225,7 @@ class DatabaseManager:
         if orphaned:
             raise ValueError(
                 "Cannot delete relation: it would orphan non-structural "
-                 f"entit{'y' if len(orphaned) == 1 else 'ies'}: {', '.join(orphaned)}"
+                f"entit{'y' if len(orphaned) == 1 else 'ies'}: {', '.join(orphaned)}"
             )
 
         cursor = self._db.execute(
@@ -1373,8 +1384,8 @@ class DatabaseManager:
         limit: int = 10,
         entity_type: str | None = None,
         status: EntityStatus | list[EntityStatus] | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
         compact: bool = False,
         match_all: bool = False,
         max_observation_chars: int | None = None,
@@ -1414,12 +1425,12 @@ class DatabaseManager:
             statuses = [status] if isinstance(status, str) else status
             sql += f" AND e.status IN ({','.join('?' * len(statuses))})"
             params.extend(statuses)
-        if start_date is not None:
-            sql += " AND e.created_at >= ?"
-            params.append(_parse_date(start_date))
-        if end_date is not None:
-            sql += " AND e.created_at <= ?"
-            params.append(_parse_date(end_date))
+        if start is not None:
+            sql += " AND datetime(e.created_at) >= datetime(?)"
+            params.append(_parse_date(start))
+        if end is not None:
+            sql += " AND datetime(e.created_at) <= datetime(?)"
+            params.append(_parse_date(end))
 
         rows = self._db.execute(sql, params).fetchall()
 

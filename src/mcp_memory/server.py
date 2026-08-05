@@ -97,8 +97,8 @@ SEARCH_NODES_DESC = (
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status (a single value or a list, OR'd together), "
-    "and/or date range (start_date/end_date support relative formats like '7d', '2w', '3m' "
-    "and ISO dates). "
+    "and/or date range (start/end support relative formats like '30m', '1h', '7d', '2w', "
+    "'3mo' and ISO dates). "
     "Within each returned entity, observations are ordered best-first by their own votes "
     "(see vote). Each observation carries a content_hash usable with "
     "vote, delete_observations, and merge_observations to address it without "
@@ -235,8 +235,8 @@ SEARCH_ALL_PROJECTS_DESC = (
     "A multi-word query matches entities containing ANY of the terms by default, with "
     "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
     "Optionally filter by entityType, status (a single value or a list, OR'd together), "
-    "and/or date range (start_date/end_date support relative formats like '7d', '2w', '3m' "
-    "and ISO dates). "
+    "and/or date range (start/end support relative formats like '30m', '1h', '7d', '2w', "
+    "'3mo' and ISO dates). "
     "Pass projects to narrow the scan to specific project names instead of every project. "
     "Add expand_groups=true to also union each named project with its group siblings "
     "(resolved server-side via get_group_members) - this replaces having to call "
@@ -423,8 +423,8 @@ def search_nodes(
     limit: int = 10,
     entityType: str | None = None,
     status: str | list[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
     compact: bool = False,
     match_all: bool = False,
     max_observation_chars: int | None = None,
@@ -438,8 +438,8 @@ def search_nodes(
             limit=limit,
             entity_type=entityType,
             status=status,  # type: ignore[arg-type]
-            start_date=start_date,
-            end_date=end_date,
+            start=start,
+            end=end,
             compact=compact,
             match_all=match_all,
             max_observation_chars=max_observation_chars,
@@ -484,14 +484,10 @@ def list_metadata(kind: str, project: str | None = None) -> dict[str, object]:
         elif kind == "paths" and project is not None:
             result = {"paths": db.get_paths_for_project(project)}
         elif kind == "groups" and project is None:
-            result = {
-                "mappings": [{"project": n, "group": g} for n, g in db.list_project_groups()]
-            }
+            result = {"mappings": [{"project": n, "group": g} for n, g in db.list_project_groups()]}
         elif kind == "groups" and project is not None:
             result = {
-                "mappings": [
-                    {"project": n, "group": g} for n, g in db.list_project_groups(project)
-                ]
+                "mappings": [{"project": n, "group": g} for n, g in db.list_project_groups(project)]
             }
         else:
             result = {"error": f"Invalid kind '{kind}'. Must be one of: projects, paths, groups."}
@@ -597,9 +593,7 @@ def delete_project(project: str) -> dict[str, str]:
         return {"error": str(e)}
 
 
-def _resolve_projects(
-    db: DatabaseManager, projects: list[str], expand_groups: bool
-) -> list[str]:
+def _resolve_projects(db: DatabaseManager, projects: list[str], expand_groups: bool) -> list[str]:
     """Union each seed project with its group siblings when expand_groups is set."""
     resolved = list(projects)
     if expand_groups:
@@ -617,8 +611,8 @@ def search_all_projects(
     limit: int = 50,
     entityType: str | None = None,
     status: str | list[str] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
     compact: bool = False,
     match_all: bool = False,
     max_observation_chars: int | None = None,
@@ -637,8 +631,8 @@ def search_all_projects(
             limit=limit,
             entity_type=entityType,
             status=status,  # type: ignore[arg-type]
-            start_date=start_date,
-            end_date=end_date,
+            start=start,
+            end=end,
             compact=compact,
             match_all=match_all,
             max_observation_chars=max_observation_chars,

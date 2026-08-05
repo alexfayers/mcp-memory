@@ -180,7 +180,7 @@ Delete every observation on an entity except those whose `content_hash` is in `k
 
 ### search_nodes
 
-FTS5 full-text search with recency- and vote-weighted BM25 ranking. Recency decay is type-aware (durable types such as `pattern` and `knowledge` decay far slower than `task`), and usefulness votes (see `vote`) nudge results up or down within bounds. Multi-word queries match entities containing *any* of the terms by default (entities matching more terms rank first); pass `match_all=true` to require *all* terms. Optional `entity_type`, `status` (a single value or a list, OR'd together), and time-range (`start_date`/`end_date`) filters. Date params support relative formats (`7d`, `2w`, `3m`) and ISO dates. Within each returned entity, observations are ordered best-first by their own votes (see `vote`).
+FTS5 full-text search with recency- and vote-weighted BM25 ranking. Recency decay is type-aware (durable types such as `pattern` and `knowledge` decay far slower than `task`), and usefulness votes (see `vote`) nudge results up or down within bounds. Multi-word queries match entities containing *any* of the terms by default (entities matching more terms rank first); pass `match_all=true` to require *all* terms. Optional `entity_type`, `status` (a single value or a list, OR'd together), and time-range (`start`/`end`) filters. Date params support relative formats (`30m`, `1h`, `7d`, `2w`, `3mo`) and ISO dates. Within each returned entity, observations are ordered best-first by their own votes (see `vote`).
 
 ### read_graph
 

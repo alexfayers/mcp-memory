@@ -38,8 +38,8 @@ _TRACKED_OPTIONS = frozenset(
         "min_content_tokens",
         "vote",
         "project",
-        "start_date",
-        "end_date",
+        "start",
+        "end",
     }
 )
 
@@ -98,13 +98,13 @@ class UsageReport:
 def usage_report(db: DatabaseManager, since: str | None = None) -> UsageReport:
     """Aggregate recorded tool_calls into per-tool byte-size stats and option-usage frequency.
 
-    When ``since`` is given (relative '7d'/'2w'/'3m' or ISO date), only calls recorded on or
-    after that instant are included.
+    When ``since`` is given (relative '30m'/'1h'/'7d'/'2w'/'3mo' or ISO date), only calls
+    recorded on or after that instant are included.
     """
     sql = "SELECT tool, input_bytes, output_bytes, options FROM tool_calls "
     params: list[str] = []
     if since is not None:
-        sql += "WHERE called_at >= ? "
+        sql += "WHERE datetime(called_at) >= datetime(?) "
         params.append(_parse_date(since))
     sql += "ORDER BY tool"
     rows = db._db.execute(sql, params).fetchall()

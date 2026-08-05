@@ -13,6 +13,7 @@ from mcp_memory.database import (
     GraphResult,
     _budget_observations,
     _hash_observation,
+    _parse_date,
 )
 from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
 from mcp_memory.models import Entity, Observation, Relation
@@ -743,9 +744,7 @@ class TestProjectGroups:
         db.set_project_groups("a", ["g"])
         assert db.get_group_members("a") == []
 
-    def test_get_group_members_unions_multiple_matching_groups(
-        self, db: DatabaseManager
-    ) -> None:
+    def test_get_group_members_unions_multiple_matching_groups(self, db: DatabaseManager) -> None:
         db.set_project_groups("a", ["g1", "g2"])
         db.set_project_groups("b", ["g1"])
         db.set_project_groups("c", ["g2"])
@@ -770,9 +769,7 @@ class TestProjectGroups:
         with pytest.raises(TypeError, match="list"):
             db.set_project_groups("a", "not-a-list")  # type: ignore[arg-type]
 
-    def test_add_project_to_group_registers_without_replacing(
-        self, db: DatabaseManager
-    ) -> None:
+    def test_add_project_to_group_registers_without_replacing(self, db: DatabaseManager) -> None:
         db.set_project_groups("a", ["g1"])
         db.add_project_to_group("a", "g2")
         db.set_project_groups("b", ["g1"])
@@ -1187,7 +1184,9 @@ class TestDeleteEntity:
         self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("MCP_MEMORY_STRICT_POLICY", "true")
-        with pytest.raises(ValueError, match="Project-scoped 'user-preferences' entities are forbidden"):
+        with pytest.raises(
+            ValueError, match="Project-scoped 'user-preferences' entities are forbidden"
+        ):
             db.create_entities(
                 "proj",
                 [
@@ -1673,6 +1672,13 @@ class TestGetEntityWithRelationsFilters:
         assert result["relations"][0].relation_type == "implements"
 
 
+class TestParseDate:
+    def test_mo_and_m_produce_different_results(self) -> None:
+        month_ago = _parse_date("3mo")
+        minute_ago = _parse_date("3m")
+        assert month_ago != minute_ago
+
+
 class TestSearchNodes:
     def test_fts_search(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -1884,7 +1890,7 @@ class TestSearchNodes:
             "UPDATE entities SET created_at = datetime('now', '-90 days') WHERE name = 'old'"
         )
         db._db.commit()
-        result = db.search_nodes("proj", "keyword", start_date="30d")
+        result = db.search_nodes("proj", "keyword", start="30d")
         assert len(result["entities"]) == 1
         assert result["entities"][0].name == "new"
 
@@ -1900,7 +1906,7 @@ class TestSearchNodes:
             "UPDATE entities SET created_at = datetime('now', '-90 days') WHERE name = 'old'"
         )
         db._db.commit()
-        result = db.search_nodes("proj", "keyword", end_date="30d")
+        result = db.search_nodes("proj", "keyword", end="30d")
         assert len(result["entities"]) == 1
         assert result["entities"][0].name == "old"
 
@@ -1909,8 +1915,45 @@ class TestSearchNodes:
             "proj",
             [{"name": "e1", "entityType": "task", "observations": ["keyword"]}],
         )
-        result = db.search_nodes("proj", "keyword", start_date="2099-01-01")
+        result = db.search_nodes("proj", "keyword", start="2099-01-01")
         assert len(result["entities"]) == 0
+
+    def test_same_day_range_includes_just_created_entity(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["keyword"]}],
+        )
+        result = db.search_nodes("proj", "keyword", start="1h")
+        assert len(result["entities"]) == 1
+        assert result["entities"][0].name == "e1"
+
+    def test_hour_granularity_excludes_and_includes_correctly(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["keyword"]}],
+        )
+        db._db.execute(
+            "UPDATE entities SET created_at = datetime('now', '-2 hours') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        assert db.search_nodes("proj", "keyword", start="1h")["entities"] == []
+        result = db.search_nodes("proj", "keyword", end="1h")
+        assert len(result["entities"]) == 1
+        assert result["entities"][0].name == "e1"
+
+    def test_minute_granularity_excludes_and_includes_correctly(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["keyword"]}],
+        )
+        db._db.execute(
+            "UPDATE entities SET created_at = datetime('now', '-90 minutes') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        assert db.search_nodes("proj", "keyword", start="60m")["entities"] == []
+        result = db.search_nodes("proj", "keyword", end="60m")
+        assert len(result["entities"]) == 1
+        assert result["entities"][0].name == "e1"
 
     def test_cross_project_search(self, db: DatabaseManager) -> None:
         db.create_entities(

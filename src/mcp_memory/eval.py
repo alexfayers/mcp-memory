@@ -116,10 +116,10 @@ def iter_labelled_queries(
     Hits are grouped by ``retrieval_id`` and ordered by their stored rank; the relevance
     label is the set of surfaced entities that were subsequently used (``used_at`` set). A
     cross-project search re-runs against all projects, so its query scope is ``None``. When
-    ``since`` is given (a relative '7d'/'2w'/'3m' or ISO date string), only retrievals
-    surfaced on or after that instant are included. When ``min_content_tokens`` is given,
-    queries with fewer whitespace-separated tokens than that (e.g. the single word "task")
-    are excluded, since a degenerate query is unrankable regardless of ranking quality.
+    ``since`` is given (a relative '30m'/'1h'/'7d'/'2w'/'3mo' or ISO date string), only
+    retrievals surfaced on or after that instant are included. When ``min_content_tokens`` is
+    given, queries with fewer whitespace-separated tokens than that (e.g. the single word
+    "task") are excluded, since a degenerate query is unrankable regardless of ranking quality.
     """
     sql = (
         "SELECT retrieval_id, project, query, tool, entity_name, rank, used_at "
@@ -127,7 +127,7 @@ def iter_labelled_queries(
     )
     params: list[str] = []
     if since is not None:
-        sql += "WHERE surfaced_at >= ? "
+        sql += "WHERE datetime(surfaced_at) >= datetime(?) "
         params.append(_parse_date(since))
     sql += "ORDER BY retrieval_id, rank"
     rows = db._db.execute(sql, params).fetchall()
