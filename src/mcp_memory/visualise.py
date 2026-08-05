@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.resources
+from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 import httpx
@@ -11,6 +12,8 @@ from starlette.responses import HTMLResponse, JSONResponse
 
 from . import activity, dream_status, recall_status
 from .config import get_agent_url
+from .eval import evaluate_cached
+from .metrics import usage_over_time
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -286,6 +289,21 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
     @mcp.custom_route("/api/recall", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_recall(request: Request) -> JSONResponse:
         return JSONResponse(get_recall_state())
+
+    @mcp.custom_route("/api/usage-trend", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_usage_trend(request: Request) -> JSONResponse:
+        bucket = request.query_params.get("bucket", "day")
+        since = request.query_params.get("since")
+        buckets = usage_over_time(get_db(), bucket, since)
+        return JSONResponse(
+            {"bucket": bucket, "since": since, "series": [asdict(b) for b in buckets]}
+        )
+
+    @mcp.custom_route("/api/eval", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_eval(request: Request) -> JSONResponse:
+        k = int(request.query_params.get("k", 10))
+        since = request.query_params.get("since")
+        return JSONResponse(asdict(evaluate_cached(get_db(), k=k, since=since)))
 
     @mcp.custom_route("/api/vote", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_vote(request: Request) -> JSONResponse:

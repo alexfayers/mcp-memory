@@ -11,17 +11,23 @@ from __future__ import annotations
 
 import math
 import sqlite3
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .config import get_eval_cache_ttl_seconds
 from .database import _parse_date
 
 if TYPE_CHECKING:
     from .database import DatabaseManager
 
+__all__ = ["time"]
+
 # Tool name for a cross-project search, whose labelled query re-runs against all projects.
 _ALL_PROJECTS_TOOL = "search_all_projects"
+
+_cache: dict[tuple[int, str | None, int], tuple[EvalReport, float]] = {}
 
 
 def precision_at_k(ranked: Sequence[str], relevant: set[str], k: int) -> float:
@@ -199,3 +205,30 @@ def evaluate(
         mean_success_at_k=sum(successes) / count,
         k=k,
     )
+
+
+def evaluate_cached(
+    db: DatabaseManager, k: int = 10, since: str | None = None, min_content_tokens: int = 0
+) -> EvalReport:
+    """Return ``evaluate()``'s result, cached for ``MCP_MEMORY_EVAL_CACHE_TTL_SECONDS``.
+
+    ``evaluate()`` re-runs a live search per historical labelled query, so its cost scales
+    with query history size. This wraps it in a module-level cache keyed by (k, since,
+    min_content_tokens) so repeated requests within the TTL are free; a cache miss or expiry
+    recomputes and refreshes the entry.
+    """
+    key = (k, since, min_content_tokens)
+    now = time.monotonic()
+    cached = _cache.get(key)
+    if cached is not None:
+        report, cached_at = cached
+        if now - cached_at < get_eval_cache_ttl_seconds():
+            return report
+    report = evaluate(db, k=k, since=since, min_content_tokens=min_content_tokens)
+    _cache[key] = (report, now)
+    return report
+
+
+def clear_cache() -> None:
+    """Reset the eval-report cache (for test isolation)."""
+    _cache.clear()

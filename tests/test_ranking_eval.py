@@ -298,6 +298,68 @@ class TestEvaluate:
         assert ranking_eval.evaluate(db, k=5, min_content_tokens=2).query_count == 1
 
 
+class TestEvaluateCached:
+    def test_cache_hit_does_not_recompute(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ranking_eval.clear_cache()
+        calls = 0
+        real_evaluate = ranking_eval.evaluate
+
+        def counting_evaluate(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
+            nonlocal calls
+            calls += 1
+            return real_evaluate(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(ranking_eval, "evaluate", counting_evaluate)
+
+        ranking_eval.evaluate_cached(db, k=5)
+        ranking_eval.evaluate_cached(db, k=5)
+
+        assert calls == 1
+
+    def test_different_key_recomputes(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ranking_eval.clear_cache()
+        calls = 0
+        real_evaluate = ranking_eval.evaluate
+
+        def counting_evaluate(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
+            nonlocal calls
+            calls += 1
+            return real_evaluate(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(ranking_eval, "evaluate", counting_evaluate)
+
+        ranking_eval.evaluate_cached(db, k=5)
+        ranking_eval.evaluate_cached(db, k=10)
+
+        assert calls == 2
+
+    def test_ttl_expiry_recomputes(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ranking_eval.clear_cache()
+        calls = 0
+        real_evaluate = ranking_eval.evaluate
+
+        def counting_evaluate(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
+            nonlocal calls
+            calls += 1
+            return real_evaluate(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(ranking_eval, "evaluate", counting_evaluate)
+        monkeypatch.setattr(ranking_eval, "get_eval_cache_ttl_seconds", lambda: 60)
+
+        monkeypatch.setattr(ranking_eval.time, "monotonic", lambda: 1000.0)
+        ranking_eval.evaluate_cached(db, k=5)
+        monkeypatch.setattr(ranking_eval.time, "monotonic", lambda: 1061.0)
+        ranking_eval.evaluate_cached(db, k=5)
+
+        assert calls == 2
+
+
 class TestBudgetingIsOrthogonalToRanking:
     """Permanent guard: observation budgeting must never change ranking or eval metrics.
 

@@ -95,6 +95,57 @@ class UsageReport:
     tools: list[ToolUsage]
 
 
+@dataclass(frozen=True)
+class UsageBucket:
+    """Per-time-bucket, per-tool call count and summed byte-size proxies."""
+
+    bucket: str
+    tool: str
+    call_count: int
+    total_input_bytes: int
+    total_output_bytes: int
+
+
+_BUCKET_FORMATS = {"hour": "%Y-%m-%dT%H:00", "day": "%Y-%m-%d", "week": "%Y-W%W"}
+
+
+def usage_over_time(
+    db: DatabaseManager, bucket: str = "day", since: str | None = None
+) -> list[UsageBucket]:
+    """Aggregate recorded tool_calls into per-tool call count and summed bytes per time bucket.
+
+    ``bucket`` is one of 'hour', 'day', or 'week'; any other value raises ``ValueError``. When
+    ``since`` is given (relative '30m'/'1h'/'7d'/'2w'/'3mo' or ISO date), only calls recorded on
+    or after that instant are included.
+    """
+    fmt = _BUCKET_FORMATS.get(bucket)
+    if fmt is None:
+        raise ValueError(f"bucket must be one of {sorted(_BUCKET_FORMATS)}, got {bucket!r}")
+
+    sql = (
+        "SELECT strftime(?, called_at) AS b, tool, COUNT(*) AS call_count, "
+        "SUM(input_bytes) AS total_input_bytes, SUM(output_bytes) AS total_output_bytes "
+        "FROM tool_calls "
+    )
+    params: list[str] = [fmt]
+    if since is not None:
+        sql += "WHERE datetime(called_at) >= datetime(?) "
+        params.append(_parse_date(since))
+    sql += "GROUP BY b, tool ORDER BY b, tool"
+    rows = db._db.execute(sql, params).fetchall()
+
+    return [
+        UsageBucket(
+            bucket=row["b"],
+            tool=row["tool"],
+            call_count=row["call_count"],
+            total_input_bytes=row["total_input_bytes"],
+            total_output_bytes=row["total_output_bytes"],
+        )
+        for row in rows
+    ]
+
+
 def usage_report(db: DatabaseManager, since: str | None = None) -> UsageReport:
     """Aggregate recorded tool_calls into per-tool byte-size stats and option-usage frequency.
 

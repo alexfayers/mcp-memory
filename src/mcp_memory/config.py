@@ -24,6 +24,7 @@ _DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
 _DEFAULT_PURGE_GRACE_DAYS = "30"
 _DEFAULT_SURFACED_RETENTION_DAYS = "180"
 _DEFAULT_CALL_METRICS_RETENTION_DAYS = "90"
+_DEFAULT_EVAL_CACHE_TTL_SECONDS = "300"
 _DEFAULT_MAX_OBSERVATION_CHARS = "2000"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -253,6 +254,11 @@ def get_call_metrics_retention_days() -> int:
             "MCP_MEMORY_CALL_METRICS_RETENTION_DAYS", _DEFAULT_CALL_METRICS_RETENTION_DAYS
         )
     )
+
+
+def get_eval_cache_ttl_seconds() -> int:
+    """Return how long a computed retrieval-quality EvalReport stays cached."""
+    return int(os.environ.get("MCP_MEMORY_EVAL_CACHE_TTL_SECONDS", _DEFAULT_EVAL_CACHE_TTL_SECONDS))
 
 
 def get_gc_enabled() -> bool:

@@ -89,7 +89,8 @@ svg { width: 100vw; height: 100vh; }
 .search-ring { fill: none; stroke: #58a6ff; stroke-opacity: 0.9; pointer-events: none; }
 .search-badge { fill: #58a6ff; font-size: 9px; font-weight: 700; pointer-events: none; }
 #agent-panels { position: fixed; bottom: 12px; right: 12px; z-index: 10; width: 300px; max-width: 40vw;
-  display: flex; flex-direction: column; gap: 8px; }
+  max-height: calc(100vh - 24px); display: flex; flex-direction: column; gap: 8px;
+  overflow-y: auto; }
 #dream { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
   backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
 #recall { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
@@ -132,6 +133,34 @@ svg { width: 100vw; height: 100vh; }
 #dream-operations .dm .why { color: #6e7681; display: block; }
 .node.demoted circle { stroke: #d29922; stroke-dasharray: 2 2; }
 .demoted-ring { fill: none; stroke: #d29922; stroke-opacity: 0.8; stroke-dasharray: 2 2; pointer-events: none; }
+#usage-trend { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
+  backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
+#usage-trend-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
+#usage-trend-head .title { color: #8b949e; }
+#usage-trend-head .total { margin-left: auto; color: #6e7681; font-variant-numeric: tabular-nums; }
+#usage-trend-body { max-height: 26vh; overflow-y: auto; padding: 4px 0; }
+#usage-trend-body:empty::after { content: "No calls recorded yet"; display: block; padding: 8px 12px; color: #484f58; font-style: italic; }
+#usage-trend-body .ut { display: flex; align-items: center; gap: 8px; padding: 3px 12px; }
+#usage-trend-body .ut .nm { color: #c9d1d9; word-break: break-all; flex: 1; min-width: 0; }
+#usage-trend-body .ut .cnt { color: #58a6ff; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+#usage-trend-body .ut svg.spark { flex-shrink: 0; width: 120px; height: 24px; }
+#usage-trend-body .ut .spark path { fill: none; stroke: #58a6ff; stroke-width: 1.5; }
+#eval { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
+  backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
+#eval-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
+#eval-head .title { color: #8b949e; }
+#eval-head .qc { margin-left: auto; color: #6e7681; font-variant-numeric: tabular-nums; }
+#eval-body { padding: 4px 0; }
+#eval-body .em { display: flex; align-items: baseline; gap: 8px; padding: 3px 12px; }
+#eval-body .em .lbl { color: #8b949e; flex: 1; min-width: 0; }
+#eval-body .em .val { color: #56d364; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+#usage-trend-head, #eval-head, #recall-head, #dream-head { cursor: pointer; }
+#usage-trend.collapsed #usage-trend-body, #eval.collapsed #eval-body,
+#recall.collapsed #recall-feed,
+#dream.collapsed #dream-body, #dream.collapsed #dream-operations, #dream.collapsed #dream-actions { display: none; }
+#usage-trend-head .caret, #eval-head .caret, #recall-head .caret, #dream-head .caret { color: #6e7681; font-size: 10px; transition: transform 0.15s; display: inline-block; }
+#usage-trend:not(.collapsed) #usage-trend-head .caret, #eval:not(.collapsed) #eval-head .caret,
+#recall:not(.collapsed) #recall-head .caret, #dream:not(.collapsed) #dream-head .caret { transform: rotate(90deg); }
 </style>
 </head>
 <body>
@@ -169,15 +198,33 @@ svg { width: 100vw; height: 100vh; }
   </div>
 </div>
 <div id="agent-panels">
-  <div id="recall">
+  <div id="usage-trend" class="collapsed">
+    <div id="usage-trend-head">
+      <span class="caret">&#9656;</span>
+      <span class="title">call metrics</span>
+      <span class="total" id="usage-trend-total"></span>
+    </div>
+    <div id="usage-trend-body"></div>
+  </div>
+  <div id="eval" class="collapsed">
+    <div id="eval-head">
+      <span class="caret">&#9656;</span>
+      <span class="title">retrieval quality</span>
+      <span class="qc" id="eval-qc"></span>
+    </div>
+    <div id="eval-body"></div>
+  </div>
+  <div id="recall" class="collapsed">
     <div id="recall-head">
+      <span class="caret">&#9656;</span>
       <span class="pill"><span class="dot"></span><span id="recall-state">recall</span></span>
       <span class="running" id="recall-active"></span>
     </div>
     <div id="recall-feed"></div>
   </div>
-  <div id="dream">
+  <div id="dream" class="collapsed">
     <div id="dream-head">
+      <span class="caret">&#9656;</span>
       <span class="pill"><span class="dot"></span><span id="dream-state">dream</span></span>
       <span class="idle" id="dream-idle"></span>
     </div>
@@ -847,6 +894,96 @@ async function fetchRecall() {
 }
 fetchRecall();
 setInterval(fetchRecall, 3000);
+
+const SPARK_W = 120, SPARK_H = 24;
+function renderUsageTrend(d) {
+  const series = d.series || [];
+  const byTool = new Map();
+  let totalCalls = 0;
+  for (const row of series) {
+    if (!byTool.has(row.tool)) byTool.set(row.tool, []);
+    byTool.get(row.tool).push(row);
+    totalCalls += row.call_count;
+  }
+  document.getElementById("usage-trend-total").textContent =
+    totalCalls ? `${totalCalls} call${totalCalls === 1 ? "" : "s"}` : "";
+  const body = document.getElementById("usage-trend-body");
+  body.innerHTML = "";
+  const tools = [...byTool.keys()].sort();
+  for (const tool of tools) {
+    const buckets = byTool.get(tool);
+    const calls = buckets.reduce((sum, b) => sum + b.call_count, 0);
+    const row = document.createElement("div");
+    row.className = "ut";
+    const name = document.createElement("span");
+    name.className = "nm";
+    name.textContent = tool;
+    const spark = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    spark.setAttribute("class", "spark");
+    spark.setAttribute("width", SPARK_W);
+    spark.setAttribute("height", SPARK_H);
+    const values = buckets.map(b => b.call_count);
+    const x = d3.scaleLinear().domain([0, Math.max(values.length - 1, 1)]).range([1, SPARK_W - 1]);
+    const y = d3.scaleLinear().domain([0, Math.max(...values, 1)]).range([SPARK_H - 2, 2]);
+    const line = d3.line().x((_, i) => x(i)).y(v => y(v));
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", line(values) || "");
+    spark.append(path);
+    const cnt = document.createElement("span");
+    cnt.className = "cnt";
+    cnt.textContent = calls;
+    row.append(name, spark, cnt);
+    body.append(row);
+  }
+}
+
+async function fetchUsageTrend() {
+  try { renderUsageTrend(await (await fetch("/api/usage-trend")).json()); }
+  catch (e) { /* transient poll failure; retry next tick */ }
+}
+
+const EVAL_METRICS = [
+  ["query_count", "queries"],
+  ["mean_precision_at_k", "precision@k"],
+  ["mrr", "MRR"],
+  ["mean_recall_at_k", "recall@k"],
+  ["mean_ndcg_at_k", "nDCG@k"],
+  ["mean_success_at_k", "success@k"],
+];
+function renderEval(d) {
+  document.getElementById("eval-qc").textContent = `@${d.k}`;
+  const body = document.getElementById("eval-body");
+  body.innerHTML = "";
+  for (const [key, label] of EVAL_METRICS) {
+    const row = document.createElement("div");
+    row.className = "em";
+    const lbl = document.createElement("span");
+    lbl.className = "lbl";
+    lbl.textContent = label;
+    const val = document.createElement("span");
+    val.className = "val";
+    val.textContent = (d[key] || 0).toFixed(2);
+    row.append(lbl, val);
+    body.append(row);
+  }
+}
+
+async function fetchEval() {
+  try { renderEval(await (await fetch("/api/eval")).json()); }
+  catch (e) { /* transient poll failure; retry next tick */ }
+}
+function wireCollapse(cardId, headId, fetchFn) {
+  const card = document.getElementById(cardId);
+  const head = document.getElementById(headId);
+  head.addEventListener("click", () => {
+    const collapsed = card.classList.toggle("collapsed");
+    if (!collapsed) fetchFn();
+  });
+}
+wireCollapse("usage-trend", "usage-trend-head", fetchUsageTrend);
+wireCollapse("eval", "eval-head", fetchEval);
+wireCollapse("recall", "recall-head", fetchRecall);
+wireCollapse("dream", "dream-head", fetchDream);
 
 loadProjects();
 </script>

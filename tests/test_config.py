@@ -174,6 +174,14 @@ class TestSurfacedRetentionConfig:
         assert config.get_surfaced_retention_days() == 7
 
 
+class TestEvalCacheTtlConfig:
+    def test_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_EVAL_CACHE_TTL_SECONDS", raising=False)
+        assert config.get_eval_cache_ttl_seconds() == 300
+        monkeypatch.setenv("MCP_MEMORY_EVAL_CACHE_TTL_SECONDS", "60")
+        assert config.get_eval_cache_ttl_seconds() == 60
+
+
 class TestGcConfig:
     def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_MEMORY_GC_ENABLED", raising=False)

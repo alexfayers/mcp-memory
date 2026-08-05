@@ -11,6 +11,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 
 from mcp_memory import activity, dream_status, recall_status, visualise
+from mcp_memory import eval as eval_module
 from mcp_memory.database import DatabaseManager, _hash_observation
 from mcp_memory.models import Relation
 from mcp_memory.visualise import (
@@ -30,6 +31,7 @@ def _clear_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     activity.clear()
     dream_status.clear()
     recall_status.clear()
+    eval_module.clear_cache()
 
 
 @pytest.fixture
@@ -171,6 +173,20 @@ class TestVisualisePage:
         resp = await client.get("/visualise")
         assert "applyDemotedRings" in resp.text
         assert "demoted (downvoted)" in resp.text
+
+    @pytest.mark.anyio
+    async def test_usage_trend_and_eval_collapsed_by_default(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        resp = await client.get("/visualise")
+        assert '<div id="usage-trend" class="collapsed">' in resp.text
+        assert '<div id="eval" class="collapsed">' in resp.text
+
+    @pytest.mark.anyio
+    async def test_recall_and_dream_collapsed_by_default(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert '<div id="recall" class="collapsed">' in resp.text
+        assert '<div id="dream" class="collapsed">' in resp.text
 
     @pytest.mark.anyio
     async def test_includes_observation_merge_ui(self, client: httpx.AsyncClient) -> None:
@@ -487,6 +503,93 @@ class TestApiRecall:
     @pytest.mark.anyio
     async def test_polling_recall_does_not_record_activity(self, client: httpx.AsyncClient) -> None:
         await client.get("/api/recall")
+        assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
+
+
+class TestApiUsageTrend:
+    @pytest.mark.anyio
+    async def test_returns_series_shape(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.record_tool_call("search_nodes", 100, 1000, {})
+        db.record_tool_call("read_graph", 50, 500, {})
+        resp = await client.get("/api/usage-trend")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["bucket"] == "day"
+        assert data["since"] is None
+        tools = {row["tool"] for row in data["series"]}
+        assert tools == {"read_graph", "search_nodes"}
+        search = next(row for row in data["series"] if row["tool"] == "search_nodes")
+        assert set(search) == {
+            "bucket",
+            "tool",
+            "call_count",
+            "total_input_bytes",
+            "total_output_bytes",
+        }
+        assert search["call_count"] == 1
+        assert search["total_input_bytes"] == 100
+        assert search["total_output_bytes"] == 1000
+
+    @pytest.mark.anyio
+    async def test_bucket_and_since_params_honoured(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.record_tool_call("search_nodes", 10, 20, {})
+        db.record_tool_call("read_graph", 30, 40, {})
+        db._db.execute(
+            "UPDATE tool_calls SET called_at = datetime('now', '-100 days') "
+            "WHERE tool = 'read_graph'"
+        )
+        db._db.commit()
+        resp = await client.get("/api/usage-trend", params={"bucket": "hour", "since": "30d"})
+        data = resp.json()
+        assert data["bucket"] == "hour"
+        assert data["since"] == "30d"
+        assert [row["tool"] for row in data["series"]] == ["search_nodes"]
+        assert "T" in data["series"][0]["bucket"]
+
+    @pytest.mark.anyio
+    async def test_empty_database_returns_empty_series(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/api/usage-trend")
+        assert resp.status_code == 200
+        assert resp.json()["series"] == []
+
+    @pytest.mark.anyio
+    async def test_records_no_activity(
+        self, client: httpx.AsyncClient, db: DatabaseManager
+    ) -> None:
+        db.record_tool_call("search_nodes", 100, 1000, {})
+        await client.get("/api/usage-trend")
+        assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
+
+
+class TestApiEval:
+    @pytest.mark.anyio
+    async def test_returns_all_six_fields(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/api/eval")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data) == {
+            "query_count",
+            "mean_precision_at_k",
+            "mrr",
+            "mean_recall_at_k",
+            "mean_ndcg_at_k",
+            "mean_success_at_k",
+            "k",
+        }
+        assert data["k"] == 10
+
+    @pytest.mark.anyio
+    async def test_k_param_honoured(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/api/eval", params={"k": 5})
+        assert resp.json()["k"] == 5
+
+    @pytest.mark.anyio
+    async def test_records_no_activity(self, client: httpx.AsyncClient) -> None:
+        await client.get("/api/eval")
         assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
 
 

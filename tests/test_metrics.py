@@ -147,6 +147,68 @@ class TestUsageReport:
         assert [tool.tool for tool in report.tools] == ["search_nodes"]
 
 
+class TestUsageOverTime:
+    def test_day_bucketing_splits_across_dates(self, db: DatabaseManager) -> None:
+        db.record_tool_call("search_nodes", 100, 1000, {})
+        db.record_tool_call("search_nodes", 200, 2000, {})
+        db._db.execute(
+            "UPDATE tool_calls SET called_at = datetime('now', '-2 days') WHERE input_bytes = 200"
+        )
+        db._db.commit()
+
+        buckets = metrics.usage_over_time(db, bucket="day")
+        assert len(buckets) == 2
+        assert len({b.bucket for b in buckets}) == 2
+        assert all(b.tool == "search_nodes" for b in buckets)
+
+    def test_per_tool_breakdown_same_day(self, db: DatabaseManager) -> None:
+        db.record_tool_call("search_nodes", 100, 1000, {})
+        db.record_tool_call("search_nodes", 200, 3000, {})
+        db.record_tool_call("read_graph", 50, 500, {})
+
+        buckets = metrics.usage_over_time(db, bucket="day")
+        assert len(buckets) == 2
+        by_tool = {b.tool: b for b in buckets}
+        assert by_tool["search_nodes"].call_count == 2
+        assert by_tool["search_nodes"].total_input_bytes == 300
+        assert by_tool["search_nodes"].total_output_bytes == 4000
+        assert by_tool["read_graph"].call_count == 1
+        assert by_tool["read_graph"].total_input_bytes == 50
+        assert by_tool["read_graph"].total_output_bytes == 500
+
+    def test_since_filter_excludes_old_calls(self, db: DatabaseManager) -> None:
+        db.record_tool_call("search_nodes", 10, 20, {})
+        db.record_tool_call("read_graph", 30, 40, {})
+        db._db.execute(
+            "UPDATE tool_calls SET called_at = datetime('now', '-100 days') "
+            "WHERE tool = 'read_graph'"
+        )
+        db._db.commit()
+
+        buckets = metrics.usage_over_time(db, bucket="day", since="30d")
+        assert [b.tool for b in buckets] == ["search_nodes"]
+
+    def test_hour_grouping(self, db: DatabaseManager) -> None:
+        db.record_tool_call("search_nodes", 10, 20, {})
+        buckets = metrics.usage_over_time(db, bucket="hour")
+        assert len(buckets) == 1
+        assert "T" in buckets[0].bucket
+        assert buckets[0].bucket.endswith(":00")
+
+    def test_week_grouping(self, db: DatabaseManager) -> None:
+        db.record_tool_call("search_nodes", 10, 20, {})
+        buckets = metrics.usage_over_time(db, bucket="week")
+        assert len(buckets) == 1
+        assert "-W" in buckets[0].bucket
+
+    def test_invalid_bucket_raises(self, db: DatabaseManager) -> None:
+        with pytest.raises(ValueError, match="bucket"):
+            metrics.usage_over_time(db, bucket="year")
+
+    def test_empty_database_returns_empty(self, db: DatabaseManager) -> None:
+        assert metrics.usage_over_time(db, bucket="day") == []
+
+
 class TestMetricsCommand:
     def test_metrics_command_reports_usage(
         self,
