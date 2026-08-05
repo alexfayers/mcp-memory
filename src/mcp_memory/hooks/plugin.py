@@ -63,6 +63,7 @@ _MEMORY_REMINDER_TOOLS = frozenset(
     }
 )
 
+# Update prompts/shared/rules/hooks-mcp-memory.md if any of these messages change.
 _MEMORY_REMINDER_TEMPLATE = (
     "MEMORY UPDATE REQUIRED: Update the `{project}` project and `global`"
     " scopes in the memory server now.\n"
@@ -417,6 +418,7 @@ class MemoryPlugin(HooksPlugin):
     def __init__(self) -> None:
         self._reminder = _ReminderChance()
         self._project_scope = "unknown"
+        # Update prompts/shared/rules/hooks-mcp-memory.md if hook-event wiring changes.
         self._handlers: dict[str, Callable[..., HookResult | None]] = {
             "TaskStart": self._on_task_start,
             "TaskCancel": self._on_task_end,
