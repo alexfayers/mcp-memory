@@ -12,7 +12,7 @@ from starlette.responses import HTMLResponse, JSONResponse
 
 from . import activity, dream_status, recall_status
 from .config import get_agent_url
-from .eval import evaluate_cached
+from .eval import evaluate_cached_async
 from .metrics import usage_over_time
 
 if TYPE_CHECKING:
@@ -303,7 +303,11 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
     async def api_eval(request: Request) -> JSONResponse:
         k = int(request.query_params.get("k", 10))
         since = request.query_params.get("since")
-        return JSONResponse(asdict(evaluate_cached(get_db(), k=k, since=since)))
+        try:
+            report = await evaluate_cached_async(get_db(), k=k, since=since)
+        except Exception:
+            return JSONResponse({"error": "eval failed"}, status_code=500)
+        return JSONResponse(asdict(report))
 
     @mcp.custom_route("/api/vote", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_vote(request: Request) -> JSONResponse:

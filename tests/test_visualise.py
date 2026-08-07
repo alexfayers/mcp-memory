@@ -592,6 +592,21 @@ class TestApiEval:
         await client.get("/api/eval")
         assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
 
+    @pytest.mark.anyio
+    async def test_worker_error_yields_json_error_response(
+        self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def failing_evaluate_readonly(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(eval_module, "_evaluate_readonly", failing_evaluate_readonly)
+        eval_module.clear_cache()
+
+        resp = await client.get("/api/eval")
+
+        assert resp.status_code == 500
+        assert resp.json() == {"error": "eval failed"}
+
 
 class TestGetProjectPaths:
     def test_empty_when_none_registered(self, db: DatabaseManager) -> None:

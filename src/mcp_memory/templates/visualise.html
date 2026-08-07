@@ -747,6 +747,17 @@ document.getElementById("results-list").onclick = (e) => {
   document.getElementById("results").classList.remove("open");
 };
 
+const pendingFetches = new Map();
+function dedupFetch(url, fetchImpl) {
+  // Collapse overlapping polls/expand-clicks for the same URL into the single in-flight
+  // request, so a slow endpoint doesn't accumulate redundant requests behind it.
+  const existing = pendingFetches.get(url);
+  if (existing) return existing;
+  const promise = fetchImpl().finally(() => pendingFetches.delete(url));
+  pendingFetches.set(url, promise);
+  return promise;
+}
+
 function formatDuration(seconds) {
   const s = Math.max(0, Math.round(seconds));
   if (s < 60) return `${s}s`;
@@ -839,7 +850,7 @@ function renderDream(d) {
 }
 
 async function fetchDream() {
-  try { renderDream(await (await fetch("/api/dream")).json()); }
+  try { renderDream(await (await dedupFetch("/api/dream", () => fetch("/api/dream"))).json()); }
   catch (e) { /* transient poll failure; retry next tick */ }
 }
 document.getElementById("dream-body").onclick = (e) => {
@@ -889,7 +900,7 @@ function renderRecall(d) {
 }
 
 async function fetchRecall() {
-  try { renderRecall(await (await fetch("/api/recall")).json()); }
+  try { renderRecall(await (await dedupFetch("/api/recall", () => fetch("/api/recall"))).json()); }
   catch (e) { /* transient poll failure; retry next tick */ }
 }
 fetchRecall();
@@ -938,8 +949,9 @@ function renderUsageTrend(d) {
 }
 
 async function fetchUsageTrend() {
-  try { renderUsageTrend(await (await fetch("/api/usage-trend")).json()); }
-  catch (e) { /* transient poll failure; retry next tick */ }
+  try {
+    renderUsageTrend(await (await dedupFetch("/api/usage-trend", () => fetch("/api/usage-trend"))).json());
+  } catch (e) { /* transient poll failure; retry next tick */ }
 }
 
 const EVAL_METRICS = [
@@ -969,7 +981,7 @@ function renderEval(d) {
 }
 
 async function fetchEval() {
-  try { renderEval(await (await fetch("/api/eval")).json()); }
+  try { renderEval(await (await dedupFetch("/api/eval", () => fetch("/api/eval"))).json()); }
   catch (e) { /* transient poll failure; retry next tick */ }
 }
 function wireCollapse(cardId, headId, fetchFn) {

@@ -9,18 +9,16 @@ rather than a guess, and gives phase D a regression gate it must not degrade.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import sqlite3
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from .config import get_eval_cache_ttl_seconds
-from .database import _parse_date
-
-if TYPE_CHECKING:
-    from .database import DatabaseManager
+from .database import DatabaseManager, _parse_date
 
 __all__ = ["time"]
 
@@ -207,6 +205,51 @@ def evaluate(
     )
 
 
+def _evaluate_readonly(
+    db_path: Path, k: int, since: str | None, min_content_tokens: int
+) -> EvalReport:
+    """Run ``evaluate()`` against a dedicated read-only connection to ``db_path``.
+
+    Intended to run off the event-loop thread (see ``evaluate_cached_async``): opens its
+    own connection rather than reusing the caller's, since sqlite connections are
+    thread-bound, and closes it before returning regardless of outcome.
+    """
+    readonly_db = DatabaseManager.connect_readonly(db_path)
+    try:
+        return evaluate(readonly_db, k=k, since=since, min_content_tokens=min_content_tokens)
+    finally:
+        readonly_db.close()
+
+
+_CacheKey = tuple[int, str | None, int]
+
+_locks: dict[_CacheKey, asyncio.Lock] = {}
+
+
+def _get_lock(key: _CacheKey) -> asyncio.Lock:
+    """Return the single-flight lock for ``key``, creating it if this is the first miss."""
+    lock = _locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _locks[key] = lock
+    return lock
+
+
+def _cache_get(key: _CacheKey) -> EvalReport | None:
+    """Return the cached report for ``key`` if present and within TTL, else None."""
+    cached = _cache.get(key)
+    if cached is None:
+        return None
+    report, cached_at = cached
+    if time.monotonic() - cached_at < get_eval_cache_ttl_seconds():
+        return report
+    return None
+
+
+def _cache_put(key: _CacheKey, report: EvalReport) -> None:
+    _cache[key] = (report, time.monotonic())
+
+
 def evaluate_cached(
     db: DatabaseManager, k: int = 10, since: str | None = None, min_content_tokens: int = 0
 ) -> EvalReport:
@@ -218,17 +261,38 @@ def evaluate_cached(
     recomputes and refreshes the entry.
     """
     key = (k, since, min_content_tokens)
-    now = time.monotonic()
-    cached = _cache.get(key)
+    cached = _cache_get(key)
     if cached is not None:
-        report, cached_at = cached
-        if now - cached_at < get_eval_cache_ttl_seconds():
-            return report
+        return cached
     report = evaluate(db, k=k, since=since, min_content_tokens=min_content_tokens)
-    _cache[key] = (report, now)
+    _cache_put(key, report)
     return report
 
 
+async def evaluate_cached_async(
+    db: DatabaseManager, k: int = 10, since: str | None = None, min_content_tokens: int = 0
+) -> EvalReport:
+    """Async counterpart to ``evaluate_cached`` that offloads a cache miss to a thread.
+
+    Runs ``evaluate()`` via ``asyncio.to_thread`` against a dedicated read-only connection
+    (see ``_evaluate_readonly``) rather than blocking the event loop. Concurrent misses for
+    the same key single-flight through a per-key ``asyncio.Lock``: only the first waiter
+    computes, the rest see the freshly-populated cache once the lock releases.
+    """
+    key = (k, since, min_content_tokens)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    async with _get_lock(key):
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached
+        report = await asyncio.to_thread(_evaluate_readonly, db.path, k, since, min_content_tokens)
+        _cache_put(key, report)
+        return report
+
+
 def clear_cache() -> None:
-    """Reset the eval-report cache (for test isolation)."""
+    """Reset the eval-report cache and single-flight locks (for test isolation)."""
     _cache.clear()
+    _locks.clear()

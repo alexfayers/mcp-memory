@@ -7,7 +7,9 @@ than guesswork. Coupled to no live state: every entity, age, and vote is set exp
 
 from __future__ import annotations
 
+import asyncio
 import math
+import sqlite3
 from typing import TYPE_CHECKING
 
 import pytest
@@ -360,6 +362,83 @@ class TestEvaluateCached:
         assert calls == 2
 
 
+class TestEvaluateCachedAsync:
+    @pytest.mark.anyio
+    async def test_cache_hit_does_not_recompute(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ranking_eval.clear_cache()
+        calls = 0
+        real_evaluate_readonly = ranking_eval._evaluate_readonly
+
+        def counting_evaluate_readonly(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
+            nonlocal calls
+            calls += 1
+            return real_evaluate_readonly(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(ranking_eval, "_evaluate_readonly", counting_evaluate_readonly)
+
+        await ranking_eval.evaluate_cached_async(db, k=5)
+        await ranking_eval.evaluate_cached_async(db, k=5)
+
+        assert calls == 1
+
+    @pytest.mark.anyio
+    async def test_concurrent_misses_single_flight(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ranking_eval.clear_cache()
+        calls = 0
+        real_evaluate_readonly = ranking_eval._evaluate_readonly
+
+        def counting_evaluate_readonly(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
+            nonlocal calls
+            calls += 1
+            return real_evaluate_readonly(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(ranking_eval, "_evaluate_readonly", counting_evaluate_readonly)
+
+        results = await asyncio.gather(
+            ranking_eval.evaluate_cached_async(db, k=5),
+            ranking_eval.evaluate_cached_async(db, k=5),
+            ranking_eval.evaluate_cached_async(db, k=5),
+        )
+
+        assert calls == 1
+        assert results[0] == results[1] == results[2]
+
+    @pytest.mark.anyio
+    async def test_ttl_expiry_recomputes(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ranking_eval.clear_cache()
+        calls = 0
+        real_evaluate_readonly = ranking_eval._evaluate_readonly
+
+        def counting_evaluate_readonly(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
+            nonlocal calls
+            calls += 1
+            return real_evaluate_readonly(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(ranking_eval, "_evaluate_readonly", counting_evaluate_readonly)
+        monkeypatch.setattr(ranking_eval, "get_eval_cache_ttl_seconds", lambda: 60)
+
+        monkeypatch.setattr(ranking_eval.time, "monotonic", lambda: 1000.0)
+        await ranking_eval.evaluate_cached_async(db, k=5)
+        monkeypatch.setattr(ranking_eval.time, "monotonic", lambda: 1061.0)
+        await ranking_eval.evaluate_cached_async(db, k=5)
+
+        assert calls == 2
+
+    def test_clear_cache_resets_locks(self) -> None:
+        ranking_eval._get_lock((5, None, 0))
+        assert ranking_eval._locks
+
+        ranking_eval.clear_cache()
+
+        assert not ranking_eval._locks
+
+
 class TestBudgetingIsOrthogonalToRanking:
     """Permanent guard: observation budgeting must never change ranking or eval metrics.
 
@@ -532,3 +611,44 @@ class TestEvalCommand:
 
         out = capsys.readouterr().out
         assert "1 labelled queries (k=5, min_content_tokens=2)" in out
+
+
+class TestEvaluateReadonly:
+    def test_matches_evaluate_on_shared_connection(
+        self, db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
+        )
+        db.record_surfaced("search_nodes", "needle", "rid-1", [("proj", "task/a", 1)])
+        db._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
+        db._db.commit()
+
+        expected = ranking_eval.evaluate(db, k=5)
+
+        actual = ranking_eval._evaluate_readonly(db.path, 5, None, 0)
+
+        assert actual == expected
+
+    def test_closes_its_connection(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
+        )
+
+        opened: list[DatabaseManager] = []
+        real_connect_readonly = DatabaseManager.connect_readonly
+
+        def spying_connect_readonly(path: Path) -> DatabaseManager:
+            instance = real_connect_readonly(path)
+            opened.append(instance)
+            return instance
+
+        monkeypatch.setattr(DatabaseManager, "connect_readonly", spying_connect_readonly)
+
+        ranking_eval._evaluate_readonly(db.path, 5, None, 0)
+
+        assert len(opened) == 1
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[0]._db.execute("SELECT 1")

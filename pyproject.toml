@@ -62,6 +62,7 @@ ignore = [
 "tests/**" = ["ARG001", "ARG002", "PLR0917", "SLF001", "S108", "ASYNC109", "TC002"]
 "src/mcp_memory/migrations/schema.py" = ["E501"]
 "src/mcp_memory/visualise.py" = ["E501", "SLF001", "ARG001", "TC002", "C901", "PLR0915"]
+"src/mcp_memory/database.py" = ["SLF001"]
 "src/mcp_memory/eval.py" = ["SLF001"]
 "src/mcp_memory/audit.py" = ["SLF001"]
 "src/mcp_memory/metrics.py" = ["SLF001"]

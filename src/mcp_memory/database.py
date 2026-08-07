@@ -132,10 +132,10 @@ class DatabaseManager:
     """Manages all database operations for the MCP memory knowledge graph."""
 
     def __init__(self, db_path: str | Path) -> None:
-        path = Path(db_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = Path(db_path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
 
-        self._db = sqlite3.connect(str(path))
+        self._db = sqlite3.connect(str(self.path))
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
@@ -161,6 +161,24 @@ class DatabaseManager:
                 self.purge_soft_deleted(get_purge_grace_days())
         except sqlite3.OperationalError:
             pass
+
+    @classmethod
+    def connect_readonly(cls, db_path: str | Path) -> DatabaseManager:
+        """Open an existing DB read-only, skipping migrations and startup maintenance.
+
+        Safe to call from a non-main thread: the connection is opened with
+        ``check_same_thread=False`` and never writes, so it can run alongside the
+        main writable connection under WAL without contention. Intended for
+        off-thread reads (e.g. ``eval.evaluate()``) where re-running migrations or
+        holding a write-capable connection would be unnecessary and unsafe.
+        """
+        path = Path(db_path)
+        instance = cls.__new__(cls)
+        instance.path = path
+        instance._db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, check_same_thread=False)
+        instance._db.row_factory = sqlite3.Row
+        instance._db.execute("PRAGMA busy_timeout=5000")
+        return instance
 
     def _backfill_observation_hashes(self) -> None:
         """Populate content_hash for any observation missing one. No-op after the first run."""
@@ -447,11 +465,19 @@ class DatabaseManager:
             )
 
     def _get_or_create_project_id(self, project: str) -> int:
+        row = self._db.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
+        if row is not None:
+            return int(row["id"])
         self._db.execute("INSERT OR IGNORE INTO projects (name) VALUES (?)", (project,))
         row = self._db.execute("SELECT id FROM projects WHERE name = ?", (project,)).fetchone()
         return int(row["id"])
 
     def _get_or_create_entity_type_id(self, entity_type: str) -> int:
+        row = self._db.execute(
+            "SELECT id FROM entity_types WHERE name = ?", (entity_type,)
+        ).fetchone()
+        if row is not None:
+            return int(row["id"])
         self._db.execute("INSERT OR IGNORE INTO entity_types (name) VALUES (?)", (entity_type,))
         row = self._db.execute(
             "SELECT id FROM entity_types WHERE name = ?", (entity_type,)
@@ -459,6 +485,11 @@ class DatabaseManager:
         return int(row["id"])
 
     def _get_or_create_relation_type_id(self, relation_type: str) -> int:
+        row = self._db.execute(
+            "SELECT id FROM relation_types WHERE name = ?", (relation_type,)
+        ).fetchone()
+        if row is not None:
+            return int(row["id"])
         self._db.execute("INSERT OR IGNORE INTO relation_types (name) VALUES (?)", (relation_type,))
         row = self._db.execute(
             "SELECT id FROM relation_types WHERE name = ?", (relation_type,)

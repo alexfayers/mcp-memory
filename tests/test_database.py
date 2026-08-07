@@ -2509,3 +2509,44 @@ class TestGetEntityWithRelationsFilteredBudget:
         )
         assert obs_contents(result["entity"]) == ["aaa", "bbb", SENTINEL.format(n=1)]
         assert obs_contents(_related(result)) == ["xxx", "yyy", SENTINEL.format(n=1)]
+
+
+class TestConnectReadonly:
+    def test_stores_path_on_writable_instance(self, db: DatabaseManager, tmp_path: Path) -> None:
+        assert db.path == tmp_path / "test.db"
+
+    def test_reads_existing_data(self, db: DatabaseManager, tmp_path: Path) -> None:
+        db.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["keyword"]}]
+        )
+        db.close()
+
+        readonly = DatabaseManager.connect_readonly(tmp_path / "test.db")
+        try:
+            assert readonly.get_entity("proj", "task/a").name == "task/a"
+            assert readonly.search_nodes("proj", "keyword")["entities"][0].name == "task/a"
+        finally:
+            readonly.close()
+
+    def test_write_attempt_raises(self, db: DatabaseManager, tmp_path: Path) -> None:
+        db.close()
+
+        readonly = DatabaseManager.connect_readonly(tmp_path / "test.db")
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                readonly.create_entities(
+                    "proj", [{"name": "task/a", "entityType": "task", "observations": ["x"]}]
+                )
+        finally:
+            readonly.close()
+
+    def test_does_not_run_migrations_or_maintenance(
+        self, db: DatabaseManager, tmp_path: Path
+    ) -> None:
+        db.close()
+        mtime_before = (tmp_path / "test.db").stat().st_mtime_ns
+
+        readonly = DatabaseManager.connect_readonly(tmp_path / "test.db")
+        readonly.close()
+
+        assert (tmp_path / "test.db").stat().st_mtime_ns == mtime_before
