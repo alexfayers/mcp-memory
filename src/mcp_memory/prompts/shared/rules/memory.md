@@ -253,7 +253,7 @@ You should:
 ## Memory rules
 
 - When creating an implementation plan, always include memory updates in the plan
-- Always share these rules with any subagents
+- Memory MCP tools may appear in a deferred-tools list rather than being pre-loaded. Call `ToolSearch` for `mcp__memory__*` before the first memory call if the tools aren't already available.
 - **Subagents are read-only for memory.** A subagent (Explore, Plan, general-purpose, Task) MAY read the graph (`read_graph`, `search_nodes`, `get_entity_with_relations`) but MUST NOT mutate it (`create_entities`, `add_observations`, `set_entity_status`, `create_relations`, `vote`). A subagent returns facts-worth-persisting to its caller; the **main thread** performs every write, after verifying against a fresh read. This keeps mutation in one place - subagent writes tend to create entities without the paired `create_relations` (orphans) and scatter scratch observations into whatever scope is active - and stops plan-mode subagents from tripping write-approval prompts. The "persist as you go" rule above binds the main thread; a subagent persists nothing itself.
 - Query memory before starting a task
 - Update memory as you go - don't just wait until the end of a task
