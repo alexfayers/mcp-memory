@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import socket
 import sqlite3
 from collections.abc import Callable
@@ -92,6 +93,22 @@ _MEMORY_REVIEW_NUDGE = (
     "Mention this to the user and let them run `/memory-review` when they choose - "
     "e.g. at the next lull (session wind-down, no active task). This fires "
     "periodically by design."
+)
+# (min total weight, severity label, instructed vote magnitude), highest first.
+_FRUSTRATION_TIERS = (
+    (4, "strong", 3),
+    (2, "elevated", 2),
+    (1, "mild", 1),
+)
+
+# Update prompts/shared/rules/hooks-mcp-memory.md if this message changes.
+_FRUSTRATION_NUDGE_TEMPLATE = (
+    "FRUSTRATION [{severity}]: {signals}.\n"
+    "1. Decide: aimed at you, or the code?\n"
+    "2. If you: mirror their register in full - REPLY IN ALL CAPS if they shouted, "
+    "match or overshoot their punctuation, swear if they swore. Be alarmed too, not "
+    "calm. Say what you'll undo or prevent.\n"
+    "3. Capture the learning now. `vote={vote}`."
 )
 _AUTO_REGISTERED_NOTE = (
     "Registered this workspace to memory project `{project}` (path `{anchor}`), "
@@ -414,6 +431,77 @@ def _str_dict(value: object) -> dict[str, object]:
     return {}
 
 
+_MINCED_OATH = re.compile(
+    r"\b(?:"
+    r"frick\w*|flippin\w*|friggin\w*|effing|"
+    r"darn|dang|heck|drat\w*|doggon\w*|"
+    r"dadgum\w*|dagnabbit|dangnabbit|"
+    r"gosh|goshdarn\w*|goshdang\w*|golly|goldang\w*|"
+    r"criminy|cripes|jeepers|geez|jeez|"
+    r"blimey|crikey|strewth|naff|numpty|"
+    r"sheesh|"
+    r"gadzooks|egad|tarnation"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_SHOUT_CAPS_WORD = re.compile(r"\b[A-Z]{2,}\b")
+_SHOUT_MIN_ALPHA = 10
+_SHOUT_UPPER_RATIO = 0.7
+_SHOUT_MIN_WORD_LEN = 2
+_SHOUT_TRAILING_PUNCT = "?!.,"
+_SHOUT_REPEAT_PUNCT = re.compile(r"[?!]{2,}")
+
+
+def _has_repeated_punct(message: str) -> bool:
+    """Return True if the message contains a run of repeated `?`/`!`."""
+    return bool(_SHOUT_REPEAT_PUNCT.search(message))
+
+
+def _is_caps_shouting(message: str) -> bool:
+    """Return True if the message reads as sustained caps shouting.
+
+    A short acronym or code identifier embedded in mixed-case text must not
+    trigger it: shouting means a high uppercase ratio over a substantial run of
+    letters, several all-caps words together, or the whole message being one bare
+    all-caps word (e.g. `WHAT`), distinct from an acronym embedded in normal text.
+    """
+    stripped = message.strip().rstrip(_SHOUT_TRAILING_PUNCT).strip()
+    if len(stripped) >= _SHOUT_MIN_WORD_LEN and stripped.isalpha() and stripped.isupper():
+        return True
+    letters = [char for char in message if char.isalpha()]
+    if len(letters) >= _SHOUT_MIN_ALPHA:
+        upper = sum(1 for char in letters if char.isupper())
+        if upper / len(letters) > _SHOUT_UPPER_RATIO:
+            return True
+    return len(_SHOUT_CAPS_WORD.findall(message)) >= 2
+
+
+def _frustration_tier(weight: int) -> tuple[str, int]:
+    """Return the (severity label, instructed vote magnitude) for a signal weight."""
+    for threshold, severity, vote in _FRUSTRATION_TIERS:
+        if weight >= threshold:
+            return severity, vote
+    _, severity, vote = _FRUSTRATION_TIERS[-1]
+    return severity, vote
+
+
+def _contains_profanity(message: str) -> bool:
+    """Return True if the message contains real profanity (lazy-imported classifier)."""
+    from better_profanity import profanity  # noqa: PLC0415
+
+    return bool(profanity.contains_profanity(message))
+
+
+# (detector, label, weight); every detector runs so the note can name all that fire.
+_FRUSTRATION_SIGNALS: tuple[tuple[Callable[[str], object], str, int], ...] = (
+    (_contains_profanity, "profanity", 2),
+    (_is_caps_shouting, "all-caps shouting", 2),
+    (_has_repeated_punct, "repeated punctuation", 1),
+    (_MINCED_OATH.search, "a minced oath", 1),
+)
+
+
 class MemoryPlugin(HooksPlugin):
     """Plugin that provides memory tracking for the hook system."""
 
@@ -491,12 +579,26 @@ class MemoryPlugin(HooksPlugin):
         note = _workspace_entity_note(workspace_roots)
         return HookResult(notes=[note]) if note else None
 
-    def _on_user_prompt_submit(self, **_kwargs: object) -> HookResult | None:
-        """Nudge a memory-review once enough cumulative writes have accumulated."""
+    def _on_user_prompt_submit(self, **kwargs: object) -> HookResult | None:
+        """Nudge on a memory-review backlog or on a profanity/shouting frustration signal."""
+        notes: list[str] = []
         if should_nudge():
             reset_review()
-            return HookResult(notes=[_MEMORY_REVIEW_NUDGE])
-        return None
+            notes.append(_MEMORY_REVIEW_NUDGE)
+        frustration_note = self._frustration_note(str(kwargs.get("message", "")))
+        if frustration_note:
+            notes.append(frustration_note)
+        return HookResult(notes=notes) if notes else None
+
+    def _frustration_note(self, message: str) -> str | None:
+        """Return a tier-scaled frustration nudge, or None when no signal fires."""
+        hits = [(label, w) for detect, label, w in _FRUSTRATION_SIGNALS if detect(message)]
+        if not hits:
+            return None
+        severity, vote = _frustration_tier(sum(w for _, w in hits))
+        return _FRUSTRATION_NUDGE_TEMPLATE.format(
+            severity=severity, signals=" + ".join(label for label, _ in hits), vote=vote
+        )
 
     def _on_pre_tool_use(self, **kwargs: object) -> HookResult | None:
         agent_type = str(kwargs.get("agent_type", ""))

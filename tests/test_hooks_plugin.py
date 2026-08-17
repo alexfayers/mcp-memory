@@ -15,9 +15,13 @@ from mcp_memory.config import get_db_path
 from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.plugin import (
     _EDIT_TOOL_WEIGHT,
+    _FRUSTRATION_NUDGE_TEMPLATE,
     MemoryPlugin,
     _build_task_start_context,
     _find_project_from_path,
+    _frustration_tier,
+    _has_repeated_punct,
+    _is_caps_shouting,
     _is_file_edit,
     _is_memory_read,
     _is_memory_server_reachable,
@@ -45,6 +49,8 @@ _EDIT_TOOL_NAMES = [
     "replace_in_file",
     "write_to_file",
 ]
+
+_FRUSTRATION_MARKER = _FRUSTRATION_NUDGE_TEMPLATE.split(" [", 1)[0]
 
 
 class TestFindProjectFromPath:
@@ -1180,6 +1186,259 @@ class TestMemoryReviewNudge:
             result = plugin.on_hook("UserPromptSubmit", task_id="t1")
         assert result is None
         mock_reset.assert_not_called()
+
+
+class TestProfanityNudge:
+    def _note(self, message: str, verdict: bool, monkeypatch: pytest.MonkeyPatch) -> str:
+        """Fire the nudge with a mocked profanity verdict and return the frustration note."""
+        monkeypatch.setattr(
+            "better_profanity.profanity.contains_profanity", lambda _message: verdict
+        )
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            plugin = MemoryPlugin()
+            result = plugin.on_hook("UserPromptSubmit", task_id="t1", message=message)
+        assert result is not None
+        return next(note for note in result.notes if _FRUSTRATION_MARKER in note)
+
+    def test_fires_when_profanity_detected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        note = self._note("this is broken", True, monkeypatch)
+        assert "[elevated]" in note
+        assert "vote=2" in note
+        assert "profanity" in note
+
+    def test_fires_every_time_with_no_debounce(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: True)
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            plugin = MemoryPlugin()
+            first = plugin.on_hook("UserPromptSubmit", task_id="t1", message="forget this")
+            second = plugin.on_hook("UserPromptSubmit", task_id="t1", message="forget this")
+        assert first is not None
+        assert any(_FRUSTRATION_MARKER in note for note in first.notes)
+        assert second is not None
+        assert any(_FRUSTRATION_MARKER in note for note in second.notes)
+
+    def test_absent_when_negative_and_not_shouting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: False)
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            plugin = MemoryPlugin()
+            result = plugin.on_hook(
+                "UserPromptSubmit", task_id="t1", message="can you check the parser"
+            )
+        assert result is None
+
+    def test_fires_on_repeated_punct_when_negative_and_not_shouting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        note = self._note("really???", False, monkeypatch)
+        assert "[mild]" in note
+        assert "vote=1" in note
+        assert "repeated punctuation" in note
+
+    def test_repeated_punct_false_positive_does_not_fire_nudge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: False)
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            plugin = MemoryPlugin()
+            result = plugin.on_hook(
+                "UserPromptSubmit", task_id="t1", message="self.config.value.thing"
+            )
+        assert result is None
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "oh for fricks sake",
+            "this is fricking broken",
+            "what the frick",
+            "stop being so darn useless",
+            "that's flipping wrong again",
+            "sheesh",
+            "what in tarnation",
+            "oh gosh",
+            "gadzooks",
+            "geez",
+            "oh jeez",
+        ],
+    )
+    def test_fires_on_minced_oath_when_negative_and_not_shouting(
+        self, message: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        note = self._note(message, False, monkeypatch)
+        assert "[mild]" in note
+        assert "vote=1" in note
+        assert "a minced oath" in note
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "can you check the parser",
+            "the sparse matrix is fine",
+            "add sodium to the fixture",
+            "there is a danger here",
+            "checking the darning logic",
+            "the heckler tests are flaky",
+            "use a goshawk image",
+            "that geezer wrote the original parser",
+            "freaking out about the parser",
+        ],
+    )
+    def test_word_boundaries_do_not_false_trigger(
+        self, message: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: False)
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            plugin = MemoryPlugin()
+            result = plugin.on_hook("UserPromptSubmit", task_id="t1", message=message)
+        assert result is None
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "can you check the parser",
+            "the sparse matrix is fine",
+            "add sodium to the fixture",
+            "this legacy code is horrible",
+            "the tests failed badly",
+            "this class needs a method",
+        ],
+    )
+    def test_real_classifier_no_false_positive(self, message: str) -> None:
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            plugin = MemoryPlugin()
+            result = plugin.on_hook("UserPromptSubmit", task_id="t1", message=message)
+        assert result is None
+
+    def test_minced_oath_alone_is_mild(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        note = self._note("geez", False, monkeypatch)
+        assert "[mild]" in note
+        assert "vote=1" in note
+        assert "a minced oath" in note
+
+    def test_caps_shouting_alone_is_elevated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        note = self._note("WHY IS THIS STILL BROKEN", False, monkeypatch)
+        assert "[elevated]" in note
+        assert "vote=2" in note
+        assert "all-caps shouting" in note
+
+    def test_caps_plus_punct_is_elevated_and_names_both(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        note = self._note("WHY IS THIS BROKEN!!!", False, monkeypatch)
+        assert "[elevated]" in note
+        assert "vote=2" in note
+        assert "all-caps shouting" in note
+        assert "repeated punctuation" in note
+
+    def test_minced_plus_punct_is_elevated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        note = self._note("geez really???", False, monkeypatch)
+        assert "[elevated]" in note
+        assert "vote=2" in note
+
+    def test_profanity_plus_caps_is_strong(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        note = self._note("WHY IS THIS BROKEN", True, monkeypatch)
+        assert "[strong]" in note
+        assert "vote=3" in note
+
+    def test_all_three_signals_is_strong_and_names_all(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        note = self._note("WHY IS THIS BROKEN!!!", True, monkeypatch)
+        assert "[strong]" in note
+        assert "vote=3" in note
+        assert "profanity" in note
+        assert "all-caps shouting" in note
+        assert "repeated punctuation" in note
+
+    def test_two_mild_signals_do_not_reach_strong(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        note = self._note("geez really???", False, monkeypatch)
+        assert "[strong]" not in note
+
+    def test_lone_minced_oath_does_not_reach_elevated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        note = self._note("geez", False, monkeypatch)
+        assert "[mild]" in note
+        assert "[elevated]" not in note
+
+    def test_tier_fires_every_time_with_no_debounce(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: True)
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            plugin = MemoryPlugin()
+            first = plugin.on_hook("UserPromptSubmit", task_id="t1", message="WHY IS THIS BROKEN")
+            second = plugin.on_hook("UserPromptSubmit", task_id="t1", message="WHY IS THIS BROKEN")
+        assert first is not None
+        assert any("[strong]" in note for note in first.notes)
+        assert second is not None
+        assert any("[strong]" in note for note in second.notes)
+
+
+class TestHasRepeatedPunct:
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "really???",
+            "what?!",
+            "wow!!",
+            "this is broken again!!!",
+            "seriously!?",
+            "what?!?!",
+            "why!!!",
+        ],
+    )
+    def test_true_for_repeated_runs(self, message: str) -> None:
+        assert _has_repeated_punct(message)
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "wow!",
+            "does this work?",
+            "self.config.value.thing",
+            "add a, b, c, and d",
+            "hmm... let me think",
+        ],
+    )
+    def test_false_otherwise(self, message: str) -> None:
+        assert not _has_repeated_punct(message)
+
+
+class TestIsCapsShouting:
+    @pytest.mark.parametrize("message", ["WHY IS THIS STILL BROKEN", "WHAT", "API", "WHAT?!"])
+    def test_true_for_sustained_caps(self, message: str) -> None:
+        assert _is_caps_shouting(message)
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "call the API please",
+            "does the SQL query work",
+            "really???",
+            "Can you take a look at the parser please",
+            "upgrade to 1.2.3 please",
+            "check /usr/local/lib/python3.12/site-packages",
+            "does the JSON parser handle this",
+            "I",
+            "A",
+        ],
+    )
+    def test_false_otherwise(self, message: str) -> None:
+        assert not _is_caps_shouting(message)
+
+
+class TestFrustrationTier:
+    @pytest.mark.parametrize(
+        ("weight", "expected"),
+        [
+            (1, ("mild", 1)),
+            (2, ("elevated", 2)),
+            (3, ("elevated", 2)),
+            (4, ("strong", 3)),
+            (5, ("strong", 3)),
+        ],
+    )
+    def test_tier_for_weight(self, weight: int, expected: tuple[str, int]) -> None:
+        assert _frustration_tier(weight) == expected
 
 
 class TestMemoryReadsDoNotIncrement:

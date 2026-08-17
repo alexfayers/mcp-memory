@@ -13,7 +13,7 @@ VALID_STATUSES = get_args(EntityStatus)
 # Entity types exempt from autonomous orphan GC.
 STRUCTURAL_ENTITY_TYPES = frozenset({"project", "user-preferences"})
 
-VALID_VOTES = (1, -1)
+MAX_VOTE_MAGNITUDE = 3
 
 VALID_RELATION_TYPES = (
     "implements",

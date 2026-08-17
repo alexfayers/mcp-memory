@@ -194,7 +194,9 @@ async def _parse_vote_body(
     """Validate a vote request body shared by /api/vote and /api/vote-observation.
 
     Returns ``(project, name, vote, observation_hash)`` on success (observation_hash is None
-    unless required), or a 400 JSONResponse mirroring the entity-vote validation ladder.
+    unless required), or a 400 JSONResponse. This HTTP API intentionally restricts votes to
+    +1/-1, matching the visualizer UI's only-+1/-1 buttons, even though the underlying DB and
+    MCP ``vote`` tool now accept the wider -3..3 magnitude range.
     """
     try:
         body = await request.json()

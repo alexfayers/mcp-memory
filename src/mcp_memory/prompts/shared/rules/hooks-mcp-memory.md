@@ -11,5 +11,6 @@ This package's cline-hooks plugin is `MemoryPlugin`. Its lifecycle-hook context 
 - `AttemptCompletion` - a "REQUIRED before completing: 1. Update `memory`..." reminder.
 - `PreCompact` - "Save any important context, decisions, or progress to memory NOW before it's lost."
 - `UserPromptSubmit` - occasionally "MEMORY REVIEW DUE: many memory writes have accumulated..." suggesting you let the user run `/memory-review`.
+- `UserPromptSubmit` - every time it fires (no suppression), a "FRUSTRATION [severity]: ..." note when the message shows frustration signals (shouting, repeated `?`/`!`, a minced oath, or profanity); severity and the instructed `vote` scale with how many co-occur. It asks you to judge whether the frustration is aimed at you and, if so, to mirror the user's register and capture the learning as a voted memory observation.
 
 For the rules on how to respond to these, see `memory.md` in this same directory.

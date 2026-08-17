@@ -16,7 +16,7 @@ from mcp_memory.database import (
     _parse_date,
 )
 from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
-from mcp_memory.models import Entity, Observation, Relation
+from mcp_memory.models import MAX_VOTE_MAGNITUDE, Entity, Observation, Relation
 from mcp_memory.path_resolver import normalize_path
 from tests import obs_contents, obs_votes
 
@@ -2101,6 +2101,11 @@ class TestVoteEntity:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         assert db.vote_entity("proj", "e1", -1) == -1
 
+    @pytest.mark.parametrize("vote", [MAX_VOTE_MAGNITUDE, -MAX_VOTE_MAGNITUDE])
+    def test_vote_within_magnitude_range_succeeds(self, db: DatabaseManager, vote: int) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        assert db.vote_entity("proj", "e1", vote) == vote
+
     def test_votes_accumulate(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         db.vote_entity("proj", "e1", 1)
@@ -2108,7 +2113,7 @@ class TestVoteEntity:
         db.vote_entity("proj", "e1", -1)
         assert db.get_entity("proj", "e1").vote_score == 1
 
-    @pytest.mark.parametrize("vote", [0, 2, -3])
+    @pytest.mark.parametrize("vote", [0, MAX_VOTE_MAGNITUDE + 1, -(MAX_VOTE_MAGNITUDE + 1)])
     def test_invalid_vote_raises(self, db: DatabaseManager, vote: int) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         with pytest.raises(ValueError, match="Invalid vote"):
@@ -2146,6 +2151,11 @@ class TestVoteObservation:
         assert db.vote_observation("proj", "e1", 1, content_hash=content_hash) == 1
         assert db.get_entity("proj", "e1").observations[0].vote_score == 1
 
+    @pytest.mark.parametrize("vote", [MAX_VOTE_MAGNITUDE, -MAX_VOTE_MAGNITUDE])
+    def test_vote_within_magnitude_range_succeeds(self, db: DatabaseManager, vote: int) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        assert db.vote_observation("proj", "e1", vote, content="x") == vote
+
     def test_requires_exactly_one_addressing(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         with pytest.raises(ValueError, match="exactly one"):
@@ -2153,7 +2163,7 @@ class TestVoteObservation:
         with pytest.raises(ValueError, match="exactly one"):
             db.vote_observation("proj", "e1", 1, content="x", content_hash=_hash_observation("x"))
 
-    @pytest.mark.parametrize("vote", [0, 2, -3])
+    @pytest.mark.parametrize("vote", [0, MAX_VOTE_MAGNITUDE + 1, -(MAX_VOTE_MAGNITUDE + 1)])
     def test_invalid_vote_raises(self, db: DatabaseManager, vote: int) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         with pytest.raises(ValueError, match="Invalid vote"):

@@ -166,15 +166,16 @@ SET_ENTITY_STATUS_DESC = (
     "Valid statuses: planned, in-progress, blocked, resolved, archived. Use null to clear."
 )
 VOTE_DESC = (
-    "Record a +1 or -1 usefulness vote as you retrieve a memory: +1 for one that proved useful, "
-    "-1 for one that was stale or unhelpful. Omit both observation and observationHash to vote on "
-    "the whole entity named by name. Supply exactly one of observation (exact content) or "
-    "observationHash (the content_hash from read output - preferred, saves tokens) to vote on "
-    "that single observation of the entity instead. Votes nudge ranking (useful memories surface "
-    "higher, unhelpful ones sink but remain findable) and do not change content or updated_at. "
-    "An entity vote is a light alternative to delete_entity; an observation vote is a light "
-    "alternative to delete_observations - neither is wrong enough to remove outright. vote must "
-    "be 1 or -1; returns the new net vote_score."
+    "Record a usefulness vote as you retrieve a memory: a positive vote for one that proved "
+    "useful, a negative vote for one that was stale or unhelpful. The vote's magnitude sets its "
+    "strength, so cast a stronger vote in one call instead of looping. Omit both observation and "
+    "observationHash to vote on the whole entity named by name. Supply exactly one of observation "
+    "(exact content) or observationHash (the content_hash from read output - preferred, saves "
+    "tokens) to vote on that single observation of the entity instead. Votes nudge ranking (useful "
+    "memories surface higher, unhelpful ones sink but remain findable) and do not change content "
+    "or updated_at. An entity vote is a light alternative to delete_entity; an observation vote is "
+    "a light alternative to delete_observations - neither is wrong enough to remove outright. vote "
+    "must be a nonzero integer from -3 to 3; returns the new net vote_score."
 )
 GET_PROJECT_FOR_PATH_DESC = (
     "Return the project whose registered path contains the given filesystem path, "
@@ -879,7 +880,7 @@ def vote(
     observation: str | None = None,
     observationHash: str | None = None,
 ) -> dict[str, object]:
-    """Apply a +1/-1 usefulness vote to an entity or one of its observations."""
+    """Apply a usefulness vote to an entity or one of its observations."""
     try:
         db = _get_db()
         if observation is None and observationHash is None:

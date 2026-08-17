@@ -22,10 +22,10 @@ from .config import (
 )
 from .migrations.runner import run_migrations
 from .models import (
+    MAX_VOTE_MAGNITUDE,
     STRUCTURAL_ENTITY_TYPES,
     VALID_RELATION_TYPES,
     VALID_STATUSES,
-    VALID_VOTES,
     Entity,
     EntityStatus,
     Observation,
@@ -126,6 +126,15 @@ def _budget_observations(observations: list[Observation], max_chars: int) -> lis
             )
         )
     return kept
+
+
+def _validate_vote(vote: int) -> None:
+    """Raise ValueError unless vote is a nonzero integer within MAX_VOTE_MAGNITUDE."""
+    if vote == 0 or abs(vote) > MAX_VOTE_MAGNITUDE:
+        raise ValueError(
+            f"Invalid vote '{vote}'. Must be a nonzero integer "
+            f"from -{MAX_VOTE_MAGNITUDE} to {MAX_VOTE_MAGNITUDE}"
+        )
 
 
 class DatabaseManager:
@@ -813,13 +822,13 @@ class DatabaseManager:
         return int(row["n"])
 
     def vote_entity(self, project: str, name: str, vote: int) -> int:
-        """Apply a +1/-1 usefulness vote to an entity and return its new net score.
+        """Apply a usefulness vote to an entity and return its new net score.
 
-        Deliberately updates only vote_score, leaving updated_at untouched, so a vote
-        (a relevance signal) is not mistaken for a content change by recency ranking.
+        Any nonzero integer up to MAX_VOTE_MAGNITUDE in magnitude sets the vote's strength.
+        Deliberately updates only vote_score, leaving updated_at untouched, so a vote (a
+        relevance signal) is not mistaken for a content change by recency ranking.
         """
-        if vote not in VALID_VOTES:
-            raise ValueError(f"Invalid vote '{vote}'. Must be one of: {VALID_VOTES}")
+        _validate_vote(vote)
 
         project_id = self._get_or_create_project_id(project)
         entity_id = self._get_entity_id(name, project_id)
@@ -844,15 +853,15 @@ class DatabaseManager:
         content: str | None = None,
         content_hash: str | None = None,
     ) -> int:
-        """Apply a +1/-1 usefulness vote to a single observation and return its new score.
+        """Apply a usefulness vote to a single observation and return its new score.
 
+        Any nonzero integer up to MAX_VOTE_MAGNITUDE in magnitude sets the vote's strength.
         The observation is addressed by content_hash (cheap) or exact content within its
         entity; exactly one must be given. Neither is DB-unique, so identical observations
         all receive the vote and share the returned score. Like vote_entity, this leaves
         updated_at untouched, so a vote does not disturb recency ranking.
         """
-        if vote not in VALID_VOTES:
-            raise ValueError(f"Invalid vote '{vote}'. Must be one of: {VALID_VOTES}")
+        _validate_vote(vote)
         if (content is None) == (content_hash is None):
             raise ValueError("Provide exactly one of 'content' or 'content_hash'")
 
