@@ -274,6 +274,33 @@ Emit a JSON usage report of recorded tool calls. For each tool it reports the ca
 
 The byte sizes are a byte-count proxy for token cost, not a real tokenizer, so treat them as relative magnitudes rather than exact token counts.
 
+### `mcp-memory export`
+
+Export the entire memory database to a single JSON file:
+
+```bash
+mcp-memory export <output_path>
+```
+
+Every live project is written (soft-deleted entities and the ephemeral telemetry tables are excluded), preserving each entity's type, status, `created_at`/`updated_at`, and vote score, plus every observation's content hash, vote score, and `created_at`. Each project's registered paths and group memberships are included for reference.
+
+### `mcp-memory import`
+
+Merge selected projects from an export file into the local database:
+
+```bash
+# List the projects available in the file without importing anything
+mcp-memory import <input_path>
+
+# Import one or more of them
+mcp-memory import <input_path> --project name1,name2
+
+# Preview the changes without writing
+mcp-memory import <input_path> --project name1 --dry-run
+```
+
+The merge is additive and safe to re-run: new entities are inserted verbatim, an existing same-type entity keeps its own status and timestamps but takes the higher vote score and gains any missing observations, and a name that collides with a different entity type is skipped and reported. Relations and group memberships are deduplicated. Registered paths are never written locally - the summary instead prints the source path(s) so you can register the correct local one with `set_metadata`.
+
 ## Development
 
 ```bash

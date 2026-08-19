@@ -359,6 +359,50 @@ def _cmd_metrics(args: argparse.Namespace) -> None:
     print(json.dumps(asdict(report), indent=2))
 
 
+def _cmd_export(args: argparse.Namespace) -> None:
+    """Export the entire memory database to a JSON file."""
+    from .database import DatabaseManager
+    from .export_import import export_database
+
+    output_path = Path(args.output_path).expanduser()
+    db = DatabaseManager(get_db_path())
+    try:
+        export_database(db, output_path)
+    finally:
+        db.close()
+    print(f"Exported database to {output_path}")
+
+
+def _cmd_import(args: argparse.Namespace) -> None:
+    """Merge selected projects from a JSON export into the local database."""
+    from .database import DatabaseManager
+    from .export_import import import_projects, list_export_projects, load_export
+
+    try:
+        data = load_export(Path(args.input_path).expanduser())
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.project:
+        print("Projects available in export file:")
+        for name in list_export_projects(data):
+            print(f"  {name}")
+        print("Re-run with --project name1,name2 to import (nothing was imported).")
+        return
+
+    names = [name.strip() for name in args.project.split(",") if name.strip()]
+    db = DatabaseManager(get_db_path())
+    try:
+        summary = import_projects(db, data, names, dry_run=args.dry_run)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        db.close()
+    print(summary.render())
+
+
 def _cmd_install_kiro(args: argparse.Namespace) -> None:
     """Patch Kiro agent config with memory MCP server and allowedTools."""
     port = args.port
@@ -631,6 +675,20 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    export_cmd = sub.add_parser("export", help="Export the entire memory database to a JSON file")
+    export_cmd.add_argument("output_path")
+
+    import_cmd = sub.add_parser(
+        "import", help="Merge selected projects from a JSON export into the local database"
+    )
+    import_cmd.add_argument("input_path")
+    import_cmd.add_argument(
+        "--project",
+        default=None,
+        help="Comma-separated project names to import (omit to list available projects)",
+    )
+    import_cmd.add_argument("--dry-run", action="store_true")
+
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument(
         "target", choices=["kiro", "claude-code", "codex", "copilot"], help="Agent to install for."
@@ -687,6 +745,10 @@ def main() -> None:
         _cmd_eval(args)
     elif args.command == "metrics":
         _cmd_metrics(args)
+    elif args.command == "export":
+        _cmd_export(args)
+    elif args.command == "import":
+        _cmd_import(args)
     elif args.command == "install":
         _cmd_install(args, parser)
     else:

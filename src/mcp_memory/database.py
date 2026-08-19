@@ -7,9 +7,10 @@ import json
 import math
 import re
 import sqlite3
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Any, TypedDict, cast
 
 from .config import (
     get_call_metrics_retention_days,
@@ -44,6 +45,17 @@ class GraphResult(TypedDict):
 class NodeList(TypedDict):
     entities: list[Entity]
     relations: list[Relation]
+
+
+class ImportCounts(TypedDict):
+    entities_new: int
+    entities_merged: int
+    entities_skipped_type_mismatch: list[str]
+    observations_new: int
+    observations_duplicate: int
+    relations_new: int
+    relations_duplicate: int
+    groups_added: int
 
 
 _RECENCY_HALF_LIFE_DAYS = 30.0
@@ -1542,6 +1554,265 @@ class DatabaseManager:
         relations = self._get_relations_for_entities(project_id, entity_ids)
 
         return {"entities": entities, "relations": relations}
+
+    def schema_version(self) -> int:
+        """Return the highest applied migration version."""
+        row = self._db.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
+        return int(row["v"])
+
+    def export_data(self) -> dict[str, object]:
+        """Return a live-only, all-projects snapshot: schema version plus per-project data.
+
+        Excludes soft-deleted entities and the ephemeral telemetry tables. Relations are
+        intra-project only. Callers wrap this in the export file envelope.
+        """
+        projects: dict[str, object] = {}
+        for project in self.list_projects():
+            project_id = self._get_or_create_project_id(project)
+            rows = self._db.execute(
+                "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, "
+                "e.updated_at, e.vote_score FROM entities e "
+                "JOIN entity_types et ON e.entity_type_id = et.id "
+                "WHERE e.project_id = ? AND e.deleted_at IS NULL ORDER BY e.id",
+                (project_id,),
+            ).fetchall()
+            entities: list[dict[str, object]] = []
+            entity_ids: list[int] = []
+            for row in rows:
+                entity_ids.append(int(row["id"]))
+                entities.append(
+                    {
+                        "name": row["name"],
+                        "entity_type": row["entity_type"],
+                        "observations": self._export_observations(int(row["id"])),
+                        "status": row["status"],
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                        "project_name": project,
+                        "vote_score": int(row["vote_score"]),
+                    }
+                )
+            relations = self._get_relations_for_entities(project_id, entity_ids)
+            projects[project] = {
+                "paths": self.get_paths_for_project(project),
+                "groups": [group for _, group in self.list_project_groups(project)],
+                "entities": entities,
+                "relations": [asdict(relation) for relation in relations],
+            }
+        return {"schema_version": self.schema_version(), "projects": projects}
+
+    def _export_observations(self, entity_id: int) -> list[dict[str, object]]:
+        """Return an entity's observations as export dicts, best-first, preserving created_at."""
+        rows = self._db.execute(
+            "SELECT content, content_hash, vote_score, created_at FROM observations "
+            "WHERE entity_id = ? ORDER BY vote_score DESC, id",
+            (entity_id,),
+        ).fetchall()
+        return [
+            {
+                "content": row["content"],
+                "content_hash": row["content_hash"],
+                "vote_score": int(row["vote_score"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def import_project_data(
+        self,
+        project: str,
+        entities: list[dict[str, Any]],
+        relations: list[Relation],
+        groups: list[str],
+        *,
+        dry_run: bool = False,
+    ) -> ImportCounts:
+        """Merge one project's exported entities, relations and groups into this database.
+
+        Additive and merge-safe: new entities are inserted verbatim (preserving
+        created_at/updated_at/status/vote_score and each observation's created_at), existing
+        same-type entities gain the higher vote_score and any missing observations, and
+        different-type collisions are skipped. Relations and groups are deduped. With dry_run,
+        every write is rolled back so the returned counts match a real run without changing
+        the database. Entities are raw export dicts, mirroring create_entities' dict contract.
+        """
+        counts: ImportCounts = {
+            "entities_new": 0,
+            "entities_merged": 0,
+            "entities_skipped_type_mismatch": [],
+            "observations_new": 0,
+            "observations_duplicate": 0,
+            "relations_new": 0,
+            "relations_duplicate": 0,
+            "groups_added": 0,
+        }
+        try:
+            project_id = self._get_or_create_project_id(project)
+            for entity in entities:
+                classification, entity_id, restore_updated_at = self._import_entity(
+                    project, project_id, entity
+                )
+                if classification == "skipped" or entity_id is None:
+                    counts["entities_skipped_type_mismatch"].append(entity["name"])
+                    continue
+                if classification == "new":
+                    counts["entities_new"] += 1
+                else:
+                    counts["entities_merged"] += 1
+                new_obs, dup_obs = self._import_observations(
+                    entity_id, entity.get("observations", [])
+                )
+                counts["observations_new"] += new_obs
+                counts["observations_duplicate"] += dup_obs
+                if restore_updated_at is not None:
+                    self._db.execute(
+                        "UPDATE entities SET updated_at = ? WHERE id = ?",
+                        (restore_updated_at, entity_id),
+                    )
+            new_rel, dup_rel = self._import_relations(project_id, relations)
+            counts["relations_new"] = new_rel
+            counts["relations_duplicate"] = dup_rel
+            counts["groups_added"] = self._import_groups(project_id, groups)
+            if dry_run:
+                self._db.rollback()
+            else:
+                self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        return counts
+
+    def _import_entity(
+        self, project: str, project_id: int, entity: dict[str, Any]
+    ) -> tuple[str, int | None, str | None]:
+        """Insert or merge one entity. Returns (classification, entity_id, updated_at_to_restore).
+
+        A new entity is inserted preserving its timestamps/status/vote_score. An existing
+        same-type entity keeps its own timestamps and status but takes the higher vote_score.
+        A different-type collision is left untouched and reported as skipped.
+        """
+        name = entity["name"]
+        entity_type = entity["entity_type"]
+        existing_id = self._get_entity_id(name, project_id)
+        if existing_id is None:
+            self._purge_tombstone(name, project, project_id)
+            entity_type_id = self._get_or_create_entity_type_id(entity_type)
+            cursor = self._db.execute(
+                "INSERT INTO entities "
+                "(name, entity_type_id, project_id, status, created_at, updated_at, vote_score) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    name,
+                    entity_type_id,
+                    project_id,
+                    entity.get("status"),
+                    entity.get("created_at"),
+                    entity.get("updated_at"),
+                    entity.get("vote_score", 0),
+                ),
+            )
+            return "new", cast("int", cursor.lastrowid), entity.get("updated_at")
+
+        if self._get_entity_type_name(existing_id) != entity_type:
+            return "skipped", None, None
+
+        existing_updated_at = self._db.execute(
+            "SELECT updated_at FROM entities WHERE id = ?", (existing_id,)
+        ).fetchone()["updated_at"]
+        self._db.execute(
+            "UPDATE entities SET vote_score = MAX(vote_score, ?) WHERE id = ?",
+            (entity.get("vote_score", 0), existing_id),
+        )
+        return "merged", existing_id, existing_updated_at
+
+    def _import_observations(
+        self, entity_id: int, observations: list[dict[str, Any]]
+    ) -> tuple[int, int]:
+        """Append observations, deduping by content_hash, preserving each observation's
+        created_at. Returns (new_count, duplicate_count).
+        """
+        existing = {
+            row["content_hash"]
+            for row in self._db.execute(
+                "SELECT content_hash FROM observations WHERE entity_id = ?", (entity_id,)
+            ).fetchall()
+        }
+        new_count = 0
+        duplicate_count = 0
+        for obs in observations:
+            content_hash = obs["content_hash"]
+            if content_hash in existing:
+                duplicate_count += 1
+                continue
+            existing.add(content_hash)
+            new_count += 1
+            created_at = obs.get("created_at")
+            if created_at is None:
+                self._db.execute(
+                    "INSERT INTO observations (entity_id, content, content_hash, vote_score) "
+                    "VALUES (?, ?, ?, ?)",
+                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0)),
+                )
+            else:
+                self._db.execute(
+                    "INSERT INTO observations "
+                    "(entity_id, content, content_hash, vote_score, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at),
+                )
+        return new_count, duplicate_count
+
+    def _import_relations(self, project_id: int, relations: list[Relation]) -> tuple[int, int]:
+        """Insert relations, ignoring duplicates. Returns (new_count, duplicate_count).
+
+        Relations whose endpoints are absent from the project (e.g. a skipped entity) are
+        silently ignored, so a partial import never raises on a dangling reference.
+        """
+        new_count = 0
+        duplicate_count = 0
+        for relation in relations:
+            source_id = self._get_entity_id(relation.source, project_id)
+            target_id = self._get_entity_id(relation.target, project_id)
+            if source_id is None or target_id is None:
+                continue
+            relation_type_id = self._get_or_create_relation_type_id(
+                normalize_relation_type(relation.relation_type)
+            )
+            exists = self._db.execute(
+                "SELECT 1 FROM relations "
+                "WHERE source_id = ? AND target_id = ? AND relation_type_id = ?",
+                (source_id, target_id, relation_type_id),
+            ).fetchone()
+            if exists:
+                duplicate_count += 1
+                continue
+            new_count += 1
+            self._db.execute(
+                "INSERT OR IGNORE INTO relations "
+                "(source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
+                (source_id, target_id, relation_type_id),
+            )
+        return new_count, duplicate_count
+
+    def _import_groups(self, project_id: int, groups: list[str]) -> int:
+        """Add group memberships that are not already present. Returns the number added."""
+        existing = {
+            row["group_name"]
+            for row in self._db.execute(
+                "SELECT group_name FROM project_groups WHERE project_id = ?", (project_id,)
+            ).fetchall()
+        }
+        added = 0
+        for group_name in groups:
+            if group_name in existing:
+                continue
+            existing.add(group_name)
+            added += 1
+            self._db.execute(
+                "INSERT OR IGNORE INTO project_groups (project_id, group_name) VALUES (?, ?)",
+                (project_id, group_name),
+            )
+        return added
 
     def close(self) -> None:
         """Close the database connection."""
