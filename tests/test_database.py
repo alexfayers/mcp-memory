@@ -2366,6 +2366,13 @@ def _fetch_entity_row(db: DatabaseManager, name: str) -> tuple[sqlite3.Row, int]
 
 
 class TestBuildEntityBudget:
+    def test_observation_created_at_is_returned(self, db: DatabaseManager) -> None:
+        db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["obs1"]}])
+
+        observation = db.get_entity("proj", "e1").observations[0]
+
+        assert observation.created_at is not None
+
     def test_default_budget_applied_via_none(self, db: DatabaseManager) -> None:
         db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2"]}]

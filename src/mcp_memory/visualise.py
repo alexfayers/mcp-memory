@@ -129,6 +129,7 @@ def get_all_graph_data(
                         "content": o.content,
                         "content_hash": o.content_hash,
                         "vote_score": o.vote_score,
+                        "created_at": o.created_at,
                     }
                     for o in scored
                 ],
@@ -174,7 +175,12 @@ def search_graph(
             "updated_at": entity.updated_at,
             "vote_score": entity.vote_score,
             "observations": [
-                {"content": o.content, "content_hash": o.content_hash, "vote_score": o.vote_score}
+                {
+                    "content": o.content,
+                    "content_hash": o.content_hash,
+                    "vote_score": o.vote_score,
+                    "created_at": o.created_at,
+                }
                 for o in entity.observations
             ],
         }
