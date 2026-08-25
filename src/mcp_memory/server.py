@@ -77,6 +77,7 @@ _MAX_OBSERVATION_CHARS_DOC = (
     "(e.g. -1) for full detail, 0 for just the single highest-voted observation, or a "
     "positive integer for a custom budget."
 )
+_RELATIONS_WIRE_DOC = ' Relations are returned as "source relation-type target" strings.'
 CREATE_ENTITIES_DESC = (
     "Create or update entities with observations in the knowledge graph. "
     "All data is scoped to the given project. "
@@ -107,11 +108,14 @@ SEARCH_NODES_DESC = (
     "vote, delete_observations, and merge_observations to address it without "
     "pasting its full content. Use compact=true to omit observations for a lightweight summary."
     + _MAX_OBSERVATION_CHARS_DOC
+    + _RELATIONS_WIRE_DOC
 )
 READ_GRAPH_DESC = (
     "Get the most recent entities and their relations for a project. "
     "Returns up to 10 recent entities ordered by creation time. "
-    "Use compact=true to omit observations for a lightweight summary." + _MAX_OBSERVATION_CHARS_DOC
+    "Use compact=true to omit observations for a lightweight summary."
+    + _MAX_OBSERVATION_CHARS_DOC
+    + _RELATIONS_WIRE_DOC
 )
 CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
@@ -129,7 +133,9 @@ RESTORE_ENTITY_DESC = (
 GET_ENTITY_WITH_RELATIONS_DESC = (
     "Get an entity along with all its relations and related entities within a project. "
     "Traverses the graph to discover linked context. "
-    "Optionally filter by entityType and/or relationType." + _MAX_OBSERVATION_CHARS_DOC
+    "Optionally filter by entityType and/or relationType."
+    + _MAX_OBSERVATION_CHARS_DOC
+    + _RELATIONS_WIRE_DOC
 )
 ADD_OBSERVATIONS_DESC = (
     "Append observations to an existing entity without overwriting. "
@@ -255,7 +261,9 @@ SEARCH_ALL_PROJECTS_DESC = (
     "(resolved server-side via get_group_members) - this replaces having to call "
     "get_group_members yourself and pass the resolved list. expand_groups=true requires "
     "projects to be set. "
-    "Use compact=true to omit observations for a lightweight summary." + _MAX_OBSERVATION_CHARS_DOC
+    "Use compact=true to omit observations for a lightweight summary."
+    + _MAX_OBSERVATION_CHARS_DOC
+    + _RELATIONS_WIRE_DOC
 )
 
 _db: DatabaseManager | None = None
@@ -294,14 +302,23 @@ register_visualise_routes(mcp, _get_db)
 # Transitional: surfaces legacy relation types that predate the canonical
 # vocabulary so the agent recreates them. Remove once all memory DBs conform
 # (tracked by task/remove-relation-type-warning).
-def _attach_relation_type_warnings(
+def _wire_relations(relations: list[Relation]) -> list[str]:
+    """Render relations as "source relation-type target" strings.
+
+    Repeating the source/target/relation_type keys per relation costs roughly a third of
+    a read response for no added meaning. No entity name or relation type contains a space.
+    """
+    return [f"{rel.source} {rel.relation_type} {rel.target}" for rel in relations]
+
+
+def _prepare_read_result(
     result: Mapping[str, object],
     relations: list[Relation] | None = None,
 ) -> dict[str, object]:
-    """Flag any relation types in a read result that fall outside the canonical vocabulary.
+    """Render a read result for the wire: encode its relations and flag legacy relation types.
 
     Args:
-        result: The read result to annotate.
+        result: The read result to prepare.
         relations: Relations to inspect when the result does not carry them at the top level.
     """
     output: dict[str, object] = dict(result)
@@ -309,6 +326,13 @@ def _attach_relation_type_warnings(
         return output
     if relations is None:
         relations = output.get("relations")  # type: ignore[assignment]
+    if isinstance(output.get("relations"), list):
+        output["relations"] = _wire_relations(output["relations"])  # type: ignore[arg-type]
+    groups = output.get("results")
+    if isinstance(groups, dict):
+        for group in groups.values():
+            if isinstance(group, dict) and isinstance(group.get("relations"), list):
+                group["relations"] = _wire_relations(group["relations"])
     if not isinstance(relations, list):
         return output
     offenders = sorted(
@@ -454,7 +478,7 @@ def search_nodes(
     """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
     try:
         db = _get_db()
-        return db.search_nodes(  # type: ignore[return-value]
+        result = db.search_nodes(
             project,
             query,
             limit=limit,
@@ -466,6 +490,7 @@ def search_nodes(
             match_all=match_all,
             max_observation_chars=max_observation_chars,
         )
+        return _prepare_read_result(result)
     except Exception as e:
         return {"error": str(e)}
 
@@ -487,7 +512,7 @@ def read_graph(
             compact=compact,
             max_observation_chars=max_observation_chars,
         )
-        return _attach_relation_type_warnings(result)
+        return _prepare_read_result(result)
     except Exception as e:
         return {"error": str(e)}
 
@@ -671,7 +696,7 @@ def search_all_projects(
                 }
             grouped[project_name]["entities"].append(entity)
 
-        return _attach_relation_type_warnings({"results": grouped}, result["relations"])
+        return _prepare_read_result({"results": grouped}, result["relations"])
     except Exception as e:
         return {"error": str(e)}
 
@@ -771,7 +796,7 @@ def get_entity_with_relations(
             compact=compact,
             max_observation_chars=max_observation_chars,
         )
-        return _attach_relation_type_warnings(result)
+        return _prepare_read_result(result)
     except Exception as e:
         return {"error": str(e)}
 

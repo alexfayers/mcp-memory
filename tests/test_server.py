@@ -314,8 +314,7 @@ class TestGetEntityWithRelationsFilters:
     def test_filter_by_relation_type(self, server_db: DatabaseManager) -> None:
         self._seed(server_db)
         result = server.get_entity_with_relations("proj", "a", relationType="implements")
-        assert len(result["relations"]) == 1
-        assert result["relations"][0].relation_type == "implements"
+        assert result["relations"] == ["a implements c"]
 
 
 class TestInlineRelations:
@@ -981,7 +980,7 @@ class TestSearchTools:
             "p1", [Relation(source="feature/a", target="project/p1", relation_type="belongs-to")]
         )
         result = server.search_all_projects("hello")
-        assert len(result["results"]["p1"]["relations"]) == 1
+        assert result["results"]["p1"]["relations"] == ["feature/a belongs-to project/p1"]
         assert "relations" not in result
 
     def test_search_all_projects_groups_relations_by_owning_project(
@@ -1007,7 +1006,7 @@ class TestSearchTools:
             )
         groups = server.search_all_projects("hello")["results"]
         for proj in ("aaa", "zzz"):
-            assert [r.target for r in groups[proj]["relations"]] == [f"project/{proj}"]
+            assert groups[proj]["relations"] == [f"task/shared relates-to project/{proj}"]
 
 
 _BUDGET_SENTINEL = "[{n} lower-voted observation(s) omitted to save tokens]"
