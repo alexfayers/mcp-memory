@@ -10,7 +10,7 @@ import sqlite3
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 from .config import (
     get_call_metrics_retention_days,
@@ -45,6 +45,7 @@ class GraphResult(TypedDict):
 class NodeList(TypedDict):
     entities: list[Entity]
     relations: list[Relation]
+    relations_by_project: NotRequired[dict[str, list[Relation]]]
 
 
 class ImportCounts(TypedDict):
@@ -642,31 +643,38 @@ class DatabaseManager:
             for row in rows
         ]
 
-    def _get_relations_for_entity_ids(self, entity_ids: list[int]) -> list[Relation]:
-        """Get relations for entity IDs across all projects."""
+    def _get_relations_for_entity_ids(self, entity_ids: list[int]) -> dict[str, list[Relation]]:
+        """Get relations for entity IDs across all projects, keyed by owning project name.
+
+        Both endpoints of a relation always live in one project, so the source entity's
+        project identifies the relation's owner.
+        """
         if not entity_ids:
-            return []
+            return {}
         placeholders = ",".join("?" * len(entity_ids))
         rows = self._db.execute(
             f"SELECT e_src.name AS source, e_tgt.name AS target, "
-            f"rt.name AS relation_type "
+            f"rt.name AS relation_type, p.name AS project_name "
             f"FROM relations r "
             f"JOIN entities e_src ON r.source_id = e_src.id "
             f"JOIN entities e_tgt ON r.target_id = e_tgt.id "
             f"JOIN relation_types rt ON r.relation_type_id = rt.id "
+            f"JOIN projects p ON e_src.project_id = p.id "
             f"WHERE e_src.deleted_at IS NULL AND e_tgt.deleted_at IS NULL "
             f"AND (r.source_id IN ({placeholders}) "
             f"OR r.target_id IN ({placeholders}))",
             [*entity_ids, *entity_ids],
         ).fetchall()
-        return [
-            Relation(
-                source=row["source"],
-                target=row["target"],
-                relation_type=row["relation_type"],
+        by_project: dict[str, list[Relation]] = {}
+        for row in rows:
+            by_project.setdefault(row["project_name"], []).append(
+                Relation(
+                    source=row["source"],
+                    target=row["target"],
+                    relation_type=row["relation_type"],
+                )
             )
-            for row in rows
-        ]
+        return by_project
 
     def _validate_entity_data(self, project: str, entity_data: dict[str, object]) -> None:
         """Raise ValueError if entity_data does not meet create_entities' input contract."""
@@ -1511,11 +1519,17 @@ class DatabaseManager:
 
         if isinstance(project, str):
             project_id = self._get_or_create_project_id(project)
-            relations = self._get_relations_for_entities(project_id, entity_ids)
-        else:
-            relations = self._get_relations_for_entity_ids(entity_ids)
+            return {
+                "entities": entities,
+                "relations": self._get_relations_for_entities(project_id, entity_ids),
+            }
 
-        return {"entities": entities, "relations": relations}
+        by_project = self._get_relations_for_entity_ids(entity_ids)
+        return {
+            "entities": entities,
+            "relations": [rel for group in by_project.values() for rel in group],
+            "relations_by_project": by_project,
+        }
 
     def read_graph(
         self,

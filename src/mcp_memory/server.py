@@ -235,8 +235,9 @@ MERGE_OBSERVATIONS_DESC = (
     "its own timestamp; the source observation is removed (hard-deleted, like "
     "delete_observations). Only merges observations inside one entity - never across entities. "
     "Raises if either hash matches no observation, or if source and target hashes are equal. "
-    "Use this only for genuine duplicates within one entity, since it hard-deletes the source. Where "
-    "one observation is merely more useful than another rather than a duplicate, use `vote` instead."
+    "Use this only for genuine duplicates within one entity, since it hard-deletes the "
+    "source. Where one observation is merely more useful than another rather than a "
+    "duplicate, use `vote` instead."
 )
 
 SEARCH_ALL_PROJECTS_DESC = (
@@ -293,12 +294,21 @@ register_visualise_routes(mcp, _get_db)
 # Transitional: surfaces legacy relation types that predate the canonical
 # vocabulary so the agent recreates them. Remove once all memory DBs conform
 # (tracked by task/remove-relation-type-warning).
-def _attach_relation_type_warnings(result: Mapping[str, object]) -> dict[str, object]:
-    """Flag any relation types in a read result that fall outside the canonical vocabulary."""
+def _attach_relation_type_warnings(
+    result: Mapping[str, object],
+    relations: list[Relation] | None = None,
+) -> dict[str, object]:
+    """Flag any relation types in a read result that fall outside the canonical vocabulary.
+
+    Args:
+        result: The read result to annotate.
+        relations: Relations to inspect when the result does not carry them at the top level.
+    """
     output: dict[str, object] = dict(result)
     if "error" in output:
         return output
-    relations = output.get("relations")
+    if relations is None:
+        relations = output.get("relations")  # type: ignore[assignment]
     if not isinstance(relations, list):
         return output
     offenders = sorted(
@@ -650,25 +660,18 @@ def search_all_projects(
             max_observation_chars=max_observation_chars,
         )
 
+        by_project = result.get("relations_by_project", {})
         grouped: dict[str, dict[str, list[object]]] = {}
-        entity_names_by_project: dict[str, set[str]] = {}
         for entity in result["entities"]:
             project_name = entity.project_name or "unknown"
             if project_name not in grouped:
-                grouped[project_name] = {"entities": [], "relations": []}
-                entity_names_by_project[project_name] = set()
+                grouped[project_name] = {
+                    "entities": [],
+                    "relations": list(by_project.get(project_name, [])),
+                }
             grouped[project_name]["entities"].append(entity)
-            entity_names_by_project[project_name].add(entity.name)
 
-        relations = result["relations"]
-        for relation in relations:
-            for project_name, names in entity_names_by_project.items():
-                if relation.source in names or relation.target in names:
-                    grouped[project_name]["relations"].append(relation)
-                    break
-
-        grouped_result: dict[str, object] = {"results": grouped, "relations": relations}
-        return _attach_relation_type_warnings(grouped_result)
+        return _attach_relation_type_warnings({"results": grouped}, result["relations"])
     except Exception as e:
         return {"error": str(e)}
 

@@ -265,6 +265,13 @@ class TestRelationTypeWarnings:
         result = server.get_entity_with_relations("proj", "a")
         assert "legacy_thing" in result["relationTypeWarnings"]
 
+    def test_warning_present_for_grouped_all_projects_search(
+        self, server_db: DatabaseManager
+    ) -> None:
+        self._seed_nonconforming(server_db)
+        result = server.search_all_projects("x")
+        assert "legacy_thing" in result["relationTypeWarnings"]
+
     def test_no_warning_for_clean_data(self, server_db: DatabaseManager) -> None:
         server_db.create_entities(
             "proj",
@@ -959,6 +966,48 @@ class TestSearchTools:
         self, server_db: DatabaseManager
     ) -> None:
         assert "error" in server.search_all_projects("hello", expand_groups=True)
+
+    def test_search_all_projects_returns_each_relation_only_under_its_project(
+        self, server_db: DatabaseManager
+    ) -> None:
+        server_db.create_entities(
+            "p1",
+            [
+                {"name": "feature/a", "entityType": "feature", "observations": ["hello"]},
+                {"name": "project/p1", "entityType": "project", "observations": ["hello"]},
+            ],
+        )
+        server_db.create_relations(
+            "p1", [Relation(source="feature/a", target="project/p1", relation_type="belongs-to")]
+        )
+        result = server.search_all_projects("hello")
+        assert len(result["results"]["p1"]["relations"]) == 1
+        assert "relations" not in result
+
+    def test_search_all_projects_groups_relations_by_owning_project(
+        self, server_db: DatabaseManager
+    ) -> None:
+        for proj in ("aaa", "zzz"):
+            server_db.create_entities(
+                proj,
+                [
+                    {"name": "task/shared", "entityType": "task", "observations": ["hello"]},
+                    {"name": f"project/{proj}", "entityType": "project", "observations": ["hello"]},
+                ],
+            )
+            server_db.create_relations(
+                proj,
+                [
+                    Relation(
+                        source="task/shared",
+                        target=f"project/{proj}",
+                        relation_type="relates-to",
+                    )
+                ],
+            )
+        groups = server.search_all_projects("hello")["results"]
+        for proj in ("aaa", "zzz"):
+            assert [r.target for r in groups[proj]["relations"]] == [f"project/{proj}"]
 
 
 _BUDGET_SENTINEL = "[{n} lower-voted observation(s) omitted to save tokens]"
