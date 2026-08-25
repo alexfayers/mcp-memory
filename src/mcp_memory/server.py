@@ -87,7 +87,10 @@ CREATE_ENTITIES_DESC = (
     "Non-exempt entity types (everything except project) MUST include at "
     "least one relation. "
     "Each entity dict must have keys: name (str), entityType (str), observations (list[str]). "
-    "Optional keys: status (str), relations (list of {target, type} dicts)."
+    "Optional keys: status (str), relations (list of {target, type} dicts). "
+    "Set `status` via the `status` argument, never as a `STATUS:` observation. Because this "
+    "overwrites, read the entity with `get_entity_with_relations` first and pass back ALL "
+    "existing observations."
 )
 SEARCH_NODES_DESC = (
     "Search entities and relations by text query within a project. "
@@ -141,7 +144,8 @@ DELETE_OBSERVATIONS_DESC = (
     "avoids pasting full content; hashes come from read output). "
     "Returns the count of deleted observations. Throws if the entity does not exist. "
     "For an observation that is stale but not wrong enough to remove, prefer vote "
-    "(downvote to sink it) over deletion."
+    "(downvote to sink it) over deletion. "
+    "Use this, not a downvote, for an observation that is outright wrong."
 )
 TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
     "Delete all observations on an entity except those whose content_hash is in keep_hashes. "
@@ -159,11 +163,14 @@ MOVE_ENTITY_CROSS_SCOPE_DESC = (
     "Move one entity from one project scope to another. "
     "Because relations cannot span scopes, ALL of the entity's relations are dropped and returned "
     "(as droppedRelations) so the caller can recreate the appropriate ones in the target scope. "
-    "Fails if an entity with the same name already exists in the target scope."
+    "Fails if an entity with the same name already exists in the target scope. "
+    "Where a found entity's scope does not match its subject, fix it with this tool BEFORE "
+    "appending to it, then recreate a relation before the next `create_entities` touch."
 )
 SET_ENTITY_STATUS_DESC = (
     "Set or clear the status of an entity. "
-    "Valid statuses: planned, in-progress, blocked, resolved, archived. Use null to clear."
+    "Valid statuses: planned, in-progress, blocked, resolved, archived. Use null to clear. "
+    "This is the only correct way to record status; a `STATUS:` observation is wrong."
 )
 VOTE_DESC = (
     "Record a usefulness vote as you retrieve a memory: a positive vote for one that proved "
@@ -175,7 +182,9 @@ VOTE_DESC = (
     "memories surface higher, unhelpful ones sink but remain findable) and do not change content "
     "or updated_at. An entity vote is a light alternative to delete_entity; an observation vote is "
     "a light alternative to delete_observations - neither is wrong enough to remove outright. vote "
-    "must be a nonzero integer from -3 to 3; returns the new net vote_score."
+    "must be a nonzero integer from -3 to 3; returns the new net vote_score. "
+    "Vote as you retrieve - up for a helpful observation, down for a stale or misleading one. "
+    "Prefer a downvote over deleting an entity."
 )
 GET_PROJECT_FOR_PATH_DESC = (
     "Return the project whose registered path contains the given filesystem path, "
@@ -225,7 +234,9 @@ MERGE_OBSERVATIONS_DESC = (
     "addressed by their content_hash. The target keeps the higher of the two vote scores and "
     "its own timestamp; the source observation is removed (hard-deleted, like "
     "delete_observations). Only merges observations inside one entity - never across entities. "
-    "Raises if either hash matches no observation, or if source and target hashes are equal."
+    "Raises if either hash matches no observation, or if source and target hashes are equal. "
+    "Use this only for genuine duplicates within one entity, since it hard-deletes the source. Where "
+    "one observation is merely more useful than another rather than a duplicate, use `vote` instead."
 )
 
 SEARCH_ALL_PROJECTS_DESC = (
