@@ -16,6 +16,7 @@ from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.plugin import (
     _EDIT_TOOL_WEIGHT,
     _FRUSTRATION_NUDGE_TEMPLATE,
+    ENABLE_PROFANITY_CHECK,
     MemoryPlugin,
     _build_task_start_context,
     _find_project_from_path,
@@ -32,6 +33,11 @@ from mcp_memory.hooks.plugin import (
     _workspace_entity_note,
 )
 from mcp_memory.path_resolver import normalize_path
+
+_needs_profanity_check = pytest.mark.skipif(
+    not ENABLE_PROFANITY_CHECK,
+    reason="profanity detection is gated off by plugin.ENABLE_PROFANITY_CHECK",
+)
 
 _READ_TOOL_NAMES = [
     "search_nodes",
@@ -1200,12 +1206,14 @@ class TestProfanityNudge:
         assert result is not None
         return next(note for note in result.notes if _FRUSTRATION_MARKER in note)
 
+    @_needs_profanity_check
     def test_fires_when_profanity_detected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("this is broken", True, monkeypatch)
         assert "[elevated]" in note
         assert "vote=2" in note
         assert "profanity" in note
 
+    @_needs_profanity_check
     def test_fires_every_time_with_no_debounce(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: True)
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
@@ -1335,11 +1343,13 @@ class TestProfanityNudge:
         assert "[elevated]" in note
         assert "vote=2" in note
 
+    @_needs_profanity_check
     def test_profanity_plus_caps_is_strong(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("WHY IS THIS BROKEN", True, monkeypatch)
         assert "[strong]" in note
         assert "vote=3" in note
 
+    @_needs_profanity_check
     def test_all_three_signals_is_strong_and_names_all(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1361,6 +1371,7 @@ class TestProfanityNudge:
         assert "[mild]" in note
         assert "[elevated]" not in note
 
+    @_needs_profanity_check
     def test_tier_fires_every_time_with_no_debounce(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: True)
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):

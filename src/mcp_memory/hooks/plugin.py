@@ -499,6 +499,7 @@ def _contains_profanity(message: str) -> bool:
         return False
 
     from better_profanity import profanity  # noqa: PLC0415
+
     if not profanity.CENSOR_WORDSET:
         profanity.load_censor_words(whitelist_words=SWEAR_EXCLUSIONS)
 
