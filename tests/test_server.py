@@ -680,6 +680,7 @@ class TestSearchNodesObservationShape:
         assert observation.content == "needle"
         assert observation.content_hash == _hash_observation("needle")
         assert observation.vote_score == 0
+        assert observation.created_at is not None
 
 
 class TestRestoreEntityTool:

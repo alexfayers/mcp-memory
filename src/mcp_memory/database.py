@@ -557,7 +557,8 @@ class DatabaseManager:
     def _get_observations_full(self, entity_id: int) -> list[Observation]:
         """Return an entity's observations best-first (vote_score DESC, then insertion order)."""
         rows = self._db.execute(
-            "SELECT content, content_hash, vote_score FROM observations WHERE entity_id = ? "
+            "SELECT content, content_hash, vote_score, created_at FROM observations "
+            "WHERE entity_id = ? "
             "ORDER BY vote_score DESC, id",
             (entity_id,),
         ).fetchall()
@@ -566,6 +567,7 @@ class DatabaseManager:
                 content=row["content"],
                 content_hash=row["content_hash"],
                 vote_score=int(row["vote_score"]),
+                created_at=row["created_at"],
             )
             for row in rows
         ]

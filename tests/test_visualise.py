@@ -87,7 +87,10 @@ class TestGetAllGraphData:
         assert entity["entity_type"] == "task"
         observations = cast("list[dict[str, object]]", entity["observations"])
         assert [o["content"] for o in observations] == ["obs1", "obs2"]
-        assert all("content_hash" in o and "vote_score" in o for o in observations)
+        assert all(
+            "content_hash" in o and "vote_score" in o and "created_at" in o for o in observations
+        )
+        assert all(o["created_at"] is not None for o in observations)
         assert entity["status"] == "planned"
         assert entity["vote_score"] == 1
 
@@ -671,6 +674,7 @@ class TestSearchGraph:
                     "content": "deployment pipeline",
                     "content_hash": _hash_observation("deployment pipeline"),
                     "vote_score": 0,
+                    "created_at": entity["observations"][0]["created_at"],
                 }
             ],
         }
