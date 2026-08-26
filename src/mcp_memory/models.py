@@ -95,6 +95,7 @@ class Entity:
     updated_at: str | None = None
     project_name: str | None = None
     vote_score: int = 0
+    observations_omitted: int = 0
 
 
 @dataclass

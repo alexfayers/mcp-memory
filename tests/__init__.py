@@ -1,19 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp_memory.database import DatabaseManager
     from mcp_memory.models import Entity
 
 
-def obs_contents(entity: Entity) -> list[str]:
-    return [o.content for o in entity.observations]
+def _observations(entity: Entity | dict[str, Any]) -> list[Any]:
+    """Read observations from an Entity dataclass or the sparse dict a read tool returns."""
+    if isinstance(entity, dict):
+        return entity.get("observations", [])
+    return entity.observations
 
 
-def obs_votes(entity: Entity) -> list[int]:
-    return [o.vote_score for o in entity.observations]
+def obs_contents(entity: Entity | dict[str, Any]) -> list[str]:
+    obs = _observations(entity)
+    return [o["content"] if isinstance(o, dict) else o.content for o in obs]
+
+
+def obs_votes(entity: Entity | dict[str, Any]) -> list[int]:
+    obs = _observations(entity)
+    return [o.get("vote_score", 0) if isinstance(o, dict) else o.vote_score for o in obs]
 
 
 @dataclass(frozen=True)

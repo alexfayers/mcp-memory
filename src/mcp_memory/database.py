@@ -113,10 +113,10 @@ def _budget_observations(observations: list[Observation], max_chars: int) -> lis
     """Trim an already-vote-sorted observation list to a cumulative content-char budget.
 
     Keeps whole observations best-first while the running total of len(content) stays within
-    max_chars, always keeping at least the first observation. When any are omitted, appends a
-    single sentinel observation noting how many were dropped. A negative max_chars means
-    unlimited (returned unchanged). A max_chars of 0 naturally yields just the first
-    observation via the always-keep-first rule below - it is NOT special-cased separately.
+    max_chars, always keeping at least the first observation. Callers report how many were
+    dropped via Entity.observations_omitted. A negative max_chars means unlimited (returned
+    unchanged). A max_chars of 0 naturally yields just the first observation via the
+    always-keep-first rule below - it is NOT special-cased separately.
     """
     if max_chars < 0 or not observations:
         return observations
@@ -129,15 +129,6 @@ def _budget_observations(observations: list[Observation], max_chars: int) -> lis
             total = projected
         else:
             break
-    omitted = len(observations) - len(kept)
-    if omitted > 0:
-        kept.append(
-            Observation(
-                content=f"[{omitted} lower-voted observation(s) omitted to save tokens]",
-                content_hash="",
-                vote_score=0,
-            )
-        )
     return kept
 
 
@@ -581,6 +572,7 @@ class DatabaseManager:
         compact: bool = False,
         max_observation_chars: int | None = None,
     ) -> Entity:
+        omitted = 0
         if compact:
             observations: list[Observation] = []
         else:
@@ -589,7 +581,9 @@ class DatabaseManager:
                 if max_observation_chars is None
                 else max_observation_chars
             )
-            observations = _budget_observations(self._get_observations_full(entity_id), budget)
+            full = self._get_observations_full(entity_id)
+            observations = _budget_observations(full, budget)
+            omitted = len(full) - len(observations)
         return Entity(
             name=row["name"],
             entity_type=row["entity_type"],
@@ -603,6 +597,7 @@ class DatabaseManager:
                 else None
             ),
             vote_score=int(row["vote_score"]) if "vote_score" in row.keys() else 0,  # noqa: SIM118
+            observations_omitted=omitted,
         )
 
     def _sanitize_fts_query(self, query: str, match_all: bool = False) -> str:

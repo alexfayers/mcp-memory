@@ -9,7 +9,7 @@ import pytest
 
 from mcp_memory import server
 from mcp_memory.database import DatabaseManager, _hash_observation
-from mcp_memory.models import Entity, Relation
+from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _GLOBAL_PROJECT, _ensure_project_root, _validate_and_extract_relations
 from tests import obs_contents
@@ -308,7 +308,7 @@ class TestGetEntityWithRelationsFilters:
     def test_filter_by_entity_type(self, server_db: DatabaseManager) -> None:
         self._seed(server_db)
         result = server.get_entity_with_relations("proj", "a", entityType="project")
-        related_names = {e.name for e in result["relatedEntities"] if isinstance(e, Entity)}
+        related_names = {e["name"] for e in result["relatedEntities"]}
         assert related_names == {"b"}
 
     def test_filter_by_relation_type(self, server_db: DatabaseManager) -> None:
@@ -682,10 +682,10 @@ class TestSearchNodesObservationShape:
             "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
         )
         entity = server.search_nodes("proj", "needle")["entities"][0]
-        observation = entity.observations[0]
-        assert observation.content == "needle"
-        assert observation.content_hash == _hash_observation("needle")
-        assert observation.vote_score == 0
+        observation = entity["observations"][0]
+        assert observation["content"] == "needle"
+        assert observation["content_hash"] == _hash_observation("needle")
+        assert "vote_score" not in observation
 
 
 class TestRestoreEntityTool:
@@ -895,8 +895,8 @@ class TestSearchTools:
         )
         default = server.search_nodes("proj", "alpha beta")
         strict = server.search_nodes("proj", "alpha beta", match_all=True)
-        assert {e.name for e in default["entities"]} == {"a", "both"}
-        assert {e.name for e in strict["entities"]} == {"both"}
+        assert {e["name"] for e in default["entities"]} == {"a", "both"}
+        assert {e["name"] for e in strict["entities"]} == {"both"}
 
     def test_search_all_projects_match_all_narrows_results(
         self, server_db: DatabaseManager
@@ -927,7 +927,7 @@ class TestSearchTools:
             ],
         )
         result = server.search_nodes("proj", "x", status=["planned", "in-progress"])
-        assert {e.name for e in result["entities"]} == {"a", "b"}
+        assert {e["name"] for e in result["entities"]} == {"a", "b"}
 
     def test_search_all_projects_projects_filter_narrows_to_named_projects(
         self, server_db: DatabaseManager
@@ -1024,22 +1024,36 @@ class TestSearchToolsObservationBudget:
         entity = server.search_nodes("proj", "foo", max_observation_chars=-1)["entities"][0]
         assert obs_contents(entity) == ["aaa", "bbb", "ccc"]
 
+    def test_omitted_count_replaces_sentinel_observation(self, server_db: DatabaseManager) -> None:
+        self._seed(server_db)
+        entity = server.search_nodes("proj", "foo", max_observation_chars=0)["entities"][0]
+        assert obs_contents(entity) == ["aaa"]
+        assert entity["omitted"] == 2
+
+    def test_uninformative_fields_are_omitted(self, server_db: DatabaseManager) -> None:
+        self._seed(server_db)
+        entity = server.search_nodes("proj", "foo", max_observation_chars=-1)["entities"][0]
+        assert "vote_score" not in entity
+        assert "status" not in entity
+        assert "omitted" not in entity
+        assert all("vote_score" not in o for o in entity["observations"])
+
     def test_search_nodes_small_budget_trims_with_sentinel(
         self, server_db: DatabaseManager
     ) -> None:
         self._seed(server_db)
         entity = server.search_nodes("proj", "foo", max_observation_chars=6)["entities"][0]
-        assert obs_contents(entity) == ["aaa", "bbb", _BUDGET_SENTINEL.format(n=1)]
+        assert obs_contents(entity) == ["aaa", "bbb"]
 
     def test_search_nodes_zero_keeps_only_top(self, server_db: DatabaseManager) -> None:
         self._seed(server_db)
         entity = server.search_nodes("proj", "foo", max_observation_chars=0)["entities"][0]
-        assert obs_contents(entity) == ["aaa", _BUDGET_SENTINEL.format(n=2)]
+        assert obs_contents(entity) == ["aaa"]
 
     def test_read_graph_small_budget_trims_with_sentinel(self, server_db: DatabaseManager) -> None:
         self._seed(server_db)
         entity = server.read_graph("proj", max_observation_chars=6)["entities"][0]
-        assert obs_contents(entity) == ["aaa", "bbb", _BUDGET_SENTINEL.format(n=1)]
+        assert obs_contents(entity) == ["aaa", "bbb"]
 
     def test_read_graph_negative_returns_all(self, server_db: DatabaseManager) -> None:
         self._seed(server_db)
@@ -1052,7 +1066,7 @@ class TestSearchToolsObservationBudget:
         self._seed(server_db)
         result = server.search_all_projects("foo", max_observation_chars=6)
         entity = result["results"]["proj"]["entities"][0]
-        assert obs_contents(entity) == ["aaa", "bbb", _BUDGET_SENTINEL.format(n=1)]
+        assert obs_contents(entity) == ["aaa", "bbb"]
 
     def test_search_all_projects_negative_returns_all(self, server_db: DatabaseManager) -> None:
         self._seed(server_db)
@@ -1074,34 +1088,34 @@ class TestGraphToolsObservationBudget:
             "proj", [Relation(source="a", target="b", relation_type="belongs-to")]
         )
 
-    def _related(self, result: dict[str, object]) -> Entity:
+    def _related(self, result: dict[str, object]) -> dict[str, object]:
         related = result["relatedEntities"]
         assert isinstance(related, list)
-        return next(e for e in related if isinstance(e, Entity))
+        return next(e for e in related if isinstance(e, dict))
 
     def test_get_entity_with_relations_compact_empties_both(
         self, server_db: DatabaseManager
     ) -> None:
         self._seed(server_db)
         result = server.get_entity_with_relations("proj", "a", compact=True)
-        assert result["entity"].observations == []
-        assert self._related(result).observations == []
+        assert result["entity"]["observations"] == []
+        assert self._related(result)["observations"] == []
 
     def test_get_entity_with_relations_small_budget_trims_both(
         self, server_db: DatabaseManager
     ) -> None:
         self._seed(server_db)
         result = server.get_entity_with_relations("proj", "a", max_observation_chars=6)
-        assert obs_contents(result["entity"]) == ["aaa", "bbb", _BUDGET_SENTINEL.format(n=1)]
-        assert obs_contents(self._related(result)) == ["xxx", "yyy", _BUDGET_SENTINEL.format(n=1)]
+        assert obs_contents(result["entity"]) == ["aaa", "bbb"]
+        assert obs_contents(self._related(result)) == ["xxx", "yyy"]
 
     def test_get_entity_with_relations_zero_keeps_only_top_both(
         self, server_db: DatabaseManager
     ) -> None:
         self._seed(server_db)
         result = server.get_entity_with_relations("proj", "a", max_observation_chars=0)
-        assert obs_contents(result["entity"]) == ["aaa", _BUDGET_SENTINEL.format(n=2)]
-        assert obs_contents(self._related(result)) == ["xxx", _BUDGET_SENTINEL.format(n=2)]
+        assert obs_contents(result["entity"]) == ["aaa"]
+        assert obs_contents(self._related(result)) == ["xxx"]
 
     def test_get_entity_with_relations_negative_returns_all(
         self, server_db: DatabaseManager
@@ -1116,8 +1130,8 @@ class TestGraphToolsObservationBudget:
     ) -> None:
         self._seed(server_db)
         result = server.get_entity_with_relations("proj", "a", entityType="project", compact=True)
-        assert result["entity"].observations == []
-        assert self._related(result).observations == []
+        assert result["entity"]["observations"] == []
+        assert self._related(result)["observations"] == []
 
     def test_get_entity_with_relations_filtered_small_budget_trims_both(
         self, server_db: DatabaseManager
@@ -1126,8 +1140,8 @@ class TestGraphToolsObservationBudget:
         result = server.get_entity_with_relations(
             "proj", "a", entityType="project", max_observation_chars=6
         )
-        assert obs_contents(result["entity"]) == ["aaa", "bbb", _BUDGET_SENTINEL.format(n=1)]
-        assert obs_contents(self._related(result)) == ["xxx", "yyy", _BUDGET_SENTINEL.format(n=1)]
+        assert obs_contents(result["entity"]) == ["aaa", "bbb"]
+        assert obs_contents(self._related(result)) == ["xxx", "yyy"]
 
 
 class TestImplicitUsefulnessAutoVote:

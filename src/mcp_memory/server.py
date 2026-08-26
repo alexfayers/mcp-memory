@@ -16,6 +16,7 @@ from .config import get_db_path
 from .database import DatabaseManager, GraphResult, NodeList
 from .models import (
     VALID_RELATION_TYPES,
+    Entity,
     Relation,
     normalize_relation_type,
 )
@@ -311,11 +312,51 @@ def _wire_relations(relations: list[Relation]) -> list[str]:
     return [f"{rel.source} {rel.relation_type} {rel.target}" for rel in relations]
 
 
+def _wire_entity(entity: Entity) -> dict[str, object]:
+    """Render an entity, dropping fields whose value carries no information.
+
+    A default vote score, absent status or empty content hash cost tokens on every entity in
+    every read without telling the reader anything, so they are omitted rather than sent.
+    """
+    wired: dict[str, object] = {"name": entity.name, "entity_type": entity.entity_type}
+    wired["observations"] = [
+        {"content": obs.content}
+        | ({"content_hash": obs.content_hash} if obs.content_hash else {})
+        | ({"vote_score": obs.vote_score} if obs.vote_score else {})
+        for obs in entity.observations
+    ]
+    if entity.observations_omitted:
+        wired["omitted"] = entity.observations_omitted
+    for field in ("status", "created_at", "updated_at", "project_name"):
+        value = getattr(entity, field)
+        if value is not None:
+            wired[field] = value
+    if entity.vote_score:
+        wired["vote_score"] = entity.vote_score
+    return wired
+
+
+def _wire_entities(value: object) -> object:
+    """Render a list of entities sparsely, leaving anything else untouched."""
+    if isinstance(value, list):
+        return [_wire_entity(item) if isinstance(item, Entity) else item for item in value]
+    return _wire_entity(value) if isinstance(value, Entity) else value
+
+
+def _wire_in_place(container: dict[str, object]) -> None:
+    """Encode whichever entity and relation shapes a read result carries, in place."""
+    if isinstance(container.get("relations"), list):
+        container["relations"] = _wire_relations(container["relations"])  # type: ignore[arg-type]
+    for key in ("entity", "entities", "relatedEntities"):
+        if key in container:
+            container[key] = _wire_entities(container[key])
+
+
 def _prepare_read_result(
     result: Mapping[str, object],
     relations: list[Relation] | None = None,
 ) -> dict[str, object]:
-    """Render a read result for the wire: encode its relations and flag legacy relation types.
+    """Render a read result for the wire: encode entities and relations, flag legacy types.
 
     Args:
         result: The read result to prepare.
@@ -326,13 +367,12 @@ def _prepare_read_result(
         return output
     if relations is None:
         relations = output.get("relations")  # type: ignore[assignment]
-    if isinstance(output.get("relations"), list):
-        output["relations"] = _wire_relations(output["relations"])  # type: ignore[arg-type]
+    _wire_in_place(output)
     groups = output.get("results")
     if isinstance(groups, dict):
         for group in groups.values():
-            if isinstance(group, dict) and isinstance(group.get("relations"), list):
-                group["relations"] = _wire_relations(group["relations"])
+            if isinstance(group, dict):
+                _wire_in_place(group)
     if not isinstance(relations, list):
         return output
     offenders = sorted(
