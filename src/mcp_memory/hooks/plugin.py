@@ -431,6 +431,8 @@ def _str_dict(value: object) -> dict[str, object]:
     return {}
 
 
+ENABLE_PROFANITY_CHECK = False
+
 _MINCED_OATH = re.compile(
     r"\b(?:"
     r"frick\w*|flippin\w*|friggin\w*|effing|"
@@ -444,6 +446,11 @@ _MINCED_OATH = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+
+# Set of strings that should not trigger the profanity hook
+SWEAR_EXCLUSIONS = {
+    "kill",
+}
 
 _SHOUT_CAPS_WORD = re.compile(r"\b[A-Z]{2,}\b")
 _SHOUT_MIN_ALPHA = 10
@@ -488,7 +495,12 @@ def _frustration_tier(weight: int) -> tuple[str, int]:
 
 def _contains_profanity(message: str) -> bool:
     """Return True if the message contains real profanity (lazy-imported classifier)."""
+    if not ENABLE_PROFANITY_CHECK:
+        return False
+
     from better_profanity import profanity  # noqa: PLC0415
+    if not profanity.CENSOR_WORDSET:
+        profanity.load_censor_words(whitelist_words=SWEAR_EXCLUSIONS)
 
     return bool(profanity.contains_profanity(message))
 
