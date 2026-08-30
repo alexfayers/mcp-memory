@@ -18,7 +18,7 @@ description: Guide {{agent}} on using mcp-memory for persistent memory.
 - MUST NOT put project-summary entities or workspace-specific facts (repo names, paths, workspace rules, tool configs) in `global`.
 - MUST verify a found entity's scope matches its subject before appending - a wrong scope usually comes from a fallback/basename scope, not a new entity.
 - MUST call `list_metadata(kind="paths", ...)` before needing a project's location, and MUST search memory for any "what/where is X" - both BEFORE any `find`/`grep`/`ls`. Fall back to a live search only once the lookup comes back empty or stale.
-- If `memory` is unavailable, MUST start it (`mcp-memory`), ask the user to reload the MCP connection, and wait. MUST NOT restart it manually (`launchctl kickstart`, `systemctl restart`) - use `llm-prompts update`.
+- Where `memory` is unavailable, MUST run `mcp-memory restart`, then ask the user to reload the MCP connection and wait. MUST NOT run the `mcp-memory` binary bare, nor `launchctl kickstart`/`systemctl restart` it - it is a managed service, and running the binary leaves a stray process holding its port that dies with the session.
 
 ## Before starting a task
 

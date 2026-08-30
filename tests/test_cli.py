@@ -223,3 +223,72 @@ class TestRenderSystemd:
         assert "ExecStart=/usr/bin/memory-agent" in unit
         assert "Environment=MCP_AGENT_PORT=8100" in unit
         assert "User=alice" in unit
+
+
+class TestCmdRestart:
+    def test_restarts_via_launchd_when_plist_installed(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plist = tmp_path / "com.mcp-memory.plist"
+        plist.write_text("", encoding="utf-8")
+        monkeypatch.setattr(cli, "_LAUNCHD_PLIST", plist)
+        monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kw: object) -> object:
+            calls.append(cmd)
+            return type("R", (), {"returncode": 0})()
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        cli._cmd_restart()
+
+        assert calls[0][:2] == ["launchctl", "kickstart"]
+        assert "-k" in calls[0]
+
+    def test_restarts_via_systemd_when_unit_installed(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unit = tmp_path / "mcp-memory.service"
+        unit.write_text("", encoding="utf-8")
+        monkeypatch.setattr(cli, "_LAUNCHD_PLIST", tmp_path / "absent.plist")
+        monkeypatch.setattr(cli, "_SYSTEMD_UNIT", unit)
+        monkeypatch.setattr(cli.platform, "system", lambda: "Linux")
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kw: object) -> object:
+            calls.append(cmd)
+            return type("R", (), {"returncode": 0})()
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        cli._cmd_restart()
+
+        assert calls[0] == ["sudo", "systemctl", "restart", unit.name]
+
+    def test_reports_when_no_service_installed(
+        self,
+        tmp_path: cli.Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(cli, "_LAUNCHD_PLIST", tmp_path / "absent.plist")
+        monkeypatch.setattr(cli, "_SYSTEMD_UNIT", tmp_path / "absent.service")
+        monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+
+        cli._cmd_restart()
+
+        assert "No mcp-memory service installed" in capsys.readouterr().out
+
+    def test_exits_nonzero_when_restart_command_fails(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plist = tmp_path / "com.mcp-memory.plist"
+        plist.write_text("", encoding="utf-8")
+        monkeypatch.setattr(cli, "_LAUNCHD_PLIST", plist)
+        monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(
+            cli.subprocess, "run", lambda *_a, **_kw: type("R", (), {"returncode": 1})()
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._cmd_restart()
+        assert exc_info.value.code == 1

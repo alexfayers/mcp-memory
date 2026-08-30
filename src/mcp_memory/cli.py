@@ -250,6 +250,26 @@ def _stop_service() -> bool:
     return False
 
 
+def _cmd_restart() -> None:
+    """Restart the running mcp-memory service, or report that none is installed."""
+    system = platform.system()
+    if system == "Darwin" and _LAUNCHD_PLIST.exists():
+        result = subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{_LAUNCHD_LABEL}"],
+            check=False,
+        )
+    elif system == "Linux" and _SYSTEMD_UNIT.exists():
+        result = subprocess.run(["sudo", "systemctl", "restart", _SYSTEMD_UNIT.name], check=False)
+    else:
+        print("No mcp-memory service installed on this platform.")
+        return
+
+    if result.returncode != 0:
+        print("Error: failed to restart mcp-memory service.", file=sys.stderr)
+        sys.exit(result.returncode)
+    print("Restarted mcp-memory service.")
+
+
 def _cmd_migrate_db(args: argparse.Namespace) -> None:
     """Move the database to the default location and repoint the service at it."""
     target = get_default_db_path()
@@ -612,6 +632,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Database path (default: ~/.local/share/mcp-memory/memory.db, or MCP_MEMORY_DB_PATH)",
     )
 
+    sub.add_parser("restart", help="Restart the running background service")
+
     migrate = sub.add_parser(
         "migrate-db",
         help="Move the database to the default location and repoint the service",
@@ -737,6 +759,8 @@ def main() -> None:
 
     if args.command == "setup-service":
         _cmd_setup_service(args)
+    elif args.command == "restart":
+        _cmd_restart()
     elif args.command == "migrate-db":
         _cmd_migrate_db(args)
     elif args.command == "audit":
