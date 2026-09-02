@@ -769,4 +769,23 @@ MIGRATIONS: list[Migration] = [
             "CREATE INDEX IF NOT EXISTS idx_project_groups_group_name ON project_groups(group_name)",
         ],
     ),
+    Migration(
+        version=27,
+        statements=[
+            # One-time backfill: archives resolved entities that have already gone stale,
+            # mirroring DatabaseManager.archive_stale_entities so pre-existing rows are not
+            # left waiting for the next startup sweep. status is not in the FTS projection,
+            # so no trigger changes are needed (mirrors v20/v22-24). '-56 days' is a frozen
+            # snapshot of 4x the task half-life at authoring time, deliberately NOT imported
+            # from _TYPE_HALF_LIFE_DAYS so a later half-life change cannot rewrite history.
+            # The never-evict subquery matches on name alone, which can only ever spare an
+            # entity, never wrongly archive one.
+            """UPDATE entities SET status = 'archived'
+            WHERE deleted_at IS NULL
+              AND status = 'resolved'
+              AND updated_at < datetime('now', '-56 days')
+              AND name NOT IN
+                  (SELECT entity_name FROM surfaced_entities WHERE used_at IS NOT NULL)""",
+        ],
+    ),
 ]

@@ -18,6 +18,7 @@ Authoring standards for mcp-memory entities. `memory.md` carries the gates; this
 - In-progress work MUST be its own `task/` entity, never observations on `project/` - tickets included.
 - MUST link a task to the feature(s) it modifies via `implements`, which reaches the project through the feature graph; link directly to a project only where no feature exists.
 - MUST create the entity and its relation before writing code, and MUST set status `resolved` on completion.
+- `archived` hides an entity from search by default, not deletion - fetch it via `get_entity_with_relations`, or search with `status="archived"`/`include_archived=True`. A `resolved` entity untouched for 56 days auto-archives unless it was ever surfaced-and-used in a search.
 
 ## Entity relations
 

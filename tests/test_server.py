@@ -1008,6 +1008,42 @@ class TestSearchTools:
         for proj in ("aaa", "zzz"):
             assert groups[proj]["relations"] == [f"task/shared relates-to project/{proj}"]
 
+    def test_search_nodes_forwards_include_archived(self, server_db: DatabaseManager) -> None:
+        server_db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "a",
+                    "entityType": "task",
+                    "observations": ["keyword"],
+                    "status": "archived",
+                }
+            ],
+        )
+        default = server.search_nodes("proj", "keyword")
+        included = server.search_nodes("proj", "keyword", include_archived=True)
+        assert default["entities"] == []
+        assert {e["name"] for e in included["entities"]} == {"a"}
+
+    def test_search_all_projects_forwards_include_archived(
+        self, server_db: DatabaseManager
+    ) -> None:
+        server_db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "a",
+                    "entityType": "task",
+                    "observations": ["keyword"],
+                    "status": "archived",
+                }
+            ],
+        )
+        default = server.search_all_projects("keyword")["results"]
+        included = server.search_all_projects("keyword", include_archived=True)["results"]
+        assert default == {}
+        assert set(included) == {"proj"}
+
 
 _BUDGET_SENTINEL = "[{n} lower-voted observation(s) omitted to save tokens]"
 

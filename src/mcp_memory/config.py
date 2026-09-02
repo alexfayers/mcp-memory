@@ -265,6 +265,15 @@ def get_eval_cache_ttl_seconds() -> int:
     return int(os.environ.get("MCP_MEMORY_EVAL_CACHE_TTL_SECONDS", _DEFAULT_EVAL_CACHE_TTL_SECONDS))
 
 
+def get_archive_enabled() -> bool:
+    """Return whether stale resolved entities are auto-archived on startup.
+
+    On by default, unlike the GC/purge sweeps below: leaving it off means nobody would
+    ever see the feature. See DatabaseManager.archive_stale_entities for the criteria.
+    """
+    return os.environ.get("MCP_MEMORY_ARCHIVE_ENABLED", "true").strip().lower() in _TRUTHY
+
+
 def get_gc_enabled() -> bool:
     """Return whether downvoted orphan entities are garbage-collected on startup.
 

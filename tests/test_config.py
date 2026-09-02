@@ -182,6 +182,16 @@ class TestEvalCacheTtlConfig:
         assert config.get_eval_cache_ttl_seconds() == 60
 
 
+class TestArchiveConfig:
+    def test_archive_enabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_ARCHIVE_ENABLED", raising=False)
+        assert config.get_archive_enabled() is True
+
+    def test_archive_disabled_by_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_ARCHIVE_ENABLED", "false")
+        assert config.get_archive_enabled() is False
+
+
 class TestGcConfig:
     def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_MEMORY_GC_ENABLED", raising=False)

@@ -15,6 +15,7 @@ from mcp_memory.database import (
     _hash_observation,
     _parse_date,
 )
+from mcp_memory.migrations.runner import run_migrations
 from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
 from mcp_memory.models import MAX_VOTE_MAGNITUDE, Entity, Observation, Relation
 from mcp_memory.path_resolver import normalize_path
@@ -307,6 +308,92 @@ class TestMigrations:
         for row in rows:
             assert row["content_hash"] == _hash_observation(row["content"])
 
+    def test_archive_backfill_archives_resolved_stale_entities(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "stale",
+                    "entityType": "task",
+                    "observations": ["x"],
+                    "status": "resolved",
+                },
+                {
+                    "name": "fresh",
+                    "entityType": "task",
+                    "observations": ["x"],
+                    "status": "resolved",
+                },
+            ],
+        )
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'stale'"
+        )
+        db._db.execute("DELETE FROM schema_version WHERE version = 27")
+        db._db.commit()
+
+        run_migrations(db._db)
+
+        assert db.get_entity("proj", "stale").status == "archived"
+        assert db.get_entity("proj", "fresh").status == "resolved"
+
+    def test_archive_backfill_spares_never_evict_entities(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "used", "entityType": "task", "observations": ["x"], "status": "resolved"}],
+        )
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'used'"
+        )
+        db._db.commit()
+        db.record_surfaced("search_nodes", "q", "rid", [("proj", "used", 1)])
+        db.register_use("proj", "used", window_seconds=1800, max_per_day=3)
+        db._db.execute("DELETE FROM schema_version WHERE version = 27")
+        db._db.commit()
+
+        run_migrations(db._db)
+
+        assert db.get_entity("proj", "used").status == "resolved"
+
+    def test_archive_backfill_with_empty_telemetry_archives_all_stale(
+        self, db: DatabaseManager
+    ) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "a", "entityType": "task", "observations": ["x"], "status": "resolved"},
+                {"name": "b", "entityType": "task", "observations": ["x"], "status": "resolved"},
+            ],
+        )
+        db._db.execute("UPDATE entities SET updated_at = datetime('now', '-60 days')")
+        db._db.execute("DELETE FROM schema_version WHERE version = 27")
+        db._db.commit()
+        assert db._db.execute("SELECT COUNT(*) FROM surfaced_entities").fetchone()[0] == 0
+
+        run_migrations(db._db)
+
+        assert db.get_entity("proj", "a").status == "archived"
+        assert db.get_entity("proj", "b").status == "archived"
+
+    def test_archive_backfill_is_idempotent(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "stale", "entityType": "task", "observations": ["x"], "status": "resolved"}],
+        )
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'stale'"
+        )
+        db._db.execute("DELETE FROM schema_version WHERE version = 27")
+        db._db.commit()
+        run_migrations(db._db)
+        assert db.get_entity("proj", "stale").status == "archived"
+
+        db._db.execute("DELETE FROM schema_version WHERE version = 27")
+        db._db.commit()
+        run_migrations(db._db)
+
+        assert db.get_entity("proj", "stale").status == "archived"
+
 
 class TestConnectionPragmas:
     def test_busy_timeout_is_set(self, db: DatabaseManager) -> None:
@@ -514,6 +601,205 @@ class TestPruneSurfaced:
 
         reopened = DatabaseManager(db_path)
         reopened.close()
+
+
+class TestArchiveStale:
+    def test_archives_resolved_entity_past_threshold(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["x"], "status": "resolved"}],
+        )
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'"
+        )
+        db._db.commit()
+
+        assert db.archive_stale_entities(threshold_days=56) == 1
+        assert db.get_entity("proj", "e1").status == "archived"
+
+    def test_keeps_resolved_entity_inside_threshold(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["x"], "status": "resolved"}],
+        )
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-10 days') WHERE name = 'e1'"
+        )
+        db._db.commit()
+
+        assert db.archive_stale_entities(threshold_days=56) == 0
+        assert db.get_entity("proj", "e1").status == "resolved"
+
+    def test_keeps_entity_used_after_surfacing(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["x"], "status": "resolved"}],
+        )
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        db.record_surfaced("search_nodes", "q", "rid", [("proj", "e1", 1)])
+        db.register_use("proj", "e1", window_seconds=1800, max_per_day=3)
+
+        assert db.archive_stale_entities(threshold_days=56) == 0
+        assert db.get_entity("proj", "e1").status == "resolved"
+
+    def test_keeps_surfaced_but_unused_entity_archivable(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["x"], "status": "resolved"}],
+        )
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        db.record_surfaced("search_nodes", "q", "rid", [("proj", "e1", 1)])
+
+        assert db.archive_stale_entities(threshold_days=56) == 1
+        assert db.get_entity("proj", "e1").status == "archived"
+
+    def test_ignores_non_resolved_statuses(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["x"], "status": "in-progress"}],
+        )
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'"
+        )
+        db._db.commit()
+
+        assert db.archive_stale_entities(threshold_days=56) == 0
+        assert db.get_entity("proj", "e1").status == "in-progress"
+
+    def test_ignores_soft_deleted_entity(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["x"], "status": "resolved"}],
+        )
+        db._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'"
+        )
+        db._db.commit()
+        db.soft_delete_entity("proj", "e1")
+
+        assert db.archive_stale_entities(threshold_days=56) == 0
+
+    def test_startup_archives_stale_entities_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MCP_MEMORY_ARCHIVE_ENABLED", raising=False)
+        db_path = tmp_path / "memory.db"
+        first = DatabaseManager(db_path)
+        first.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["x"], "status": "resolved"}],
+        )
+        first._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'"
+        )
+        first._db.commit()
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        assert reopened.get_entity("proj", "e1").status == "archived"
+        reopened.close()
+
+    def test_startup_archives_nothing_when_disabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_ARCHIVE_ENABLED", "false")
+        db_path = tmp_path / "memory.db"
+        first = DatabaseManager(db_path)
+        first.create_entities(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["x"], "status": "resolved"}],
+        )
+        first._db.execute(
+            "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'"
+        )
+        first._db.commit()
+        first.close()
+
+        reopened = DatabaseManager(db_path)
+        assert reopened.get_entity("proj", "e1").status == "resolved"
+        reopened.close()
+
+
+class TestArchivedExclusion:
+    def test_null_status_entity_is_still_returned_by_default(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["keyword"]}]
+        )
+        result = db.search_nodes("proj", "keyword")
+        assert [e.name for e in result["entities"]] == ["e1"]
+
+    def test_archived_entity_is_absent_from_search_by_default(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "e1",
+                    "entityType": "task",
+                    "observations": ["keyword"],
+                    "status": "archived",
+                }
+            ],
+        )
+        result = db.search_nodes("proj", "keyword")
+        assert result["entities"] == []
+
+    def test_explicit_archived_status_filter_returns_archived(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "e1",
+                    "entityType": "task",
+                    "observations": ["keyword"],
+                    "status": "archived",
+                }
+            ],
+        )
+        result = db.search_nodes("proj", "keyword", status="archived")
+        assert [e.name for e in result["entities"]] == ["e1"]
+
+    def test_include_archived_returns_archived_alongside_live(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "a",
+                    "entityType": "task",
+                    "observations": ["keyword"],
+                    "status": "archived",
+                },
+                {"name": "b", "entityType": "task", "observations": ["keyword"]},
+            ],
+        )
+        result = db.search_nodes("proj", "keyword", include_archived=True)
+        assert {e.name for e in result["entities"]} == {"a", "b"}
+
+    def test_explicit_status_filter_ignores_include_archived(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {
+                    "name": "a",
+                    "entityType": "task",
+                    "observations": ["keyword"],
+                    "status": "resolved",
+                },
+                {
+                    "name": "b",
+                    "entityType": "task",
+                    "observations": ["keyword"],
+                    "status": "archived",
+                },
+            ],
+        )
+        result = db.search_nodes("proj", "keyword", status="resolved", include_archived=True)
+        assert [e.name for e in result["entities"]] == ["a"]
 
 
 class TestDeleteEntityPurgesSurfaced:

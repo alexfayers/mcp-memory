@@ -104,6 +104,8 @@ SEARCH_NODES_DESC = (
     "Optionally filter by entityType, status (a single value or a list, OR'd together), "
     "and/or date range (start/end support relative formats like '30m', '1h', '7d', '2w', "
     "'3mo' and ISO dates). "
+    "Archived entities are hidden unless status explicitly asks for them or "
+    "include_archived=true is passed. "
     "Within each returned entity, observations are ordered best-first by their own votes "
     "(see vote). Each observation carries a content_hash usable with "
     "vote, delete_observations, and merge_observations to address it without "
@@ -177,6 +179,8 @@ MOVE_ENTITY_CROSS_SCOPE_DESC = (
 SET_ENTITY_STATUS_DESC = (
     "Set or clear the status of an entity. "
     "Valid statuses: planned, in-progress, blocked, resolved, archived. Use null to clear. "
+    "archived entities are hidden from search_nodes/search_all_projects by default; pass "
+    "status='archived' or include_archived=true to see them. "
     "This is the only correct way to record status; a `STATUS:` observation is wrong."
 )
 VOTE_DESC = (
@@ -262,6 +266,8 @@ SEARCH_ALL_PROJECTS_DESC = (
     "(resolved server-side via get_group_members) - this replaces having to call "
     "get_group_members yourself and pass the resolved list. expand_groups=true requires "
     "projects to be set. "
+    "Archived entities are hidden unless status explicitly asks for them or "
+    "include_archived=true is passed. "
     "Use compact=true to omit observations for a lightweight summary."
     + _MAX_OBSERVATION_CHARS_DOC
     + _RELATIONS_WIRE_DOC
@@ -514,6 +520,7 @@ def search_nodes(
     compact: bool = False,
     match_all: bool = False,
     max_observation_chars: int | None = None,
+    include_archived: bool = False,
 ) -> dict[str, object]:
     """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
     try:
@@ -529,6 +536,7 @@ def search_nodes(
             compact=compact,
             match_all=match_all,
             max_observation_chars=max_observation_chars,
+            include_archived=include_archived,
         )
         return _prepare_read_result(result)
     except Exception as e:
@@ -705,6 +713,7 @@ def search_all_projects(
     max_observation_chars: int | None = None,
     projects: list[str] | None = None,
     expand_groups: bool = False,
+    include_archived: bool = False,
 ) -> dict[str, object]:
     """Search entities across all projects, returning results grouped by project."""
     try:
@@ -723,6 +732,7 @@ def search_all_projects(
             compact=compact,
             match_all=match_all,
             max_observation_chars=max_observation_chars,
+            include_archived=include_archived,
         )
 
         by_project = result.get("relations_by_project", {})

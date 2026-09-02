@@ -44,6 +44,7 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names counted at reduced weight toward the gate (comma-separated) | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `replace_in_file`, `write_to_file` |
 | `MCP_MEMORY_CALL_METRICS_ENABLED` | Record per-call usage metrics (byte-size proxies and option usage). | `true` |
 | `MCP_MEMORY_CALL_METRICS_RETENTION_DAYS` | Days of tool-call usage telemetry retained before pruning. | `90` |
+| `MCP_MEMORY_ARCHIVE_ENABLED` | On startup, auto-archive resolved entities untouched for 56+ days that were never acted on after being surfaced. | `true` |
 | `MCP_MEMORY_GC_ENABLED` | On startup, soft-delete downvoted orphan entities (score at/below `-10` with no live incoming relation). Reversible; the purge below is the only permanent removal. | off |
 | `MCP_MEMORY_PURGE_ENABLED` | On startup, hard-delete soft-deleted entities older than the grace window | off |
 | `MCP_MEMORY_PURGE_GRACE_DAYS` | How long a soft-deleted entity is retained before it may be purged | `30` |
@@ -196,7 +197,7 @@ Get an entity with all its relations and connected entities via graph traversal,
 
 ### set_entity_status
 
-Set or clear the status of an entity. Valid statuses: `planned`, `in-progress`, `blocked`, `resolved`, `archived`.
+Set or clear the status of an entity. Valid statuses: `planned`, `in-progress`, `blocked`, `resolved`, `archived`. `archived` entities are hidden from `search_nodes`/`search_all_projects` by default; pass `status="archived"` or `include_archived=true` to see them.
 
 ### vote
 

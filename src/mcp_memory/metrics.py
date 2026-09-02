@@ -29,6 +29,7 @@ _TRACKED_OPTIONS = frozenset(
     {
         "compact",
         "match_all",
+        "include_archived",
         "max_observation_chars",
         "limit",
         "k",

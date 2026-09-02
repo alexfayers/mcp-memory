@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 
 from .config import (
+    get_archive_enabled,
     get_call_metrics_retention_days,
     get_gc_enabled,
     get_max_observation_chars,
@@ -72,6 +73,9 @@ _TYPE_HALF_LIFE_DAYS: dict[str, float] = {
     "pattern": 365.0,
     "user-preferences": 365.0,
 }
+
+# How long a resolved entity may go untouched before it is eligible for auto-archiving.
+_ARCHIVE_STALE_DAYS = int(4 * _TYPE_HALF_LIFE_DAYS["task"])
 
 # Usefulness votes nudge ranking by a bounded multiplier 1 + weight*tanh(score/scale), so a
 # runaway score cannot dominate BM25 and a downvoted entity sinks but stays findable.
@@ -138,11 +142,14 @@ def _search_nodes_filters(
     status: EntityStatus | list[EntityStatus] | None,
     start: str | None,
     end: str | None,
+    *,
+    include_archived: bool = False,
 ) -> tuple[str, list[str | int]]:
     """Build the WHERE-clause fragment and params for ``search_nodes``' optional filters.
 
     The fragment is appended to that query's base SQL, so it assumes its table aliases
-    (``e``, ``et``, ``p``) are in scope.
+    (``e``, ``et``, ``p``) are in scope. Archived entities are excluded unless
+    ``include_archived`` is set or an explicit ``status`` filter is given.
     """
     sql = ""
     params: list[str | int] = []
@@ -159,6 +166,9 @@ def _search_nodes_filters(
         statuses = [status] if isinstance(status, str) else status
         sql += f" AND e.status IN ({','.join('?' * len(statuses))})"
         params.extend(statuses)
+    elif not include_archived:
+        sql += " AND e.status IS NOT ?"
+        params.append("archived")
     if start is not None:
         sql += " AND datetime(e.created_at) >= datetime(?)"
         params.append(_parse_date(start))
@@ -208,6 +218,8 @@ class DatabaseManager:
                 self.gc_downvoted_orphans()
             if get_purge_enabled():
                 self.purge_soft_deleted(get_purge_grace_days())
+            if get_archive_enabled():
+                self.archive_stale_entities()
         except sqlite3.OperationalError:
             pass
 
@@ -1297,6 +1309,26 @@ class DatabaseManager:
             )
         return cursor.rowcount
 
+    def archive_stale_entities(self, threshold_days: int = _ARCHIVE_STALE_DAYS) -> int:
+        """Auto-archive stale resolved entities, returning the number archived.
+
+        Archives an entity that is all of: live, status='resolved', last updated more than
+        threshold_days ago, and outside the never-evict set - entities ever acted on after
+        being surfaced (a row in surfaced_entities with used_at set). Any write or acted-on
+        retrieval bumps updated_at, so renewal is already handled elsewhere.
+        """
+        with self._db:
+            cursor = self._db.execute(
+                "UPDATE entities SET status = 'archived' "
+                "WHERE deleted_at IS NULL "
+                "AND status = 'resolved' "
+                "AND updated_at < datetime('now', ?) "
+                "AND name NOT IN "
+                "(SELECT entity_name FROM surfaced_entities WHERE used_at IS NOT NULL)",
+                (f"-{threshold_days} days",),
+            )
+        return cursor.rowcount
+
     def delete_relation(self, project: str, source: str, target: str, relation_type: str) -> None:
         """Delete a specific relation between two entities."""
         project_id = self._get_or_create_project_id(project)
@@ -1486,6 +1518,7 @@ class DatabaseManager:
         match_all: bool = False,
         max_observation_chars: int | None = None,
         now: datetime | None = None,
+        include_archived: bool = False,
     ) -> NodeList:
         """Search entities using FTS5 full-text search with recency-weighted BM25 ranking.
 
@@ -1494,7 +1527,8 @@ class DatabaseManager:
         ``now`` pins the instant recency decay is measured from, defaulting to the current
         time; a replay (see ``eval.evaluate``) passes a fixed instant so the same graph scores
         identically on any day. Exact score ties break on ascending entity id, since the FTS
-        scan order is implementation-defined.
+        scan order is implementation-defined. Archived entities are excluded unless
+        ``include_archived`` is set or an explicit ``status`` is given.
         """
         sanitized = self._sanitize_fts_query(query, match_all=match_all)
         if not sanitized:
@@ -1513,7 +1547,9 @@ class DatabaseManager:
         )
         params: list[str | int] = [sanitized]
 
-        filter_sql, filter_params = _search_nodes_filters(project, entity_type, status, start, end)
+        filter_sql, filter_params = _search_nodes_filters(
+            project, entity_type, status, start, end, include_archived=include_archived
+        )
         sql += filter_sql
         params.extend(filter_params)
 
