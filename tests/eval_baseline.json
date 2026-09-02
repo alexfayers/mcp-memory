@@ -1,0 +1,11 @@
+{
+  "k": 10,
+  "query_count": 96,
+  "metrics": {
+    "mean_precision_at_k": 0.2099,
+    "mrr": 0.5661,
+    "mean_recall_at_k": 0.835,
+    "mean_ndcg_at_k": 0.6061,
+    "mean_success_at_k": 0.8438
+  }
+}

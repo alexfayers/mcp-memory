@@ -22,7 +22,7 @@ _DEFAULT_DREAM_HEAVY_POLL_SECONDS = "900"
 _DEFAULT_DREAM_HEAVY_TIMEOUT = "600"
 _DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
 _DEFAULT_PURGE_GRACE_DAYS = "30"
-_DEFAULT_SURFACED_RETENTION_DAYS = "180"
+_DEFAULT_SURFACED_RETENTION_DAYS = "-1"
 _DEFAULT_CALL_METRICS_RETENTION_DAYS = "90"
 _DEFAULT_EVAL_CACHE_TTL_SECONDS = "300"
 _DEFAULT_MAX_OBSERVATION_CHARS = "2000"
@@ -226,7 +226,11 @@ def get_purge_grace_days() -> int:
 
 
 def get_surfaced_retention_days() -> int:
-    """Return how long surfaced_entities retrieval telemetry is retained before pruning."""
+    """Return how long surfaced_entities retrieval telemetry is retained before pruning.
+
+    Negative values mean unlimited (the default): the used_at labels are the ranking eval's
+    only ground truth and cannot be regenerated once deleted.
+    """
     return int(
         os.environ.get("MCP_MEMORY_SURFACED_RETENTION_DAYS", _DEFAULT_SURFACED_RETENTION_DAYS)
     )

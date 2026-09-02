@@ -9,3 +9,6 @@ type-check:
 
 test *args:
     uv run pytest {{args}}
+
+baseline *args:
+    uv run python -m tests.regen_eval_baseline {{args}}

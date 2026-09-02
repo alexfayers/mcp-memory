@@ -15,6 +15,7 @@ import sqlite3
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .config import get_eval_cache_ttl_seconds
@@ -154,7 +155,11 @@ def iter_labelled_queries(
 
 
 def evaluate(
-    db: DatabaseManager, k: int = 10, since: str | None = None, min_content_tokens: int = 0
+    db: DatabaseManager,
+    k: int = 10,
+    since: str | None = None,
+    min_content_tokens: int = 0,
+    now: datetime | None = None,
 ) -> EvalReport:
     """Score current ranking quality by replaying each labelled query against the live graph.
 
@@ -164,6 +169,8 @@ def evaluate(
     with no usable labels yields an all-zero report. When ``since`` is given, only retrievals
     surfaced on or after that instant are scored. When ``min_content_tokens`` is given,
     degenerate short queries are excluded from the labelled set (see ``iter_labelled_queries``).
+    ``now`` is forwarded to every replayed search as the instant recency decay is measured
+    from, so a fixed graph yields identical metrics on any day.
     """
     precisions: list[float] = []
     reciprocal_ranks: list[float] = []
@@ -174,7 +181,7 @@ def evaluate(
         if not labelled.relevant:
             continue
         result = db.search_nodes(
-            labelled.project, labelled.query, limit=max(k, len(labelled.ranked))
+            labelled.project, labelled.query, limit=max(k, len(labelled.ranked)), now=now
         )
         ranked_now = [entity.name for entity in result["entities"]]
         precisions.append(precision_at_k(ranked_now, labelled.relevant, k))

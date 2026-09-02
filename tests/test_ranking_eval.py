@@ -17,6 +17,15 @@ import pytest
 from mcp_memory import cli
 from mcp_memory import eval as ranking_eval
 from mcp_memory.database import DatabaseManager
+from tests.eval_harness import (
+    _FIXTURE_LATER,
+    _FIXTURE_NOW,
+    _pinned,
+    assert_no_regression,
+    attach_eval_report,
+    mark_used,
+    measure_change,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -48,6 +57,40 @@ def _rank_of(name: str, entities: list[Entity]) -> int:
     return -1
 
 
+def _build_eval_fixture(db: DatabaseManager) -> None:
+    """Seed a labelled-query fixture whose every timestamp is pinned to a fixed instant.
+
+    Two entities share the query terms with identical FTS documents (same token counts, so
+    identical BM25) and differ only in type half-life and age, so their order depends purely
+    on the injected clock. A third entity carries a second, unambiguous query.
+    """
+    db.create_entities(
+        "proj",
+        [
+            {"name": "task/fresh", "entityType": "task", "observations": ["backoff retry"]},
+            {"name": "pattern/slow", "entityType": "pattern", "observations": ["backoff retry"]},
+            {"name": "task/unrelated", "entityType": "task", "observations": ["cache eviction"]},
+        ],
+    )
+    pinned = _pinned(0)
+    db._db.execute("UPDATE entities SET created_at = ?, updated_at = ?", (pinned, pinned))
+    db._db.execute(
+        "UPDATE entities SET created_at = ?, updated_at = ? WHERE name = 'pattern/slow'",
+        (_pinned(184), _pinned(184)),
+    )
+    db.record_surfaced(
+        "search_nodes",
+        "backoff retry",
+        "rid-1",
+        [("proj", "task/fresh", 1), ("proj", "pattern/slow", 2)],
+    )
+    db.record_surfaced("search_nodes", "cache eviction", "rid-2", [("proj", "task/unrelated", 1)])
+    db._db.execute("UPDATE surfaced_entities SET surfaced_at = ?", (pinned,))
+    db._db.commit()
+    mark_used(db, "rid-1", "pattern/slow")
+    mark_used(db, "rid-2", "task/unrelated")
+
+
 class TestTypeAwareDecay:
     def test_durable_pattern_not_buried_below_fresh_task(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -62,6 +105,41 @@ class TestTypeAwareDecay:
 
         entities = db.search_nodes("proj", "backoff")["entities"]
         assert _rank_of("pattern/retry", entities) < _rank_of("task/retry", entities)
+
+
+class TestInjectableClock:
+    def test_ranking_uses_the_injected_now_not_the_wall_clock(self, db: DatabaseManager) -> None:
+        _build_eval_fixture(db)
+
+        early = db.search_nodes("proj", "backoff retry", now=_FIXTURE_NOW)["entities"]
+        # task/fresh (14d half-life) decays past pattern/slow (365d half-life) well before
+        # _FIXTURE_LATER, so the same two entities swap order depending only on the clock.
+        later = db.search_nodes("proj", "backoff retry", now=_FIXTURE_LATER)["entities"]
+
+        assert [e.name for e in early] == ["task/fresh", "pattern/slow"]
+        assert [e.name for e in later] == ["pattern/slow", "task/fresh"]
+
+
+class TestDeterministicTiebreak:
+    """Permanent guard, not a red/green slice: FTS5's rowid-ordered doclist already agrees
+    with ascending entity id for this fixture, so old and new code produce the same order.
+    """
+
+    def test_exact_score_tie_orders_by_entity_id(self, db: DatabaseManager) -> None:
+        db.create_entities(
+            "proj",
+            [
+                {"name": "task/aa1", "entityType": "task", "observations": ["identical text"]},
+                {"name": "task/aa2", "entityType": "task", "observations": ["identical text"]},
+            ],
+        )
+        pinned = _pinned(0)
+        db._db.execute("UPDATE entities SET created_at = ?, updated_at = ?", (pinned, pinned))
+        db._db.commit()
+
+        entities = db.search_nodes("proj", "identical text")["entities"]
+
+        assert [e.name for e in entities] == ["task/aa1", "task/aa2"]
 
 
 class TestMetricFunctions:
@@ -160,10 +238,7 @@ class TestIterLabelledQueries:
         db.record_surfaced(
             "search_nodes", "q", "rid-1", [("proj", "task/a", 1), ("proj", "task/b", 2)]
         )
-        db._db.execute(
-            "UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP WHERE entity_name = 'task/a'"
-        )
-        db._db.commit()
+        mark_used(db, "rid-1", "task/a")
 
         query = next(iter(ranking_eval.iter_labelled_queries(db)))
 
@@ -207,8 +282,7 @@ class TestEvaluate:
             "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
         )
         db.record_surfaced("search_nodes", "needle", "rid-1", [("proj", "task/a", 1)])
-        db._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
-        db._db.commit()
+        mark_used(db, "rid-1", "task/a")
 
         report = ranking_eval.evaluate(db, k=5)
 
@@ -236,11 +310,7 @@ class TestEvaluate:
             "rid-1",
             [("proj", "task/used", 1), ("proj", "task/noise", 2)],
         )
-        db._db.execute(
-            "UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP "
-            "WHERE entity_name = 'task/used'"
-        )
-        db._db.commit()
+        mark_used(db, "rid-1", "task/used")
 
         report = ranking_eval.evaluate(db, k=1)
 
@@ -271,7 +341,8 @@ class TestEvaluate:
         )
         db.record_surfaced("search_nodes", "needle", "rid-old", [("proj", "task/a", 1)])
         db.record_surfaced("search_nodes", "needle", "rid-recent", [("proj", "task/a", 1)])
-        db._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
+        mark_used(db, "rid-old", "task/a")
+        mark_used(db, "rid-recent", "task/a")
         db._db.execute(
             "UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days') "
             "WHERE retrieval_id = 'rid-old'"
@@ -293,8 +364,8 @@ class TestEvaluate:
         db.record_surfaced(
             "search_nodes", "deploy notification", "rid-long", [("proj", "task/b", 1)]
         )
-        db._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
-        db._db.commit()
+        mark_used(db, "rid-short", "task/a")
+        mark_used(db, "rid-long", "task/b")
 
         assert ranking_eval.evaluate(db, k=5).query_count == 2
         assert ranking_eval.evaluate(db, k=5, min_content_tokens=2).query_count == 1
@@ -477,8 +548,7 @@ class TestBudgetingIsOrthogonalToRanking:
             "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle haystack"]}]
         )
         db.record_surfaced("search_nodes", "needle haystack", "rid-1", [("proj", "task/a", 1)])
-        db._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
-        db._db.commit()
+        mark_used(db, "rid-1", "task/a")
 
         report = ranking_eval.evaluate(db, k=5)
 
@@ -533,8 +603,7 @@ class TestEvalCommand:
             "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
         )
         seed.record_surfaced("search_nodes", "needle", "rid-1", [("proj", "task/a", 1)])
-        seed._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
-        seed._db.commit()
+        mark_used(seed, "rid-1", "task/a")
         seed.close()
 
         monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
@@ -565,7 +634,8 @@ class TestEvalCommand:
         )
         seed.record_surfaced("search_nodes", "needle", "rid-old", [("proj", "task/a", 1)])
         seed.record_surfaced("search_nodes", "needle", "rid-recent", [("proj", "task/a", 1)])
-        seed._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
+        mark_used(seed, "rid-old", "task/a")
+        mark_used(seed, "rid-recent", "task/a")
         seed._db.execute(
             "UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days') "
             "WHERE retrieval_id = 'rid-old'"
@@ -599,8 +669,8 @@ class TestEvalCommand:
         seed.record_surfaced(
             "search_nodes", "deploy notification", "rid-long", [("proj", "task/b", 1)]
         )
-        seed._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
-        seed._db.commit()
+        mark_used(seed, "rid-short", "task/a")
+        mark_used(seed, "rid-long", "task/b")
         seed.close()
 
         monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
@@ -612,6 +682,52 @@ class TestEvalCommand:
         out = capsys.readouterr().out
         assert "1 labelled queries (k=5, min_content_tokens=2)" in out
 
+    def test_eval_command_does_not_prune_surfaced_labels(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        db_path = tmp_path / "cli-eval-retention.db"
+        seed = DatabaseManager(db_path)
+        seed.create_entities(
+            "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
+        )
+        seed.record_surfaced("search_nodes", "needle", "rid-1", [("proj", "task/a", 1)])
+        mark_used(seed, "rid-1", "task/a")
+        seed._db.execute("UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days')")
+        seed._db.commit()
+        seed.close()
+
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
+        monkeypatch.setenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", "1")
+        monkeypatch.setattr("sys.argv", ["mcp-memory", "eval", "--k", "5"])
+        cli.main()
+
+        out = capsys.readouterr().out
+        assert "1 labelled queries (k=5)" in out
+
+        reopened = DatabaseManager.connect_readonly(db_path)
+        row = reopened._db.execute("SELECT COUNT(*) AS n FROM surfaced_entities").fetchone()
+        assert row["n"] == 1
+        reopened.close()
+
+    def test_eval_command_errors_when_the_database_is_missing(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        db_path = tmp_path / "does-not-exist.db"
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
+        monkeypatch.setattr("sys.argv", ["mcp-memory", "eval"])
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli.main()
+
+        assert excinfo.value.code == 1
+        assert str(db_path) in capsys.readouterr().err
+
 
 class TestEvaluateReadonly:
     def test_matches_evaluate_on_shared_connection(
@@ -621,8 +737,7 @@ class TestEvaluateReadonly:
             "proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}]
         )
         db.record_surfaced("search_nodes", "needle", "rid-1", [("proj", "task/a", 1)])
-        db._db.execute("UPDATE surfaced_entities SET used_at = CURRENT_TIMESTAMP")
-        db._db.commit()
+        mark_used(db, "rid-1", "task/a")
 
         expected = ranking_eval.evaluate(db, k=5)
 
@@ -652,3 +767,91 @@ class TestEvaluateReadonly:
         assert len(opened) == 1
         with pytest.raises(sqlite3.ProgrammingError):
             opened[0]._db.execute("SELECT 1")
+
+
+class TestEvalDeterminism:
+    def test_repeated_runs_on_the_pinned_fixture_are_identical(self, db: DatabaseManager) -> None:
+        _build_eval_fixture(db)
+
+        first = ranking_eval.evaluate(db, k=10, now=_FIXTURE_NOW)
+        second = ranking_eval.evaluate(db, k=10, now=_FIXTURE_NOW)
+
+        assert first == second
+        assert first.query_count == 2
+
+    def test_pinned_fixture_metrics_are_the_baseline(self, db: DatabaseManager) -> None:
+        _build_eval_fixture(db)
+
+        report = ranking_eval.evaluate(db, k=10, now=_FIXTURE_NOW)
+
+        assert report.query_count == 2
+        assert report.mean_precision_at_k == pytest.approx(0.75)
+        assert report.mrr == pytest.approx(0.75)
+        assert report.mean_recall_at_k == pytest.approx(1.0)
+        assert report.mean_ndcg_at_k == pytest.approx((1 / math.log2(3) + 1.0) / 2)
+        assert report.mean_success_at_k == pytest.approx(1.0)
+
+    def test_metrics_follow_the_injected_now(self, db: DatabaseManager) -> None:
+        _build_eval_fixture(db)
+
+        assert ranking_eval.evaluate(db, k=10, now=_FIXTURE_NOW).mrr == pytest.approx(0.75)
+        assert ranking_eval.evaluate(db, k=10, now=_FIXTURE_LATER).mrr == pytest.approx(1.0)
+
+
+class TestArchivingEffectOnEval:
+    """Measures the archive tier's ranking effect deterministically against the pinned
+    fixture and its own `now`, rather than by eyeballing wall-clock CLI drift.
+    """
+
+    def test_archiving_irrelevant_entities_does_not_reduce_metrics(
+        self, db: DatabaseManager, request: pytest.FixtureRequest
+    ) -> None:
+        _build_eval_fixture(db)
+        relevant = {name for q in ranking_eval.iter_labelled_queries(db) for name in q.relevant}
+
+        def archive_irrelevant(db: DatabaseManager) -> None:
+            names = ("task/fresh", "pattern/slow", "task/unrelated")
+            for name in names:
+                if name not in relevant:
+                    db.set_entity_status("proj", name, "archived")
+
+        result = measure_change(db, archive_irrelevant, now=_FIXTURE_NOW)
+
+        assert_no_regression(result, request)
+
+    def test_archiving_a_relevant_entity_reduces_recall(
+        self, db: DatabaseManager, request: pytest.FixtureRequest
+    ) -> None:
+        """The one failure mode archiving can cause: a relevant entity drops out of results.
+
+        This is the entire justification for `evaluate()` having no `include_archived`
+        escape hatch - it must see exactly what an agent sees, so this loss is visible.
+        """
+        _build_eval_fixture(db)
+
+        def archive_relevant(db: DatabaseManager) -> None:
+            db.set_entity_status("proj", "pattern/slow", "archived")
+
+        result = measure_change(db, archive_relevant, now=_FIXTURE_NOW)
+        attach_eval_report(request, result)
+
+        assert result.deltas["mean_recall_at_k"] < 0
+
+    def test_archive_stale_entities_spares_every_labelled_relevant_entity(
+        self, db: DatabaseManager
+    ) -> None:
+        """Pins the never-evict exclusion against the eval's own ground truth."""
+        _build_eval_fixture(db)
+        relevant = {name for q in ranking_eval.iter_labelled_queries(db) for name in q.relevant}
+
+        for name in ("task/fresh", "pattern/slow", "task/unrelated"):
+            db.set_entity_status("proj", name, "resolved")
+            _backdate(db, name, 60)
+
+        db.archive_stale_entities()
+
+        for name in relevant:
+            assert db.get_entity("proj", name).status != "archived"
+        # task/fresh is not labelled-relevant, so it is fair game for the sweep - confirms
+        # the sweep actually ran rather than trivially sparing everything.
+        assert db.get_entity("proj", "task/fresh").status == "archived"

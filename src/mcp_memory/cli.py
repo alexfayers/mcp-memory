@@ -324,7 +324,12 @@ def _cmd_eval(args: argparse.Namespace) -> None:
     from .database import DatabaseManager
     from .eval import evaluate
 
-    db = DatabaseManager(get_db_path())
+    db_path = get_db_path()
+    if not db_path.exists():
+        print(f"Error: database not found: {db_path}", file=sys.stderr)
+        sys.exit(1)
+
+    db = DatabaseManager.connect_readonly(db_path)
     try:
         report = evaluate(db, args.k, since=args.since, min_content_tokens=args.min_content_tokens)
     finally:

@@ -132,6 +132,42 @@ def _budget_observations(observations: list[Observation], max_chars: int) -> lis
     return kept
 
 
+def _search_nodes_filters(
+    project: str | list[str] | None,
+    entity_type: str | None,
+    status: EntityStatus | list[EntityStatus] | None,
+    start: str | None,
+    end: str | None,
+) -> tuple[str, list[str | int]]:
+    """Build the WHERE-clause fragment and params for ``search_nodes``' optional filters.
+
+    The fragment is appended to that query's base SQL, so it assumes its table aliases
+    (``e``, ``et``, ``p``) are in scope.
+    """
+    sql = ""
+    params: list[str | int] = []
+    if isinstance(project, str):
+        sql += " AND p.name = ?"
+        params.append(project)
+    elif project is not None:
+        sql += f" AND p.name IN ({','.join('?' * len(project))})"
+        params.extend(project)
+    if entity_type is not None:
+        sql += " AND et.name = ?"
+        params.append(entity_type)
+    if status is not None:
+        statuses = [status] if isinstance(status, str) else status
+        sql += f" AND e.status IN ({','.join('?' * len(statuses))})"
+        params.extend(statuses)
+    if start is not None:
+        sql += " AND datetime(e.created_at) >= datetime(?)"
+        params.append(_parse_date(start))
+    if end is not None:
+        sql += " AND datetime(e.created_at) <= datetime(?)"
+        params.append(_parse_date(end))
+    return sql, params
+
+
 def _validate_vote(vote: int) -> None:
     """Raise ValueError unless vote is a nonzero integer within MAX_VOTE_MAGNITUDE."""
     if vote == 0 or abs(vote) > MAX_VOTE_MAGNITUDE:
@@ -981,7 +1017,12 @@ class DatabaseManager:
             return int(row["vote_score"])
 
     def prune_surfaced_entities(self, retention_days: int) -> int:
-        """Delete retrieval telemetry older than the retention window, returning the row count."""
+        """Delete retrieval telemetry older than the retention window, returning the row count.
+
+        A negative window means unlimited retention: nothing is deleted and 0 is returned.
+        """
+        if retention_days < 0:
+            return 0
         with self._db:
             cursor = self._db.execute(
                 "DELETE FROM surfaced_entities WHERE surfaced_at < datetime('now', ?)",
@@ -1444,11 +1485,16 @@ class DatabaseManager:
         compact: bool = False,
         match_all: bool = False,
         max_observation_chars: int | None = None,
+        now: datetime | None = None,
     ) -> NodeList:
         """Search entities using FTS5 full-text search with recency-weighted BM25 ranking.
 
         Multi-term queries match any term by default; pass match_all to require all terms.
         A list of statuses is OR'd together. A list of projects unions results across them.
+        ``now`` pins the instant recency decay is measured from, defaulting to the current
+        time; a replay (see ``eval.evaluate``) passes a fixed instant so the same graph scores
+        identically on any day. Exact score ties break on ascending entity id, since the FTS
+        scan order is implementation-defined.
         """
         sanitized = self._sanitize_fts_query(query, match_all=match_all)
         if not sanitized:
@@ -1467,29 +1513,14 @@ class DatabaseManager:
         )
         params: list[str | int] = [sanitized]
 
-        if isinstance(project, str):
-            sql += " AND p.name = ?"
-            params.append(project)
-        elif project is not None:
-            sql += f" AND p.name IN ({','.join('?' * len(project))})"
-            params.extend(project)
-        if entity_type is not None:
-            sql += " AND et.name = ?"
-            params.append(entity_type)
-        if status is not None:
-            statuses = [status] if isinstance(status, str) else status
-            sql += f" AND e.status IN ({','.join('?' * len(statuses))})"
-            params.extend(statuses)
-        if start is not None:
-            sql += " AND datetime(e.created_at) >= datetime(?)"
-            params.append(_parse_date(start))
-        if end is not None:
-            sql += " AND datetime(e.created_at) <= datetime(?)"
-            params.append(_parse_date(end))
+        filter_sql, filter_params = _search_nodes_filters(project, entity_type, status, start, end)
+        sql += filter_sql
+        params.extend(filter_params)
 
         rows = self._db.execute(sql, params).fetchall()
 
-        now = datetime.now(tz=UTC)
+        if now is None:
+            now = datetime.now(tz=UTC)
         scored: list[tuple[float, sqlite3.Row]] = []
         for row in rows:
             bm25_score = -float(row["rank"])
@@ -1501,7 +1532,7 @@ class DatabaseManager:
             vote_multiplier = 1.0 + _VOTE_WEIGHT * math.tanh(int(row["vote_score"]) / _VOTE_SCALE)
             scored.append((bm25_score * recency * vote_multiplier, row))
 
-        scored.sort(key=lambda x: x[0], reverse=True)
+        scored.sort(key=lambda x: (-x[0], int(x[1]["id"])))
         top_rows = [row for _, row in scored[:limit]]
 
         entities = [

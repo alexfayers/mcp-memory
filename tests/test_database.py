@@ -461,7 +461,18 @@ class TestPruneSurfaced:
         }
         assert remaining == {"new"}
 
-    def test_startup_prunes_old_surfacings(self, tmp_path: Path) -> None:
+    def test_negative_retention_window_prunes_nothing(self, db: DatabaseManager) -> None:
+        db.record_surfaced("search_nodes", "q", "old", [("proj", "task/a", 1)])
+        db._db.execute("UPDATE surfaced_entities SET surfaced_at = datetime('now', '-400 days')")
+        db._db.commit()
+
+        assert db.prune_surfaced_entities(-1) == 0
+        assert db._db.execute("SELECT COUNT(*) AS n FROM surfaced_entities").fetchone()["n"] == 1
+
+    def test_startup_keeps_old_surfacings_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", raising=False)
         db_path = tmp_path / "memory.db"
         first = DatabaseManager(db_path)
         first.record_surfaced("search_nodes", "q", "old", [("proj", "task/a", 1)])
@@ -471,7 +482,7 @@ class TestPruneSurfaced:
 
         reopened = DatabaseManager(db_path)
         count = reopened._db.execute("SELECT COUNT(*) AS n FROM surfaced_entities").fetchone()["n"]
-        assert count == 0
+        assert count == 1
         reopened.close()
 
     def test_startup_retention_respects_env_override(
