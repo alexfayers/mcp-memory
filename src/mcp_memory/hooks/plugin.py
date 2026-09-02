@@ -432,6 +432,7 @@ def _str_dict(value: object) -> dict[str, object]:
 
 
 ENABLE_PROFANITY_CHECK = False
+ENABLE_FRUSTRATION_CHECK = False
 
 _MINCED_OATH = re.compile(
     r"\b(?:"
@@ -605,6 +606,8 @@ class MemoryPlugin(HooksPlugin):
 
     def _frustration_note(self, message: str) -> str | None:
         """Return a tier-scaled frustration nudge, or None when no signal fires."""
+        if not ENABLE_FRUSTRATION_CHECK:
+            return None
         hits = [(label, w) for detect, label, w in _FRUSTRATION_SIGNALS if detect(message)]
         if not hits:
             return None

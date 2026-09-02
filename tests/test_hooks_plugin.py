@@ -16,6 +16,7 @@ from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.plugin import (
     _EDIT_TOOL_WEIGHT,
     _FRUSTRATION_NUDGE_TEMPLATE,
+    ENABLE_FRUSTRATION_CHECK,
     ENABLE_PROFANITY_CHECK,
     MemoryPlugin,
     _build_task_start_context,
@@ -37,6 +38,11 @@ from mcp_memory.path_resolver import normalize_path
 _needs_profanity_check = pytest.mark.skipif(
     not ENABLE_PROFANITY_CHECK,
     reason="profanity detection is gated off by plugin.ENABLE_PROFANITY_CHECK",
+)
+
+_needs_frustration_check = pytest.mark.skipif(
+    not ENABLE_FRUSTRATION_CHECK,
+    reason="frustration nudge is gated off by plugin.ENABLE_FRUSTRATION_CHECK",
 )
 
 _READ_TOOL_NAMES = [
@@ -1207,6 +1213,7 @@ class TestProfanityNudge:
         return next(note for note in result.notes if _FRUSTRATION_MARKER in note)
 
     @_needs_profanity_check
+    @_needs_frustration_check
     def test_fires_when_profanity_detected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("this is broken", True, monkeypatch)
         assert "[elevated]" in note
@@ -1214,6 +1221,7 @@ class TestProfanityNudge:
         assert "profanity" in note
 
     @_needs_profanity_check
+    @_needs_frustration_check
     def test_fires_every_time_with_no_debounce(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: True)
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
@@ -1234,6 +1242,7 @@ class TestProfanityNudge:
             )
         assert result is None
 
+    @_needs_frustration_check
     def test_fires_on_repeated_punct_when_negative_and_not_shouting(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1269,6 +1278,7 @@ class TestProfanityNudge:
             "oh jeez",
         ],
     )
+    @_needs_frustration_check
     def test_fires_on_minced_oath_when_negative_and_not_shouting(
         self, message: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1317,18 +1327,21 @@ class TestProfanityNudge:
             result = plugin.on_hook("UserPromptSubmit", task_id="t1", message=message)
         assert result is None
 
+    @_needs_frustration_check
     def test_minced_oath_alone_is_mild(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("geez", False, monkeypatch)
         assert "[mild]" in note
         assert "vote=1" in note
         assert "a minced oath" in note
 
+    @_needs_frustration_check
     def test_caps_shouting_alone_is_elevated(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("WHY IS THIS STILL BROKEN", False, monkeypatch)
         assert "[elevated]" in note
         assert "vote=2" in note
         assert "all-caps shouting" in note
 
+    @_needs_frustration_check
     def test_caps_plus_punct_is_elevated_and_names_both(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1338,18 +1351,21 @@ class TestProfanityNudge:
         assert "all-caps shouting" in note
         assert "repeated punctuation" in note
 
+    @_needs_frustration_check
     def test_minced_plus_punct_is_elevated(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("geez really???", False, monkeypatch)
         assert "[elevated]" in note
         assert "vote=2" in note
 
     @_needs_profanity_check
+    @_needs_frustration_check
     def test_profanity_plus_caps_is_strong(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("WHY IS THIS BROKEN", True, monkeypatch)
         assert "[strong]" in note
         assert "vote=3" in note
 
     @_needs_profanity_check
+    @_needs_frustration_check
     def test_all_three_signals_is_strong_and_names_all(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1360,10 +1376,12 @@ class TestProfanityNudge:
         assert "all-caps shouting" in note
         assert "repeated punctuation" in note
 
+    @_needs_frustration_check
     def test_two_mild_signals_do_not_reach_strong(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("geez really???", False, monkeypatch)
         assert "[strong]" not in note
 
+    @_needs_frustration_check
     def test_lone_minced_oath_does_not_reach_elevated(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1372,6 +1390,7 @@ class TestProfanityNudge:
         assert "[elevated]" not in note
 
     @_needs_profanity_check
+    @_needs_frustration_check
     def test_tier_fires_every_time_with_no_debounce(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: True)
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
