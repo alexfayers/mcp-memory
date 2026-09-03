@@ -40,15 +40,22 @@ Then run `llm-prompts setup` to install everything.
 |---|---|---|
 | `MCP_MEMORY_DB_PATH` | Database file path | `~/.local/share/mcp-memory/memory.db` |
 | `MCP_MEMORY_PORT` | HTTP server port | `8000` |
+| `MCP_MEMORY_URL` | Explicit base URL of the mcp-memory server, overriding `MCP_MEMORY_PORT` and any installed service's port | (from port) |
+| `MCP_MEMORY_WORKSPACE_MARKERS` | Directory names marking a multi-package workspace root, so sibling packages share one project scope (comma-separated) | (none) |
 | `MCP_MEMORY_READONLY_AGENTS` | Extra agent types exempt from the memory-update gate (comma-separated) | `Explore`, `Plan` |
 | `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names counted at reduced weight toward the gate (comma-separated) | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `replace_in_file`, `write_to_file` |
+| `MCP_MEMORY_MAX_OBSERVATION_CHARS` | Per-entity observation-content character budget for reads, applied highest-voted first; negative means unlimited | `2000` |
 | `MCP_MEMORY_CALL_METRICS_ENABLED` | Record per-call usage metrics (byte-size proxies and option usage). | `true` |
 | `MCP_MEMORY_CALL_METRICS_RETENTION_DAYS` | Days of tool-call usage telemetry retained before pruning. | `90` |
+| `MCP_MEMORY_SURFACED_RETENTION_DAYS` | Days of retrieval telemetry retained before pruning; negative means unlimited, since its `used_at` labels are the ranking eval's only ground truth | `-1` |
+| `MCP_MEMORY_EVAL_CACHE_TTL_SECONDS` | How long a computed retrieval-quality report stays cached | `300` |
 | `MCP_MEMORY_ARCHIVE_ENABLED` | On startup, auto-archive resolved entities untouched for 56+ days that were never acted on after being surfaced. | `true` |
 | `MCP_MEMORY_GC_ENABLED` | On startup, soft-delete downvoted orphan entities (score at/below `-10` with no live incoming relation). Reversible; the purge below is the only permanent removal. | off |
 | `MCP_MEMORY_PURGE_ENABLED` | On startup, hard-delete soft-deleted entities older than the grace window | off |
 | `MCP_MEMORY_PURGE_GRACE_DAYS` | How long a soft-deleted entity is retained before it may be purged | `30` |
 | `MCP_MEMORY_STRICT_POLICY` | Reject stricter write-time policy violations such as project-scoped `user-preferences` and any direct `task -> project` relation | off |
+| `MCP_AUTO_VOTE_WINDOW_SECONDS` | How long after a search an edit still counts as an implicit-usefulness `+1` | `1800` |
+| `MCP_AUTO_VOTE_MAX_PER_DAY` | Per-entity daily cap on those automatic votes | `3` |
 | `MCP_DREAM_ENABLED` | Run the autonomous light dream tier (downvotes stale/duplicate entities in idle windows) | off |
 | `MCP_DREAM_IDLE_SECONDS` | Genuine-idle window before the light dream pass fires (once per idle session) | `1800` |
 | `MCP_DREAM_POLL_SECONDS` | How often the coordinator checks whether the light pass is due | `300` |
@@ -63,6 +70,10 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges + demotions a heavy pass may do | `10` |
 | `MCP_AGENT_PORT` | Port of the memory-agent server | `8100` |
 | `MCP_AGENT_URL` | Explicit memory-agent base URL, overriding `MCP_AGENT_PORT` | (from port) |
+| `MCP_AGENT_PREFLIGHT_COMMAND` | Optional command run before spawning a recall agent | (none) |
+| `MCP_RECALL_MODEL` | Fully-qualified model id for recall spawns | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `MCP_RECALL_MAX_TURNS` | Cap on tool-calling turns in a recall spawn, bounding its wall-time and cost | `12` |
+| `MCP_RECALL_TIMEOUT` | Timeout for a single recall spawn (seconds) | `180` |
 
 The visualiser's dream card has **Run light** / **Run heavy** buttons that trigger a
 pass on demand (regardless of the tier's enabled flag). A manual trigger obeys the same

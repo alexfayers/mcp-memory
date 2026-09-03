@@ -20,12 +20,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-@pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "payload.db")
-
-
 class TestPayloadSize:
     def test_payload_size_of_empty_result_is_small(self) -> None:
         size = payload.payload_size({"entities": [], "relations": []})

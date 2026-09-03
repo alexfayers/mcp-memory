@@ -10,6 +10,30 @@ import pytest
 from mcp_memory import cli
 
 
+def _eval_since_help() -> str:
+    """Return the rendered help text of `mcp-memory eval --since`."""
+    action = next(
+        a
+        for a in cli._build_parser()._subparsers._group_actions[0].choices["eval"]._actions  # type: ignore[union-attr]
+        if "--since" in a.option_strings
+    )
+    return str(action.help)
+
+
+class TestEvalSinceHelp:
+    def test_describes_unlimited_retention_without_a_negative_day_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", "-1")
+        assert "-1 days" not in _eval_since_help()
+
+    def test_names_the_window_when_retention_is_finite(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", "30")
+        assert "~30 days" in _eval_since_help()
+
+
 class TestSetupServiceDispatch:
     def test_uses_memory_spec(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, cli._ServiceSpec] = {}

@@ -19,12 +19,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-@pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "test.db")
-
-
 class TestStorage:
     def test_record_tool_call_inserts_row(self, db: DatabaseManager) -> None:
         db.record_tool_call("search_nodes", 120, 3400, {"limit": 5, "compact": True})
@@ -55,6 +49,14 @@ class TestStorage:
         assert db.prune_tool_calls(90) == 1
         remaining = db._db.execute("SELECT tool FROM tool_calls").fetchall()
         assert [r["tool"] for r in remaining] == ["search_nodes"]
+
+    def test_negative_retention_window_prunes_nothing(self, db: DatabaseManager) -> None:
+        db.record_tool_call("search_nodes", 10, 20, {})
+        db._db.execute("UPDATE tool_calls SET called_at = datetime('now', '-400 days')")
+        db._db.commit()
+
+        assert db.prune_tool_calls(-1) == 0
+        assert db._db.execute("SELECT COUNT(*) AS n FROM tool_calls").fetchone()["n"] == 1
 
 
 class TestRecord:

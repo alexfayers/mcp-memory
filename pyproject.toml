@@ -30,7 +30,7 @@ build-backend = "hatchling.build"
 packages = ["src/mcp_memory"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
 line-length = 100
 
@@ -74,8 +74,6 @@ ignore = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
-warn_return_any = true
-warn_unused_configs = true
 
 [[tool.mypy.overrides]]
 module = "better_profanity"

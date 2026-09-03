@@ -25,10 +25,15 @@ finding, and the measured numbers live in the memory graph (see
 - **Autonomous grooming.** A periodic pass re-ranks stale/duplicate memories
   with no human in the loop.
 
-Non-goals: writing synthesised observations, autonomous *hard* deletion by the
-agent, team hosting. The agent still never hard-deletes; the heavy tier may merge
-duplicates, which only *soft*-deletes the folded-away source (reversible), and a
-separate in-process GC may reversibly *soft*-delete downvoted orphans - see below.
+Non-goals: writing synthesised observations, team hosting.
+
+Deletion is deliberately asymmetric at entity and observation level. No tier may
+delete an *entity*: the heavy tier's `merge_entities` removes the folded-away
+source by *soft*-delete only (reversible via `restore_entity` until a grace-window
+purge), and a separate in-process GC may reversibly *soft*-delete downvoted
+orphans. But the heavy tier's `merge_observations` *hard*-deletes the folded-away
+source observation, because no soft-delete exists at observation level - so an
+observation merge is not reversible. See the safety model below.
 
 ## Architecture
 
@@ -80,6 +85,7 @@ A single tool. This is the whole context-cleanliness win and ships first.
     --model global.anthropic.claude-haiku-4-5-20251001-v1:0 \
     --mcp-config <memory-http.json> \
     --strict-mcp-config \
+    --max-turns 12 \
     --disallowedTools <mutating memory tools + built-in write/exec/read tools> \
     --output-format json < /dev/null
   ```
@@ -142,7 +148,7 @@ enforcement is a **deny-list, not an allow-list**, for a verified reason:
   live-verified: with the mutating tools denied, an attempt to call
   `create_entities` was blocked and no row was written.
 
-Deny for **v1 recall** (read-only): all 12 mutating memory tools **plus**
+Deny for **recall** (read-only): all 16 mutating memory tools **plus**
 `vote`, plus built-in write/exec tools (`Bash`, `Write`, `Edit`,
 `NotebookEdit`, `Agent`) **plus** built-in read/web tools (`Read`, `Grep`,
 `Glob`, `WebFetch`, `WebSearch`). The read tools must be denied too: otherwise
@@ -150,13 +156,18 @@ the agent answers from files on disk and cites file paths instead of the
 `[project/entity]` graph slugs the return contract requires (live-observed - it
 read this very design doc off disk on the first run).
 
-The 12 mutating memory tools to deny: `create_entities`, `set_metadata`,
-`move_project_entities`, `merge_entities`, `delete_project`, `create_relations`,
-`delete_entity`, `delete_relation`, `add_observations`, `delete_observations`,
-`set_entity_status`, `restore_entity`. Of these, `delete_entity`,
-`delete_relation`, `delete_project` and the overwriting `create_entities` are
-hard-destructive; `merge_entities` removes its source only by *soft-delete*, so
-that removal is reversible via `restore_entity` until a grace-window purge.
+The 17 memory tools to deny - every mutating one, plus `vote`: `create_entities`, `set_metadata`,
+`move_project_entities`, `merge_entities`, `merge_observations`,
+`delete_project`, `create_relations`, `delete_entity`, `delete_relation`,
+`add_observations`, `delete_observations`, `set_entity_status`,
+`restore_entity`, `trim_observations_to_outcome`, `rename_entity`,
+`move_entity_cross_scope`, `vote`. Of these, `delete_entity`, `delete_relation`,
+`delete_project` and the overwriting `create_entities` are hard-destructive;
+`merge_entities` removes its source only by *soft-delete*, so that removal is
+reversible via `restore_entity` until a grace-window purge.
+`_MUTATING_MEMORY_TOOLS` in `agent.py` is the authoritative list, and a test
+asserts it partitions the registered tool names with `_READ_ONLY_MEMORY_TOOLS`,
+so a newly added mutating tool cannot silently reach the agent.
 
 **Recursion guard:** `--strict-mcp-config` points the spawned agent's MCP config
 *only* at mcp-memory, so it never sees the memory-agent server and physically
@@ -359,12 +370,12 @@ work the light tier cannot: it **merges duplicate entities** as well as demoting
 stale ones. Off by default (opt-in via `MCP_DREAM_HEAVY_ENABLED=true`),
 independent of the light tier's `MCP_DREAM_ENABLED`.
 
-- **Mutation surface: `vote` + `merge_entities` only.** Its deny-list is
-  the light-tier deny-list minus `merge_entities` as well as `vote`. Every
-  `delete_*` (and `restore_entity`) stays denied, so the "agent never
-  hard-deletes" guarantee holds: `merge_entities` removes the folded-away source
-  by *soft*-delete only, reversible via `restore_entity` until the grace-window
-  purge. It merges duplicates **within a single project** (never across projects),
+- **Mutation surface: `vote` + `merge_entities`,** later widened to include
+  `merge_observations` - see v4. Its deny-list is the light-tier deny-list minus
+  `merge_entities` as well as `vote`. Every `delete_*` (and `restore_entity`)
+  stays denied, so no *entity* is ever hard-deleted: `merge_entities` removes the
+  folded-away source by *soft*-delete only, reversible via `restore_entity` until
+  the grace-window purge. It merges duplicates **within a single project** (never across projects),
   folding the worse duplicate into the canonical keeper, and downvotes clearly
   stale/superseded non-duplicates (skipping the saturated `-10` floor). Fully
   autonomous - it merges unattended in idle windows, which is safe precisely

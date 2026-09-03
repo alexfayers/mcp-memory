@@ -68,6 +68,14 @@ def backdate(db: DatabaseManager, name: str, days: int) -> None:
     db._db.commit()
 
 
+def soft_delete(db: DatabaseManager, project: str, name: str) -> None:
+    """Tombstone an entity the way merge_entities and gc_downvoted_orphans do internally."""
+    entity_id = db._get_entity_id(name, db._get_or_create_project_id(project))
+    assert entity_id is not None, f"Entity '{name}' not found in project '{project}'"
+    db._db.execute("UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?", (entity_id,))
+    db._db.commit()
+
+
 def rank_of(name: str, entities: list[Entity]) -> int:
     """Return the 0-based rank of an entity in a result list, or -1 if absent."""
     for index, entity in enumerate(entities):

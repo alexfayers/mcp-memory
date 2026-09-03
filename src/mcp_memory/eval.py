@@ -257,31 +257,17 @@ def _cache_put(key: _CacheKey, report: EvalReport) -> None:
     _cache[key] = (report, time.monotonic())
 
 
-def evaluate_cached(
+async def evaluate_cached_async(
     db: DatabaseManager, k: int = 10, since: str | None = None, min_content_tokens: int = 0
 ) -> EvalReport:
     """Return ``evaluate()``'s result, cached for ``MCP_MEMORY_EVAL_CACHE_TTL_SECONDS``.
 
-    ``evaluate()`` re-runs a live search per historical labelled query, so its cost scales
-    with query history size. This wraps it in a module-level cache keyed by (k, since,
+    ``evaluate()`` re-runs a live search per historical labelled query, so its cost scales with
+    query history size. This wraps it in a module-level cache keyed by (k, since,
     min_content_tokens) so repeated requests within the TTL are free; a cache miss or expiry
     recomputes and refreshes the entry.
-    """
-    key = (k, since, min_content_tokens)
-    cached = _cache_get(key)
-    if cached is not None:
-        return cached
-    report = evaluate(db, k=k, since=since, min_content_tokens=min_content_tokens)
-    _cache_put(key, report)
-    return report
 
-
-async def evaluate_cached_async(
-    db: DatabaseManager, k: int = 10, since: str | None = None, min_content_tokens: int = 0
-) -> EvalReport:
-    """Async counterpart to ``evaluate_cached`` that offloads a cache miss to a thread.
-
-    Runs ``evaluate()`` via ``asyncio.to_thread`` against a dedicated read-only connection
+    A miss runs ``evaluate()`` via ``asyncio.to_thread`` against a dedicated read-only connection
     (see ``_evaluate_readonly``) rather than blocking the event loop. Concurrent misses for
     the same key single-flight through a per-key ``asyncio.Lock``: only the first waiter
     computes, the rest see the freshly-populated cache once the lock releases.

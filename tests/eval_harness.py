@@ -56,6 +56,40 @@ def mark_used(db: DatabaseManager, retrieval_id: str, *names: str) -> None:
     db._db.commit()
 
 
+def _build_eval_fixture(db: DatabaseManager) -> None:
+    """Seed a labelled-query fixture whose every timestamp is pinned to a fixed instant.
+
+    Two entities share the query terms with identical FTS documents (same token counts, so
+    identical BM25) and differ only in type half-life and age, so their order depends purely
+    on the injected clock. A third entity carries a second, unambiguous query.
+    """
+    db.create_entities(
+        "proj",
+        [
+            {"name": "task/fresh", "entityType": "task", "observations": ["backoff retry"]},
+            {"name": "pattern/slow", "entityType": "pattern", "observations": ["backoff retry"]},
+            {"name": "task/unrelated", "entityType": "task", "observations": ["cache eviction"]},
+        ],
+    )
+    pinned = _pinned(0)
+    db._db.execute("UPDATE entities SET created_at = ?, updated_at = ?", (pinned, pinned))
+    db._db.execute(
+        "UPDATE entities SET created_at = ?, updated_at = ? WHERE name = 'pattern/slow'",
+        (_pinned(184), _pinned(184)),
+    )
+    db.record_surfaced(
+        "search_nodes",
+        "backoff retry",
+        "rid-1",
+        [("proj", "task/fresh", 1), ("proj", "pattern/slow", 2)],
+    )
+    db.record_surfaced("search_nodes", "cache eviction", "rid-2", [("proj", "task/unrelated", 1)])
+    db._db.execute("UPDATE surfaced_entities SET surfaced_at = ?", (pinned,))
+    db._db.commit()
+    mark_used(db, "rid-1", "pattern/slow")
+    mark_used(db, "rid-2", "task/unrelated")
+
+
 MutateDb = Callable[["DatabaseManager"], None]
 
 

@@ -4,21 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import pytest
-
 from mcp_memory import usefulness
-from mcp_memory.database import DatabaseManager
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
+    from mcp_memory.database import DatabaseManager
     from mcp_memory.models import Entity, Relation
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "test.db")
 
 
 def _seed(db: DatabaseManager, project: str, name: str, keyword: str) -> None:

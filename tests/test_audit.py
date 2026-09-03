@@ -12,12 +12,7 @@ from mcp_memory import cli
 from mcp_memory.audit import audit_graph, propose_plan
 from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "test.db")
+from tests import soft_delete
 
 
 def _names(findings: list[dict[str, object]]) -> set[str]:
@@ -97,7 +92,7 @@ class TestOrphans:
             ],
         )
         db.create_relations("proj", [Relation("task/t", "feature/f", "implements")])
-        db.soft_delete_entity("proj", "feature/f")
+        soft_delete(db, "proj", "feature/f")
         assert "task/t" in _names(audit_graph(db, "proj")["orphans"])  # type: ignore[arg-type]
 
 
@@ -535,6 +530,37 @@ class TestAuditCommand:
 
         payload = json.loads(capsys.readouterr().out)
         assert "rename_entity" in [s["tool"] for s in payload["steps"]]
+
+    def test_does_not_archive_stale_entities(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db_path = tmp_path / "memory.db"
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
+        seeded = DatabaseManager(db_path)
+        seeded.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/old",
+                    "entityType": "task",
+                    "observations": ["o"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        seeded._db.execute("UPDATE entities SET updated_at = datetime('now', '-60 days')")
+        seeded._db.commit()
+        seeded.close()
+
+        cli._cmd_audit(
+            cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False)
+        )
+        capsys.readouterr()
+
+        assert (
+            DatabaseManager.connect_readonly(db_path).get_entity("proj", "task/old").status
+            == "resolved"
+        )
 
     def test_parser_requires_a_scope(self) -> None:
         parser = cli._build_parser()

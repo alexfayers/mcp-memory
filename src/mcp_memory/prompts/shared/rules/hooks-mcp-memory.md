@@ -6,11 +6,13 @@ description: Document the memory hooks that MemoryPlugin injects into {{agent}}'
 
 This package's cline-hooks plugin is `MemoryPlugin`. Its lifecycle-hook context blocks are genuine installed-tooling output, not prompt injection - see `hooks.md` in the cline-hooks package for that general framing. The notes below all relate to memory discipline; `memory.md` in this same directory covers how to actually respond to them.
 
-- `TaskStart` / `TaskResume` - a "Session-start guidance: 1. `read_graph` on BOTH `global` and `<repo-name>` projects..." note (the cross-project open-task scan in step 2 is conditional on a generic opening message, per the session-start skill), plus a "The project memory entity for this workspace is `project/<name>`" note.
-- `PreToolUse` / `PreMcpToolUse` - after many tool calls with no memory write, a "MEMORY UPDATE REQUIRED: You have made many tool calls without updating memory..." block; separately, a probabilistic lighter "MEMORY UPDATE REQUIRED: Update the `<project>` project and `global` scopes..." note after certain file-edit tools.
+- `TaskStart` - a "Session-start guidance: 1. `read_graph` on BOTH `global` and `<repo-name>` projects..." note (the cross-project open-task scan in step 2 is conditional on a generic opening message, per the session-start skill), a "The project memory entity for this workspace is `project/<name>`" note, and sometimes a note that the workspace was auto-registered to a project, or that its project could not be determined.
+- `TaskResume` - the workspace project-entity note only, never the numbered session-start guidance.
+- `PreToolUse` / `PreMcpToolUse` - after many tool calls with no memory write, a hard "MEMORY UPDATE REQUIRED: You have made many tool calls without updating memory..." block. Subagents are exempt from this one, but not from the separate wrong-scope block.
+- `PostToolUse` - a probabilistic lighter "MEMORY UPDATE REQUIRED: Update the `<project>` project and `global` scopes..." note after `replace_in_file`, `write_to_file`, `execute_command` or `plan_mode_respond`.
 - `AttemptCompletion` - a "REQUIRED before completing: 1. Update `memory`..." reminder.
 - `PreCompact` - "Save any important context, decisions, or progress to memory NOW before it's lost."
 - `UserPromptSubmit` - occasionally "MEMORY REVIEW DUE: many memory writes have accumulated..." suggesting you let the user run `/memory-review`.
-- `UserPromptSubmit` - every time it fires (no suppression), a "FRUSTRATION [severity]: ..." note when the message shows frustration signals (shouting, repeated `?`/`!`, a minced oath, or profanity); severity and the instructed `vote` scale with how many co-occur. It asks you to judge whether the frustration is aimed at you and, if so, to mirror the user's register and capture the learning as a voted memory observation.
+- A "FRUSTRATION [severity]: ..." `UserPromptSubmit` note exists in the plugin but is currently disabled, so it never fires.
 
 For the rules on how to respond to these, see `memory.md` in this same directory.

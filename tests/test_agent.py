@@ -10,19 +10,17 @@ import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
 
-from mcp_memory import agent, cli, dream_status, recall_status
+from mcp_memory import agent, cli, dream_status, recall_status, server
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from pathlib import Path
 
 _MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 @pytest.fixture(autouse=True)
-def _isolate_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Isolate the status markers on disk and reset the coordinator state per test."""
-    monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+def _reset_coordinator_state() -> None:
+    """Reset the dream/recall status markers and the coordinator state per test."""
     dream_status.clear()
     recall_status.clear()
     agent._dream_running = False
@@ -81,6 +79,14 @@ class TestRegisterRecall:
         server = FastMCP("test")
         agent._register_recall(server)
         assert "recall" not in self._tool_names(server)
+
+
+class TestMemoryToolClassification:
+    def test_classification_partitions_every_registered_tool(self) -> None:
+        mutating = set(agent._MUTATING_MEMORY_TOOLS)
+        read_only = set(agent._READ_ONLY_MEMORY_TOOLS)
+        assert not mutating & read_only
+        assert mutating | read_only == {tool.name for tool in asyncio.run(server.mcp.list_tools())}
 
 
 class TestBuildRecallCommand:

@@ -307,7 +307,12 @@ def _cmd_audit(args: argparse.Namespace) -> None:
     from .audit import audit_graph, propose_plan
     from .database import DatabaseManager
 
-    db = DatabaseManager(get_db_path())
+    db_path = get_db_path()
+    if not db_path.exists():
+        print(f"Error: database not found: {db_path}", file=sys.stderr)
+        sys.exit(1)
+
+    db = DatabaseManager.connect_readonly(db_path)
     try:
         report = audit_graph(db, None if args.all_projects else args.project)
         plan = propose_plan(db, report) if args.propose_plan else None
@@ -671,13 +676,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=10,
         help="Rank cutoff for precision@k (default: 10)",
     )
+    retention_days = get_surfaced_retention_days()
+    retention_note = (
+        "telemetry is never pruned, so this reaches back to the oldest recorded retrieval"
+        if retention_days < 0
+        else f"telemetry is pruned after ~{retention_days} days, so this cannot reach further back"
+    )
     evaluate_cmd.add_argument(
         "--since",
         default=None,
         help=(
             "Only score retrievals surfaced on or after this point (relative "
-            "'30m'/'1h'/'7d'/'2w'/'3mo' or ISO date); telemetry is pruned after "
-            f"~{get_surfaced_retention_days()} days, so this cannot reach further back"
+            f"'30m'/'1h'/'7d'/'2w'/'3mo' or ISO date); {retention_note}"
         ),
     )
     evaluate_cmd.add_argument(

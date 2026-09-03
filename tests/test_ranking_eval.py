@@ -20,6 +20,7 @@ from mcp_memory.database import DatabaseManager
 from tests.eval_harness import (
     _FIXTURE_LATER,
     _FIXTURE_NOW,
+    _build_eval_fixture,
     _pinned,
     assert_no_regression,
     attach_eval_report,
@@ -27,68 +28,10 @@ from tests.eval_harness import (
     measure_change,
 )
 
+from . import backdate, rank_of
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from mcp_memory.models import Entity
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "eval.db")
-
-
-def _backdate(db: DatabaseManager, name: str, days: int) -> None:
-    """Age an entity by rewriting its created_at/updated_at to `days` ago."""
-    db._db.execute(
-        "UPDATE entities SET created_at = datetime('now', ?), updated_at = datetime('now', ?) "
-        "WHERE name = ?",
-        (f"-{days} days", f"-{days} days", name),
-    )
-    db._db.commit()
-
-
-def _rank_of(name: str, entities: list[Entity]) -> int:
-    """Return the 0-based rank of an entity in a result list, or -1 if absent."""
-    for index, entity in enumerate(entities):
-        if entity.name == name:
-            return index
-    return -1
-
-
-def _build_eval_fixture(db: DatabaseManager) -> None:
-    """Seed a labelled-query fixture whose every timestamp is pinned to a fixed instant.
-
-    Two entities share the query terms with identical FTS documents (same token counts, so
-    identical BM25) and differ only in type half-life and age, so their order depends purely
-    on the injected clock. A third entity carries a second, unambiguous query.
-    """
-    db.create_entities(
-        "proj",
-        [
-            {"name": "task/fresh", "entityType": "task", "observations": ["backoff retry"]},
-            {"name": "pattern/slow", "entityType": "pattern", "observations": ["backoff retry"]},
-            {"name": "task/unrelated", "entityType": "task", "observations": ["cache eviction"]},
-        ],
-    )
-    pinned = _pinned(0)
-    db._db.execute("UPDATE entities SET created_at = ?, updated_at = ?", (pinned, pinned))
-    db._db.execute(
-        "UPDATE entities SET created_at = ?, updated_at = ? WHERE name = 'pattern/slow'",
-        (_pinned(184), _pinned(184)),
-    )
-    db.record_surfaced(
-        "search_nodes",
-        "backoff retry",
-        "rid-1",
-        [("proj", "task/fresh", 1), ("proj", "pattern/slow", 2)],
-    )
-    db.record_surfaced("search_nodes", "cache eviction", "rid-2", [("proj", "task/unrelated", 1)])
-    db._db.execute("UPDATE surfaced_entities SET surfaced_at = ?", (pinned,))
-    db._db.commit()
-    mark_used(db, "rid-1", "pattern/slow")
-    mark_used(db, "rid-2", "task/unrelated")
 
 
 class TestTypeAwareDecay:
@@ -100,11 +43,11 @@ class TestTypeAwareDecay:
                 {"name": "task/retry", "entityType": "task", "observations": ["backoff"]},
             ],
         )
-        _backdate(db, "pattern/retry", 120)
-        _backdate(db, "task/retry", 20)
+        backdate(db, "pattern/retry", 120)
+        backdate(db, "task/retry", 20)
 
         entities = db.search_nodes("proj", "backoff")["entities"]
-        assert _rank_of("pattern/retry", entities) < _rank_of("task/retry", entities)
+        assert rank_of("pattern/retry", entities) < rank_of("task/retry", entities)
 
 
 class TestInjectableClock:
@@ -371,68 +314,6 @@ class TestEvaluate:
         assert ranking_eval.evaluate(db, k=5, min_content_tokens=2).query_count == 1
 
 
-class TestEvaluateCached:
-    def test_cache_hit_does_not_recompute(
-        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        ranking_eval.clear_cache()
-        calls = 0
-        real_evaluate = ranking_eval.evaluate
-
-        def counting_evaluate(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
-            nonlocal calls
-            calls += 1
-            return real_evaluate(*args, **kwargs)  # type: ignore[arg-type]
-
-        monkeypatch.setattr(ranking_eval, "evaluate", counting_evaluate)
-
-        ranking_eval.evaluate_cached(db, k=5)
-        ranking_eval.evaluate_cached(db, k=5)
-
-        assert calls == 1
-
-    def test_different_key_recomputes(
-        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        ranking_eval.clear_cache()
-        calls = 0
-        real_evaluate = ranking_eval.evaluate
-
-        def counting_evaluate(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
-            nonlocal calls
-            calls += 1
-            return real_evaluate(*args, **kwargs)  # type: ignore[arg-type]
-
-        monkeypatch.setattr(ranking_eval, "evaluate", counting_evaluate)
-
-        ranking_eval.evaluate_cached(db, k=5)
-        ranking_eval.evaluate_cached(db, k=10)
-
-        assert calls == 2
-
-    def test_ttl_expiry_recomputes(
-        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        ranking_eval.clear_cache()
-        calls = 0
-        real_evaluate = ranking_eval.evaluate
-
-        def counting_evaluate(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
-            nonlocal calls
-            calls += 1
-            return real_evaluate(*args, **kwargs)  # type: ignore[arg-type]
-
-        monkeypatch.setattr(ranking_eval, "evaluate", counting_evaluate)
-        monkeypatch.setattr(ranking_eval, "get_eval_cache_ttl_seconds", lambda: 60)
-
-        monkeypatch.setattr(ranking_eval.time, "monotonic", lambda: 1000.0)
-        ranking_eval.evaluate_cached(db, k=5)
-        monkeypatch.setattr(ranking_eval.time, "monotonic", lambda: 1061.0)
-        ranking_eval.evaluate_cached(db, k=5)
-
-        assert calls == 2
-
-
 class TestEvaluateCachedAsync:
     @pytest.mark.anyio
     async def test_cache_hit_does_not_recompute(
@@ -453,6 +334,26 @@ class TestEvaluateCachedAsync:
         await ranking_eval.evaluate_cached_async(db, k=5)
 
         assert calls == 1
+
+    @pytest.mark.anyio
+    async def test_different_key_recomputes(
+        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ranking_eval.clear_cache()
+        calls = 0
+        real_evaluate_readonly = ranking_eval._evaluate_readonly
+
+        def counting_evaluate_readonly(*args: object, **kwargs: object) -> ranking_eval.EvalReport:
+            nonlocal calls
+            calls += 1
+            return real_evaluate_readonly(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(ranking_eval, "_evaluate_readonly", counting_evaluate_readonly)
+
+        await ranking_eval.evaluate_cached_async(db, k=5)
+        await ranking_eval.evaluate_cached_async(db, k=10)
+
+        assert calls == 2
 
     @pytest.mark.anyio
     async def test_concurrent_misses_single_flight(
@@ -572,7 +473,7 @@ class TestVoteInfluence:
         db.vote_entity("proj", "task/b", 1)
 
         entities = db.search_nodes("proj", "deploy")["entities"]
-        assert _rank_of("task/b", entities) < _rank_of("task/a", entities)
+        assert rank_of("task/b", entities) < rank_of("task/a", entities)
 
     def test_heavily_downvoted_still_returned_but_last(self, db: DatabaseManager) -> None:
         db.create_entities(
@@ -586,8 +487,8 @@ class TestVoteInfluence:
             db.vote_entity("proj", "task/bad", -1)
 
         entities = db.search_nodes("proj", "cache")["entities"]
-        assert _rank_of("task/bad", entities) != -1
-        assert _rank_of("task/bad", entities) > _rank_of("task/good", entities)
+        assert rank_of("task/bad", entities) != -1
+        assert rank_of("task/bad", entities) > rank_of("task/good", entities)
 
 
 class TestEvalCommand:
@@ -846,7 +747,7 @@ class TestArchivingEffectOnEval:
 
         for name in ("task/fresh", "pattern/slow", "task/unrelated"):
             db.set_entity_status("proj", name, "resolved")
-            _backdate(db, name, 60)
+            backdate(db, name, 60)
 
         db.archive_stale_entities()
 

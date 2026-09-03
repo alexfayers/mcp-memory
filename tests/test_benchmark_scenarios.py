@@ -14,22 +14,14 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mcp_memory import eval as ranking_eval
-from mcp_memory.database import DatabaseManager
 from mcp_memory.payload import payload_size
 from mcp_memory.recall_efficiency import recall_efficiency
 
 from . import SeedEntity, rank_of, seed
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
+    from mcp_memory.database import DatabaseManager
     from mcp_memory.recall_status import RecallRecord
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "eval.db")
 
 
 class TestTargetedRecall:

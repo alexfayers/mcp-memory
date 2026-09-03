@@ -19,13 +19,7 @@ from mcp_memory.migrations.runner import run_migrations
 from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
 from mcp_memory.models import MAX_VOTE_MAGNITUDE, Entity, Observation, Relation
 from mcp_memory.path_resolver import normalize_path
-from tests import obs_contents, obs_votes
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "test.db")
+from tests import obs_contents, obs_votes, soft_delete
 
 
 class TestCreateEntities:
@@ -681,7 +675,7 @@ class TestArchiveStale:
             "UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'"
         )
         db._db.commit()
-        db.soft_delete_entity("proj", "e1")
+        soft_delete(db, "proj", "e1")
 
         assert db.archive_stale_entities(threshold_days=56) == 0
 
@@ -1065,22 +1059,6 @@ class TestProjectGroups:
     def test_non_list_groups_raises(self, db: DatabaseManager) -> None:
         with pytest.raises(TypeError, match="list"):
             db.set_project_groups("a", "not-a-list")  # type: ignore[arg-type]
-
-    def test_add_project_to_group_registers_without_replacing(self, db: DatabaseManager) -> None:
-        db.set_project_groups("a", ["g1"])
-        db.add_project_to_group("a", "g2")
-        db.set_project_groups("b", ["g1"])
-        db.set_project_groups("c", ["g2"])
-        assert db.get_group_members("a") == ["b", "c"]
-
-    def test_add_project_to_group_is_idempotent(self, db: DatabaseManager) -> None:
-        db.add_project_to_group("a", "g1")
-        db.add_project_to_group("a", "g1")
-        assert db.list_project_groups("a") == [("a", "g1")]
-
-    def test_add_project_to_group_creates_project_row(self, db: DatabaseManager) -> None:
-        db.add_project_to_group("brand-new", "g1")
-        assert "brand-new" in db.list_projects()
 
     def test_list_project_groups_filters_by_project(self, db: DatabaseManager) -> None:
         db.set_project_groups("a", ["g1"])
@@ -1512,22 +1490,18 @@ class TestDeleteEntity:
             db.delete_entity("proj", "b")
 
 
-class TestSoftDelete:
+class TestTombstoneVisibility:
     def test_soft_deleted_entity_hidden_from_get(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
-        db.soft_delete_entity("proj", "e1")
+        soft_delete(db, "proj", "e1")
         with pytest.raises(ValueError, match="not found"):
             db.get_entity("proj", "e1")
 
     def test_restore_brings_entity_back(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
-        db.soft_delete_entity("proj", "e1")
+        soft_delete(db, "proj", "e1")
         db.restore_entity("proj", "e1")
         assert obs_contents(db.get_entity("proj", "e1")) == ["x"]
-
-    def test_soft_delete_missing_entity_raises(self, db: DatabaseManager) -> None:
-        with pytest.raises(ValueError, match="not found"):
-            db.soft_delete_entity("proj", "missing")
 
     def test_restore_missing_entity_raises(self, db: DatabaseManager) -> None:
         with pytest.raises(ValueError, match="not found"):
@@ -1537,12 +1511,12 @@ class TestSoftDelete:
         db.create_entities(
             "proj", [{"name": "findme", "entityType": "task", "observations": ["needle"]}]
         )
-        db.soft_delete_entity("proj", "findme")
+        soft_delete(db, "proj", "findme")
         assert db.search_nodes("proj", "needle")["entities"] == []
 
     def test_soft_deleted_entity_hidden_from_read_graph(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
-        db.soft_delete_entity("proj", "e1")
+        soft_delete(db, "proj", "e1")
         assert db.read_graph("proj")["entities"] == []
 
     def test_soft_deleted_entity_edges_hidden(self, db: DatabaseManager) -> None:
@@ -1554,30 +1528,30 @@ class TestSoftDelete:
             ],
         )
         db.create_relations("proj", [Relation(source="a", target="b", relation_type="implements")])
-        db.soft_delete_entity("proj", "a")
+        soft_delete(db, "proj", "a")
         assert db.get_entity_with_relations("proj", "b")["relations"] == []
 
     def test_soft_deleted_hidden_from_exists_checks(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
-        db.soft_delete_entity("proj", "e1")
+        soft_delete(db, "proj", "e1")
         assert db.entity_exists_in_project("e1", "proj") is False
         assert db.entity_exists_outside_project("e1", "other") is None
 
     def test_soft_deleted_hidden_from_get_entity(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
-        db.soft_delete_entity("proj", "e1")
+        soft_delete(db, "proj", "e1")
         with pytest.raises(ValueError, match="not found"):
             db.get_entity("proj", "e1")
 
     def test_create_replaces_soft_deleted_tombstone(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["old"]}])
-        db.soft_delete_entity("proj", "e1")
+        soft_delete(db, "proj", "e1")
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["new"]}])
         assert obs_contents(db.get_entity("proj", "e1")) == ["new"]
 
     def test_purge_removes_only_past_grace(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
-        db.soft_delete_entity("proj", "e1")
+        soft_delete(db, "proj", "e1")
         project_id = db._get_or_create_project_id("proj")
         assert db.purge_soft_deleted(grace_days=30) == 0
         entity_id = db._get_entity_id("e1", project_id, include_deleted=True)
@@ -1839,7 +1813,7 @@ class TestGcDownvotedOrphans:
         db.create_relations(
             "proj", [Relation(source="srcdel", target="victim", relation_type="implements")]
         )
-        db.soft_delete_entity("proj", "srcdel")
+        soft_delete(db, "proj", "srcdel")
         self._downvote(db, "proj", "victim", 10)
         assert db.gc_downvoted_orphans() == 1
         assert self._is_reaped(db, "proj", "victim")
@@ -1857,7 +1831,7 @@ class TestGcDownvotedOrphans:
     def test_already_soft_deleted_is_untouched(self, db: DatabaseManager) -> None:
         db.create_entities("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         self._downvote(db, "proj", "e1", 10)
-        db.soft_delete_entity("proj", "e1")
+        soft_delete(db, "proj", "e1")
         project_id = db._get_or_create_project_id("proj")
         assert db.gc_downvoted_orphans() == 0
         assert db._get_entity_id("e1", project_id, include_deleted=True) is not None

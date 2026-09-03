@@ -336,18 +336,6 @@ class DatabaseManager:
                     (project_id, group_name),
                 )
 
-    def add_project_to_group(self, project: str, group_name: str) -> None:
-        """Add a project to one group without disturbing its other group memberships."""
-        if not project or not isinstance(project, str):
-            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
-
-        with self._db:
-            project_id = self._get_or_create_project_id(project)
-            self._db.execute(
-                "INSERT OR IGNORE INTO project_groups (project_id, group_name) VALUES (?, ?)",
-                (project_id, group_name),
-            )
-
     def list_project_groups(self, project: str | None = None) -> list[tuple[str, str]]:
         """Return (project_name, group_name) mappings, optionally for one project."""
         sql = (
@@ -1054,7 +1042,12 @@ class DatabaseManager:
             )
 
     def prune_tool_calls(self, retention_days: int) -> int:
-        """Delete tool-call usage telemetry older than the retention window, returning row count."""
+        """Delete tool-call usage telemetry older than the retention window, returning row count.
+
+        A negative window means unlimited retention: nothing is deleted and 0 is returned.
+        """
+        if retention_days < 0:
+            return 0
         with self._db:
             cursor = self._db.execute(
                 "DELETE FROM tool_calls WHERE called_at < datetime('now', ?)",
@@ -1158,17 +1151,6 @@ class DatabaseManager:
 
         with self._db:
             self._delete_entity_row(entity_id, project, name)
-
-    def soft_delete_entity(self, project: str, name: str) -> None:
-        """Hide an entity from all reads by marking it deleted, keeping its rows intact."""
-        project_id = self._get_or_create_project_id(project)
-        entity_id = self._get_entity_id(name, project_id)
-        if entity_id is None:
-            raise ValueError(f"Entity '{name}' not found in project '{project}'")
-        self._db.execute(
-            "UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?", (entity_id,)
-        )
-        self._db.commit()
 
     def restore_entity(self, project: str, name: str) -> None:
         """Clear an entity's soft-deleted mark, making it visible to reads again."""

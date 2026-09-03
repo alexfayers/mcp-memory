@@ -19,6 +19,7 @@ from mcp_memory.export_import import (
 )
 from mcp_memory.migrations.schema import MIGRATIONS
 from mcp_memory.models import Relation
+from tests import soft_delete
 
 _OLD_TS = "2020-01-01 00:00:00"
 
@@ -67,7 +68,7 @@ class TestExport:
 
     def test_excludes_soft_deleted_entities(self, tmp_path: Path) -> None:
         db = _make_db(tmp_path / "src.db")
-        db.soft_delete_entity("proj", "task/t")
+        soft_delete(db, "proj", "task/t")
         out = tmp_path / "export.json"
         export_database(db, out)
         db.close()

@@ -6,7 +6,7 @@ import functools
 import inspect
 import os
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, ParamSpec, TypeVar
+from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
@@ -25,15 +25,12 @@ from .visualise import register_visualise_routes
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-_P = ParamSpec("_P")
-_R = TypeVar("_R")
 
-
-def _track(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+def _track[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
     """Record each tool call's activity without altering its behaviour or schema."""
 
     @functools.wraps(fn)
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         result = fn(*args, **kwargs)
         try:
             bound = inspect.signature(fn).bind_partial(*args, **kwargs)

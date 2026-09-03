@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
 
 import pytest
 
 from mcp_memory import dream_status
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 @pytest.fixture(autouse=True)
-def _clear_dream_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reset the process-global dream state and isolate the marker file on disk."""
-    monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+def _clear_dream_status() -> None:
+    """Reset the process-global dream state."""
     dream_status.clear()
 
 

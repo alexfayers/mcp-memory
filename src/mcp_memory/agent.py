@@ -93,7 +93,22 @@ _MUTATING_MEMORY_TOOLS = (
     "merge_entities",
     "merge_observations",
     "restore_entity",
+    "trim_observations_to_outcome",
+    "rename_entity",
+    "move_entity_cross_scope",
     "vote",
+)
+# Every remaining registered memory tool. Kept beside the deny-list so a test can
+# assert the two partition the registered tool names, which is what makes a newly
+# added mutating tool fail loudly instead of silently reaching the recall agent.
+_READ_ONLY_MEMORY_TOOLS = (
+    "search_nodes",
+    "read_graph",
+    "list_metadata",
+    "get_project_for_path",
+    "get_group_members",
+    "search_all_projects",
+    "get_entity_with_relations",
 )
 # --strict-mcp-config isolates MCP servers but not built-ins. Deny the write/exec
 # ones so the agent cannot touch the filesystem or spawn processes, and the

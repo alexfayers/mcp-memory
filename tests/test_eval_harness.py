@@ -6,12 +6,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from mcp_memory.database import DatabaseManager
 from mcp_memory.eval import EvalReport
 from tests.eval_harness import (
     _FIXTURE_NOW,
     FLOOR,
     MeasuredChange,
+    _build_eval_fixture,
     _pinned,
     assert_improves,
     assert_no_regression,
@@ -20,16 +20,9 @@ from tests.eval_harness import (
     mark_used,
     measure_change,
 )
-from tests.test_ranking_eval import _build_eval_fixture
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "eval-harness.db")
+    from mcp_memory.database import DatabaseManager
 
 
 def _report(**overrides: float) -> EvalReport:

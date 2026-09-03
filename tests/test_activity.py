@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
 
 import pytest
 
@@ -11,14 +10,10 @@ from mcp_memory import activity
 from mcp_memory.database import _hash_observation
 from mcp_memory.models import Entity, Observation
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 @pytest.fixture(autouse=True)
-def _clear_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reset the process-global activity buffer and isolate the marker file on disk."""
-    monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+def _clear_activity() -> None:
+    """Reset the process-global activity buffer."""
     activity.clear()
 
 

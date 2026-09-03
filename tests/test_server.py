@@ -12,13 +12,7 @@ from mcp_memory.database import DatabaseManager, _hash_observation
 from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _GLOBAL_PROJECT, _ensure_project_root, _validate_and_extract_relations
-from tests import obs_contents
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "test.db")
+from tests import obs_contents, soft_delete
 
 
 @pytest.fixture
@@ -693,7 +687,7 @@ class TestRestoreEntityTool:
         server_db.create_entities(
             "proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}]
         )
-        server_db.soft_delete_entity("proj", "e1")
+        soft_delete(server_db, "proj", "e1")
         result = server.restore_entity("proj", "e1")
         assert result == {"message": "Restored entity 'e1' in project 'proj'."}
         assert obs_contents(server_db.get_entity("proj", "e1")) == ["x"]
@@ -1043,9 +1037,6 @@ class TestSearchTools:
         included = server.search_all_projects("keyword", include_archived=True)["results"]
         assert default == {}
         assert set(included) == {"proj"}
-
-
-_BUDGET_SENTINEL = "[{n} lower-voted observation(s) omitted to save tokens]"
 
 
 class TestSearchToolsObservationBudget:
