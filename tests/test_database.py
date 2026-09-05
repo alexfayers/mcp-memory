@@ -1247,6 +1247,26 @@ class TestRelations:
         with pytest.raises(ValueError, match="Source entity"):
             store.relations.create("proj", [Relation(source="missing", target="b", relation_type="x")])
 
+    def test_rejected_batch_leaves_none_of_its_relations_behind(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+                {"name": "c", "entityType": "project", "observations": ["z"]},
+            ],
+        )
+        with pytest.raises(ValueError, match="Invalid relation type"):
+            store.relations.create(
+                "proj",
+                [
+                    Relation(source="a", target="b", relation_type="belongs-to"),
+                    Relation(source="a", target="c", relation_type="frobnicates"),
+                ],
+            )
+        store.entities.vote("proj", "a", 1)
+        assert store.reads.get_entity_with_relations("proj", "a")["relations"] == []
+
     def test_delete_relation(self, store: Storage) -> None:
         store.entities.create(
             "proj",

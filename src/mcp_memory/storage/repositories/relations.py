@@ -54,46 +54,40 @@ class RelationRepository:
         """Create relations between entities, ignoring duplicates."""
         project_id = get_or_create_project_id(self._conn, project)
 
-        for relation in relations:
-            if relation.source == relation.target:
-                raise ValueError(f"Self-referential relation not allowed: '{relation.source}'")
-            source_id = get_entity_id(self._conn, relation.source, project_id)
-            if source_id is None:
-                raise ValueError(f"Source entity '{relation.source}' not found in project '{project}'")
-            target_id = get_entity_id(self._conn, relation.target, project_id)
-            if target_id is None:
-                raise ValueError(f"Target entity '{relation.target}' not found in project '{project}'")
-            source_type = get_entity_type_name(self._conn, source_id)
-            target_type = get_entity_type_name(self._conn, target_id)
-            if source_type == "task" and target_type == "project" and relation.relation_type == "belongs-to":
-                raise ValueError(
-                    "task -> project 'belongs-to' relations are not allowed; link the task "
-                    "to the feature it implements instead."
-                )
-            if get_strict_policy_enabled() and source_type == "task" and target_type == "project":
-                raise ValueError(
-                    "Direct task -> project relations are forbidden when MCP_MEMORY_STRICT_POLICY "
-                    "is enabled; use a feature or knowledge entity as the parent instead."
-                )
-            relation_type = normalize_relation_type(relation.relation_type)
-            if relation_type not in VALID_RELATION_TYPES:
-                raise ValueError(
-                    f"Invalid relation type '{relation.relation_type}' "
-                    f"(normalized to '{relation_type}'). "
-                    f"Valid types: {sorted(VALID_RELATION_TYPES)}"
-                )
-            relation_type_id = get_or_create_relation_type_id(self._conn, relation_type)
-            self._conn.write(
-                "INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
-                (source_id, target_id, relation_type_id),
-            )
-
-        # Commits the writes above without wrapping them: a validation failure mid-loop
-        # must leave earlier inserts pending, exactly as today. Wrapping the loop would
-        # roll them back, which is a behaviour change reserved for a separate commit.
-        # Do not "simplify" this block away.
         with self._conn.transaction():
-            pass
+            for relation in relations:
+                if relation.source == relation.target:
+                    raise ValueError(f"Self-referential relation not allowed: '{relation.source}'")
+                source_id = get_entity_id(self._conn, relation.source, project_id)
+                if source_id is None:
+                    raise ValueError(f"Source entity '{relation.source}' not found in project '{project}'")
+                target_id = get_entity_id(self._conn, relation.target, project_id)
+                if target_id is None:
+                    raise ValueError(f"Target entity '{relation.target}' not found in project '{project}'")
+                source_type = get_entity_type_name(self._conn, source_id)
+                target_type = get_entity_type_name(self._conn, target_id)
+                if source_type == "task" and target_type == "project" and relation.relation_type == "belongs-to":
+                    raise ValueError(
+                        "task -> project 'belongs-to' relations are not allowed; link the task "
+                        "to the feature it implements instead."
+                    )
+                if get_strict_policy_enabled() and source_type == "task" and target_type == "project":
+                    raise ValueError(
+                        "Direct task -> project relations are forbidden when MCP_MEMORY_STRICT_POLICY "
+                        "is enabled; use a feature or knowledge entity as the parent instead."
+                    )
+                relation_type = normalize_relation_type(relation.relation_type)
+                if relation_type not in VALID_RELATION_TYPES:
+                    raise ValueError(
+                        f"Invalid relation type '{relation.relation_type}' "
+                        f"(normalized to '{relation_type}'). "
+                        f"Valid types: {sorted(VALID_RELATION_TYPES)}"
+                    )
+                relation_type_id = get_or_create_relation_type_id(self._conn, relation_type)
+                self._conn.write(
+                    "INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
+                    (source_id, target_id, relation_type_id),
+                )
 
     def delete(self, project: str, source: str, target: str, relation_type: str) -> None:
         """Delete a specific relation between two entities."""
@@ -120,18 +114,15 @@ class RelationRepository:
                 f"entit{'y' if len(orphaned) == 1 else 'ies'}: {', '.join(orphaned)}"
             )
 
-        cursor = self._conn.write(
-            "DELETE FROM relations WHERE source_id = ? AND target_id = ? AND relation_type_id = ?",
-            (source_id, target_id, row["id"]),
-        )
-        if cursor.rowcount == 0:
-            raise ValueError(f"Relation '{source}' -> '{target}' ({relation_type}) not found in project '{project}'")
-
-        # Commits the write above without wrapping it in the same transaction: this mirrors
-        # create's commit-after-the-fact shape rather than atomically covering the delete
-        # and its rowcount check. Do not "simplify" this block away.
         with self._conn.transaction():
-            pass
+            cursor = self._conn.write(
+                "DELETE FROM relations WHERE source_id = ? AND target_id = ? AND relation_type_id = ?",
+                (source_id, target_id, row["id"]),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Relation '{source}' -> '{target}' ({relation_type}) not found in project '{project}'"
+                )
 
     def for_entities(self, project_id: int, entity_ids: list[int]) -> list[Relation]:
         """Return relations touching any of the given entities, scoped to one project."""
