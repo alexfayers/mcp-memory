@@ -17,9 +17,14 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .config import get_eval_cache_ttl_seconds
-from .database import DatabaseManager, _parse_date
+from .storage import open_readonly
+from .storage.pure.sql import parse_date
+
+if TYPE_CHECKING:
+    from .storage import Storage
 
 __all__ = ["time"]
 
@@ -80,11 +85,7 @@ def ndcg_at_k(ranked: Sequence[str], relevant: set[str], k: int) -> float:
     """
     if not relevant:
         return 0.0
-    dcg = sum(
-        1.0 / math.log2(index + 1)
-        for index, name in enumerate(ranked[:k], start=1)
-        if name in relevant
-    )
+    dcg = sum(1.0 / math.log2(index + 1) for index, name in enumerate(ranked[:k], start=1) if name in relevant)
     ideal_hits = min(len(relevant), k)
     idcg = sum(1.0 / math.log2(index + 1) for index in range(1, ideal_hits + 1))
     return dcg / idcg if idcg else 0.0
@@ -114,7 +115,7 @@ class EvalReport:
 
 
 def iter_labelled_queries(
-    db: DatabaseManager, since: str | None = None, min_content_tokens: int = 0
+    db: Storage, since: str | None = None, min_content_tokens: int = 0
 ) -> Iterator[LabelledQuery]:
     """Reconstruct each recorded retrieval from ``surfaced_entities`` as a labelled query.
 
@@ -126,16 +127,13 @@ def iter_labelled_queries(
     given, queries with fewer whitespace-separated tokens than that (e.g. the single word
     "task") are excluded, since a degenerate query is unrankable regardless of ranking quality.
     """
-    sql = (
-        "SELECT retrieval_id, project, query, tool, entity_name, rank, used_at "
-        "FROM surfaced_entities "
-    )
+    sql = "SELECT retrieval_id, project, query, tool, entity_name, rank, used_at FROM surfaced_entities "
     params: list[str] = []
     if since is not None:
         sql += "WHERE datetime(surfaced_at) >= datetime(?) "
-        params.append(_parse_date(since))
+        params.append(parse_date(since))
     sql += "ORDER BY retrieval_id, rank"
-    rows = db._db.execute(sql, params).fetchall()
+    rows = db.connection.query_all(sql, params)
 
     grouped: dict[str, list[sqlite3.Row]] = {}
     for row in rows:
@@ -155,7 +153,7 @@ def iter_labelled_queries(
 
 
 def evaluate(
-    db: DatabaseManager,
+    db: Storage,
     k: int = 10,
     since: str | None = None,
     min_content_tokens: int = 0,
@@ -180,9 +178,7 @@ def evaluate(
     for labelled in iter_labelled_queries(db, since, min_content_tokens):
         if not labelled.relevant:
             continue
-        result = db.search_nodes(
-            labelled.project, labelled.query, limit=max(k, len(labelled.ranked)), now=now
-        )
+        result = db.reads.search(labelled.project, labelled.query, limit=max(k, len(labelled.ranked)), now=now)
         ranked_now = [entity.name for entity in result["entities"]]
         precisions.append(precision_at_k(ranked_now, labelled.relevant, k))
         reciprocal_ranks.append(reciprocal_rank(ranked_now, labelled.relevant))
@@ -212,20 +208,18 @@ def evaluate(
     )
 
 
-def _evaluate_readonly(
-    db_path: Path, k: int, since: str | None, min_content_tokens: int
-) -> EvalReport:
+def _evaluate_readonly(db_path: Path, k: int, since: str | None, min_content_tokens: int) -> EvalReport:
     """Run ``evaluate()`` against a dedicated read-only connection to ``db_path``.
 
     Intended to run off the event-loop thread (see ``evaluate_cached_async``): opens its
     own connection rather than reusing the caller's, since sqlite connections are
     thread-bound, and closes it before returning regardless of outcome.
     """
-    readonly_db = DatabaseManager.connect_readonly(db_path)
+    readonly_db = open_readonly(db_path)
     try:
         return evaluate(readonly_db, k=k, since=since, min_content_tokens=min_content_tokens)
     finally:
-        readonly_db.close()
+        readonly_db.connection.close()
 
 
 _CacheKey = tuple[int, str | None, int]
@@ -258,7 +252,7 @@ def _cache_put(key: _CacheKey, report: EvalReport) -> None:
 
 
 async def evaluate_cached_async(
-    db: DatabaseManager, k: int = 10, since: str | None = None, min_content_tokens: int = 0
+    db: Storage, k: int = 10, since: str | None = None, min_content_tokens: int = 0
 ) -> EvalReport:
     """Return ``evaluate()``'s result, cached for ``MCP_MEMORY_EVAL_CACHE_TTL_SECONDS``.
 
@@ -280,7 +274,7 @@ async def evaluate_cached_async(
         cached = _cache_get(key)
         if cached is not None:
             return cached
-        report = await asyncio.to_thread(_evaluate_readonly, db.path, k, since, min_content_tokens)
+        report = await asyncio.to_thread(_evaluate_readonly, db.connection.path, k, since, min_content_tokens)
         _cache_put(key, report)
         return report
 

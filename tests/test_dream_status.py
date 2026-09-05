@@ -17,9 +17,7 @@ def _clear_dream_status() -> None:
 
 class TestParseOperations:
     def test_extracts_project_name_and_reason(self) -> None:
-        result = dream_status.parse_operations(
-            "- [mcp-memory/task/old-x]: superseded by task/new-x"
-        )
+        result = dream_status.parse_operations("- [mcp-memory/task/old-x]: superseded by task/new-x")
         assert result == [
             {
                 "project": "mcp-memory",
@@ -68,9 +66,7 @@ class TestParseOperations:
         assert result[0]["hash"] == "a1b2c3d4"
 
     def test_observation_merge_action(self) -> None:
-        result = dream_status.parse_operations(
-            "[p/task/a#a1b2c3d4] - merged observation into #deadbeef: duplicate"
-        )
+        result = dream_status.parse_operations("[p/task/a#a1b2c3d4] - merged observation into #deadbeef: duplicate")
         assert result[0]["action"] == "obs-merge"
         assert result[0]["hash"] == "a1b2c3d4"
 
@@ -205,9 +201,7 @@ class TestRecordAndRead:
             "poll_seconds": 900.0,
         }
 
-    def test_record_pass_sets_last_pass_with_operations(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_record_pass_sets_last_pass_with_operations(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream_status.time, "time", lambda: 5000.0)
         dream_status.record_startup(
             enabled=True,
@@ -222,9 +216,7 @@ class TestRecordAndRead:
         assert last["ts"] == 5000.0
         assert last["ok"] is True
         assert last["audit_text"] == "[scratch/task/old] - stale"
-        assert last["operations"] == [
-            {"project": "scratch", "name": "task/old", "reason": "stale", "action": "demote"}
-        ]
+        assert last["operations"] == [{"project": "scratch", "name": "task/old", "reason": "stale", "action": "demote"}]
 
     def test_record_pass_retains_raw_text_when_unparseable(self) -> None:
         dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
@@ -324,9 +316,7 @@ class TestRunning:
     def test_legacy_marker_without_running_reads_as_none(self) -> None:
         path = dream_status._status_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps({"schema": 2, "configs": {}, "last_pass": None}), encoding="utf-8"
-        )
+        path.write_text(json.dumps({"schema": 2, "configs": {}, "last_pass": None}), encoding="utf-8")
         status = dream_status.read_status()
         assert status is not None
         assert status["running"] is None

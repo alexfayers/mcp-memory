@@ -13,17 +13,19 @@ from mcp.server.fastmcp import FastMCP
 from . import metrics, usefulness
 from .activity import record_tool
 from .config import get_db_path
-from .database import DatabaseManager, GraphResult, NodeList
 from .models import (
     VALID_RELATION_TYPES,
     Entity,
     Relation,
     normalize_relation_type,
 )
+from .storage import GraphResult, NodeList, open_writable
 from .visualise import register_visualise_routes
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from .storage import Storage
 
 
 def _track[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
@@ -121,9 +123,7 @@ CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
     "Relations are the core of the graph model. Each relation has source, target, and type."
 )
-DELETE_ENTITY_DESC = (
-    "Delete an entity and all its associated observations and relations from a project."
-)
+DELETE_ENTITY_DESC = "Delete an entity and all its associated observations and relations from a project."
 DELETE_RELATION_DESC = "Delete a specific relation between two entities in a project."
 RESTORE_ENTITY_DESC = (
     "Restore a soft-deleted entity, making it visible to reads again. Soft-deleted "
@@ -133,9 +133,7 @@ RESTORE_ENTITY_DESC = (
 GET_ENTITY_WITH_RELATIONS_DESC = (
     "Get an entity along with all its relations and related entities within a project. "
     "Traverses the graph to discover linked context. "
-    "Optionally filter by entityType and/or relationType."
-    + _MAX_OBSERVATION_CHARS_DOC
-    + _RELATIONS_WIRE_DOC
+    "Optionally filter by entityType and/or relationType." + _MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
 ADD_OBSERVATIONS_DESC = (
     "Append observations to an existing entity without overwriting. "
@@ -270,34 +268,34 @@ SEARCH_ALL_PROJECTS_DESC = (
     + _RELATIONS_WIRE_DOC
 )
 
-_db: DatabaseManager | None = None
+_db: Storage | None = None
 
 
-def _get_db() -> DatabaseManager:
+def _get_db() -> Storage:
     """Lazily initialise and return the database manager."""
     global _db  # noqa: PLW0603
     if _db is None:
-        _db = DatabaseManager(get_db_path())
+        _db = open_writable(get_db_path())
     return _db
 
 
 _GLOBAL_PROJECT = "global"
 
 
-def _ensure_project_root(db: DatabaseManager, project: str) -> None:
+def _ensure_project_root(db: Storage, project: str) -> None:
     """Auto-create a project/<name> root entity if it doesn't exist yet."""
     if project == _GLOBAL_PROJECT:
         return
     root_name = f"project/{project}"
     try:
-        db.get_entity(project, root_name)
+        db.reads.get_entity(project, root_name)
     except ValueError:
         entity: dict[str, object] = {
             "name": root_name,
             "entityType": "project",
             "observations": [f"Root entity for {project}"],
         }
-        db.create_entities(project, [entity])
+        db.entities.create(project, [entity])
 
 
 register_visualise_routes(mcp, _get_db)
@@ -419,13 +417,10 @@ def _validate_entity_type_and_name(project: str, entity_type: object, name: str)
     if not isinstance(entity_type, str) or not entity_type:
         raise ValueError(f"Entity type must be a non-empty string, got: {entity_type!r}")
     if entity_type not in VALID_ENTITY_TYPES:
-        raise ValueError(
-            f"Invalid entity type '{entity_type}'. Valid types: {sorted(VALID_ENTITY_TYPES)}"
-        )
+        raise ValueError(f"Invalid entity type '{entity_type}'. Valid types: {sorted(VALID_ENTITY_TYPES)}")
     if not name.startswith(f"{entity_type}/"):
         raise ValueError(
-            f"Entity name '{name}' must start with '{entity_type}/' "
-            f"(convention: <entityType>/<identifier>)."
+            f"Entity name '{name}' must start with '{entity_type}/' (convention: <entityType>/<identifier>)."
         )
     if entity_type == "project" and name != f"project/{project}":
         raise ValueError(
@@ -482,22 +477,20 @@ def create_entities(
         for entity_data in entities:
             name = str(entity_data.get("name", ""))
             if project == _GLOBAL_PROJECT:
-                conflict = db.entity_exists_outside_project(name, _GLOBAL_PROJECT)
+                conflict = db.entities.exists_outside(name, _GLOBAL_PROJECT)
                 if conflict:
                     raise ValueError(
-                        f"Entity '{name}' already exists in project '{conflict}'. "
-                        f"Cannot duplicate in global scope."
+                        f"Entity '{name}' already exists in project '{conflict}'. Cannot duplicate in global scope."
                     )
-            elif db.entity_exists_in_project(name, _GLOBAL_PROJECT):
+            elif db.entities.exists_in(name, _GLOBAL_PROJECT):
                 raise ValueError(
-                    f"Entity '{name}' already exists in global scope. "
-                    f"Cannot duplicate in project '{project}'."
+                    f"Entity '{name}' already exists in global scope. Cannot duplicate in project '{project}'."
                 )
 
-        db.create_entities(project, entities)  # type: ignore[arg-type]
+        db.entities.create(project, entities)  # type: ignore[arg-type]
 
         if all_relations:
-            db.create_relations(project, all_relations)
+            db.relations.create(project, all_relations)
 
         return {"message": f"Created {len(entities)} entities in project '{project}'."}
     except Exception as e:
@@ -522,7 +515,7 @@ def search_nodes(
     """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
     try:
         db = _get_db()
-        result = db.search_nodes(
+        result = db.reads.search(
             project,
             query,
             limit=limit,
@@ -551,7 +544,7 @@ def read_graph(
     """Return the most recent entities and their relations for a project."""
     try:
         db = _get_db()
-        result: NodeList = db.read_graph(
+        result: NodeList = db.reads.recent(
             project,
             status=status,  # type: ignore[arg-type]
             compact=compact,
@@ -570,17 +563,15 @@ def list_metadata(kind: str, project: str | None = None) -> dict[str, object]:
         db = _get_db()
         result: dict[str, object]
         if kind == "projects":
-            result = {"projects": db.list_projects()}
+            result = {"projects": db.projects.names()}
         elif kind == "paths" and project is None:
-            result = {"mappings": [{"project": n, "path": p} for n, p in db.list_project_paths()]}
+            result = {"mappings": [{"project": n, "path": p} for n, p in db.projects.paths()]}
         elif kind == "paths" and project is not None:
-            result = {"paths": db.get_paths_for_project(project)}
+            result = {"paths": db.projects.paths_for(project)}
         elif kind == "groups" and project is None:
-            result = {"mappings": [{"project": n, "group": g} for n, g in db.list_project_groups()]}
+            result = {"mappings": [{"project": n, "group": g} for n, g in db.projects.groups()]}
         elif kind == "groups" and project is not None:
-            result = {
-                "mappings": [{"project": n, "group": g} for n, g in db.list_project_groups(project)]
-            }
+            result = {"mappings": [{"project": n, "group": g} for n, g in db.projects.groups(project)]}
         else:
             result = {"error": f"Invalid kind '{kind}'. Must be one of: projects, paths, groups."}
         return result
@@ -596,12 +587,12 @@ def set_metadata(project: str, kind: str, values: list[str]) -> dict[str, object
         db = _get_db()
         if kind == "paths":
             _ensure_project_root(db, project)
-            db.set_project_paths(project, values)
-            return {"project": project, "paths": db.get_paths_for_project(project)}
+            db.projects.set_paths(project, values)
+            return {"project": project, "paths": db.projects.paths_for(project)}
         if kind == "groups":
             _ensure_project_root(db, project)
-            db.set_project_groups(project, values)
-            return {"project": project, "members": db.get_group_members(project)}
+            db.projects.set_groups(project, values)
+            return {"project": project, "members": db.projects.group_members(project)}
         return {"error": f"Invalid kind '{kind}'. Must be one of: paths, groups."}
     except Exception as e:
         return {"error": str(e)}
@@ -613,7 +604,7 @@ def get_project_for_path(path: str) -> dict[str, object]:
     """Return the project associated with a filesystem path, or null."""
     try:
         db = _get_db()
-        return {"project": db.get_project_for_path(path)}
+        return {"project": db.projects.get_project_for_path(path)}
     except Exception as e:
         return {"error": str(e)}
 
@@ -624,7 +615,7 @@ def get_group_members(project: str) -> dict[str, object]:
     """Return the other projects sharing a group with the given project."""
     try:
         db = _get_db()
-        return {"members": db.get_group_members(project)}
+        return {"members": db.projects.group_members(project)}
     except Exception as e:
         return {"error": str(e)}
 
@@ -635,7 +626,7 @@ def move_project_entities(source: str, target: str) -> dict[str, object]:
     """Move all entities from one project scope into another."""
     try:
         db = _get_db()
-        moved = db.move_project_entities(source, target)
+        moved = db.projects.move_entities(source, target)
         return {"message": f"Moved {moved} entities from '{source}' to '{target}'.", "moved": moved}
     except Exception as e:
         return {"error": str(e)}
@@ -647,7 +638,7 @@ def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
     """Fold a duplicate entity into its canonical twin, then soft-delete the source."""
     try:
         db = _get_db()
-        result = db.merge_entities(project, source, target)
+        result = db.entities.merge(project, source, target)
         return {
             "message": f"Merged '{source}' into '{target}' in project '{project}'.",
             **result,
@@ -658,13 +649,11 @@ def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
 
 @mcp.tool(description=MERGE_OBSERVATIONS_DESC)
 @_track
-def merge_observations(
-    project: str, entityName: str, sourceHash: str, targetHash: str
-) -> dict[str, object]:
+def merge_observations(project: str, entityName: str, sourceHash: str, targetHash: str) -> dict[str, object]:
     """Fold one observation into another within an entity, addressed by content_hash."""
     try:
         db = _get_db()
-        result = db.merge_observations(project, entityName, sourceHash, targetHash)
+        result = db.observations.merge(project, entityName, sourceHash, targetHash)
         return {
             "message": f"Merged observation into target in '{entityName}'.",
             **result,
@@ -679,18 +668,18 @@ def delete_project(project: str) -> dict[str, str]:
     """Delete an empty project and its registered paths."""
     try:
         db = _get_db()
-        db.delete_project(project)
+        db.projects.delete(project)
         return {"message": f"Deleted project '{project}'."}
     except Exception as e:
         return {"error": str(e)}
 
 
-def _resolve_projects(db: DatabaseManager, projects: list[str], expand_groups: bool) -> list[str]:
+def _resolve_projects(db: Storage, projects: list[str], expand_groups: bool) -> list[str]:
     """Union each seed project with its group siblings when expand_groups is set."""
     resolved = list(projects)
     if expand_groups:
         for seed in projects:
-            for member in db.get_group_members(seed):
+            for member in db.projects.group_members(seed):
                 if member not in resolved:
                     resolved.append(member)
     return resolved
@@ -718,7 +707,7 @@ def search_all_projects(
             return {"error": "expand_groups requires projects"}
         db = _get_db()
         resolved_projects = _resolve_projects(db, projects, expand_groups) if projects else None
-        result = db.search_nodes(
+        result = db.reads.search(
             resolved_projects,
             query,
             limit=limit,
@@ -765,7 +754,7 @@ def create_relations(
             )
             for rel in relations
         ]
-        db.create_relations(project, relation_objects)
+        db.relations.create(project, relation_objects)
         return {"message": f"Created {len(relation_objects)} relations in project '{project}'."}
     except Exception as e:
         return {"error": str(e)}
@@ -780,7 +769,7 @@ def delete_entity(
     """Delete an entity and all its observations and relations."""
     try:
         db = _get_db()
-        db.delete_entity(project, name)
+        db.entities.delete(project, name)
         return {"message": f"Deleted entity '{name}' from project '{project}'."}
     except Exception as e:
         return {"error": str(e)}
@@ -795,7 +784,7 @@ def restore_entity(
     """Restore a soft-deleted entity, making it visible to reads again."""
     try:
         db = _get_db()
-        db.restore_entity(project, name)
+        db.entities.restore(project, name)
         return {"message": f"Restored entity '{name}' in project '{project}'."}
     except Exception as e:
         return {"error": str(e)}
@@ -812,11 +801,9 @@ def delete_relation(
     """Delete a specific relation between two entities."""
     try:
         db = _get_db()
-        db.delete_relation(project, source, target, type)
+        db.relations.delete(project, source, target, type)
         return {
-            "message": (
-                f"Deleted relation '{source}' -> '{target}' ({type}) from project '{project}'."
-            ),
+            "message": (f"Deleted relation '{source}' -> '{target}' ({type}) from project '{project}'."),
         }
     except Exception as e:
         return {"error": str(e)}
@@ -835,7 +822,7 @@ def get_entity_with_relations(
     """Get an entity with all its relations and related entities, optionally filtered."""
     try:
         db = _get_db()
-        result: GraphResult = db.get_entity_with_relations(
+        result: GraphResult = db.reads.get_entity_with_relations(
             project,
             name,
             entity_type=entityType,
@@ -858,7 +845,7 @@ def add_observations(
     """Append deduplicated observations to an existing entity."""
     try:
         db = _get_db()
-        hashes = db.add_observations(project, entityName, observations)
+        hashes = db.observations.add(project, entityName, observations)
         return {
             "message": f"Added {len(hashes)} observations to '{entityName}'.",
             "count": len(hashes),
@@ -879,9 +866,7 @@ def delete_observations(
     """Delete observations by exact content match and/or by content_hash."""
     try:
         db = _get_db()
-        count = db.delete_observations(
-            project, entityName, observations=observations, hashes=observationHashes
-        )
+        count = db.observations.delete(project, entityName, observations=observations, hashes=observationHashes)
         return {"message": f"Deleted {count} observations from '{entityName}'.", "count": count}
     except Exception as e:
         return {"error": str(e)}
@@ -889,13 +874,11 @@ def delete_observations(
 
 @mcp.tool(description=TRIM_OBSERVATIONS_TO_OUTCOME_DESC)
 @_track
-def trim_observations_to_outcome(
-    project: str, name: str, keep_hashes: list[str]
-) -> dict[str, object]:
+def trim_observations_to_outcome(project: str, name: str, keep_hashes: list[str]) -> dict[str, object]:
     """Delete all observations on an entity except those in keep_hashes."""
     try:
         db = _get_db()
-        deleted = db.trim_observations_to_outcome(project, name, keep_hashes)
+        deleted = db.observations.trim_to_outcome(project, name, keep_hashes)
         return {"message": f"Trimmed {deleted} observation(s) from '{name}'.", "deleted": deleted}
     except Exception as e:
         return {"error": str(e)}
@@ -907,7 +890,7 @@ def rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
     """Rename a single entity in place, preserving its relations and observations."""
     try:
         db = _get_db()
-        db.rename_entity(project, old_name, new_name)
+        db.entities.rename(project, old_name, new_name)
         return {"message": f"Renamed '{old_name}' to '{new_name}' in project '{project}'."}
     except Exception as e:
         return {"error": str(e)}
@@ -915,16 +898,16 @@ def rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
 
 @mcp.tool(description=MOVE_ENTITY_CROSS_SCOPE_DESC)
 @_track
-def move_entity_cross_scope(
-    source_project: str, target_project: str, name: str
-) -> dict[str, object]:
+def move_entity_cross_scope(source_project: str, target_project: str, name: str) -> dict[str, object]:
     """Move an entity to another scope, dropping and returning its now-cross-scope relations."""
     try:
         db = _get_db()
-        dropped = db.move_entity_cross_scope(source_project, target_project, name)
+        dropped = db.entities.move_cross_scope(source_project, target_project, name)
         return {
             "message": f"Moved '{name}' from '{source_project}' to '{target_project}'.",
-            "droppedRelations": dropped,
+            "droppedRelations": [
+                {"source": r.source, "target": r.target, "relation_type": r.relation_type} for r in dropped
+            ],
         }
     except Exception as e:
         return {"error": str(e)}
@@ -940,7 +923,7 @@ def set_entity_status(
     """Set or clear the status of an entity."""
     try:
         db = _get_db()
-        count = db.set_entity_status(project, name, status)  # type: ignore[arg-type]
+        count = db.entities.set_status(project, name, status)  # type: ignore[arg-type]
         result: dict[str, object] = {"message": f"Status of '{name}' set to {status!r}."}
         if status == "resolved" and count > _RESOLVED_OBS_CEILING:
             result["bloatWarning"] = (
@@ -973,11 +956,9 @@ def vote(
             return {
                 "name": name,
                 "project": project,
-                "vote_score": db.vote_entity(project, name, vote),
+                "vote_score": db.entities.vote(project, name, vote),
             }
-        vote_score = db.vote_observation(
-            project, name, vote, content=observation, content_hash=observationHash
-        )
+        vote_score = db.observations.vote(project, name, vote, content=observation, content_hash=observationHash)
         return {
             "entityName": name,
             "project": project,

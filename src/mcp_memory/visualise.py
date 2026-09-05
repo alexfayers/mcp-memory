@@ -20,28 +20,27 @@ if TYPE_CHECKING:
 
     from mcp.server.fastmcp import FastMCP
 
-    from .database import DatabaseManager
+    from .models import Entity, Observation
+    from .storage import NodeList, Storage
 
 __all__ = ["httpx"]
 
-_VISUALISE_HTML = (
-    importlib.resources.files("mcp_memory").joinpath("templates/visualise.html").read_text()
-)
+_VISUALISE_HTML = importlib.resources.files("mcp_memory").joinpath("templates/visualise.html").read_text()
 
 # The trigger only kicks off a background pass on the agent and returns at once, so
 # a short timeout is enough; it bounds how long an unreachable agent blocks the UI.
 _TRIGGER_TIMEOUT_SECONDS = 5.0
 
 
-def get_projects(db: DatabaseManager) -> list[str]:
+def get_projects(db: Storage) -> list[str]:
     """Return all project names from the database."""
-    return db.list_projects()
+    return db.projects.names()
 
 
-def get_project_paths(db: DatabaseManager) -> dict[str, list[str]]:
+def get_project_paths(db: Storage) -> dict[str, list[str]]:
     """Return registered on-disk paths grouped by project name."""
     grouped: dict[str, list[str]] = {}
-    for project, path in db.list_project_paths():
+    for project, path in db.projects.paths():
         grouped.setdefault(project, []).append(path)
     return grouped
 
@@ -82,65 +81,49 @@ def get_recall_state() -> dict[str, object]:
     }
 
 
-def get_all_graph_data(
-    db: DatabaseManager, project: str | None = None
-) -> dict[str, list[dict[str, object]]]:
+def _serialise_observation(observation: Observation) -> dict[str, object]:
+    return {
+        "content": observation.content,
+        "content_hash": observation.content_hash,
+        "vote_score": observation.vote_score,
+    }
+
+
+def _serialise_entity(entity: Entity, rank: int | None = None) -> dict[str, object]:
+    serialised: dict[str, object] = {
+        "name": entity.name,
+        "entity_type": entity.entity_type,
+        "project": entity.project_name,
+        "status": entity.status,
+        "created_at": entity.created_at,
+        "updated_at": entity.updated_at,
+        "vote_score": entity.vote_score,
+        "observations": [_serialise_observation(o) for o in entity.observations],
+    }
+    if rank is None:
+        return serialised
+    return {"rank": rank, **serialised}
+
+
+def _serialise_graph(result: NodeList, *, ranked: bool = False) -> dict[str, list[dict[str, object]]]:
+    return {
+        "entities": [
+            _serialise_entity(entity, position if ranked else None)
+            for position, entity in enumerate(result["entities"], start=1)
+        ],
+        "relations": [
+            {"source": r.source, "target": r.target, "relation_type": r.relation_type} for r in result["relations"]
+        ],
+    }
+
+
+def get_all_graph_data(db: Storage, project: str | None = None) -> dict[str, list[dict[str, object]]]:
     """Return all entities and relations for a project (or all projects) as serialisable dicts."""
-    if project:
-        where_clause = "WHERE e.deleted_at IS NULL AND e.project_id = ?"
-        params: tuple[object, ...] = (db._get_or_create_project_id(project),)
-    else:
-        where_clause = "WHERE e.deleted_at IS NULL"
-        params = ()
-
-    entity_rows = db._db.execute(
-        "SELECT e.id, e.name, et.name AS entity_type, e.status, e.project_id, p.name AS project, "
-        "e.created_at, e.updated_at, e.vote_score "
-        "FROM entities e "
-        "JOIN entity_types et ON e.entity_type_id = et.id "
-        "JOIN projects p ON e.project_id = p.id " + where_clause,
-        params,
-    ).fetchall()
-
-    entities: list[dict[str, object]] = []
-    entity_ids: list[int] = []
-    project_ids: set[int] = set()
-    for row in entity_rows:
-        scored = db._get_observations_full(row["id"])
-        entities.append(
-            {
-                "name": row["name"],
-                "entity_type": row["entity_type"],
-                "project": row["project"],
-                "status": row["status"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-                "vote_score": row["vote_score"],
-                "observations": [
-                    {
-                        "content": o.content,
-                        "content_hash": o.content_hash,
-                        "vote_score": o.vote_score,
-                    }
-                    for o in scored
-                ],
-            }
-        )
-        entity_ids.append(row["id"])
-        project_ids.add(row["project_id"])
-
-    all_relations: list[dict[str, object]] = []
-    for pid in project_ids:
-        for r in db._get_relations_for_entities(pid, entity_ids):
-            all_relations.append(
-                {"source": r.source, "target": r.target, "relation_type": r.relation_type}
-            )
-
-    return {"entities": entities, "relations": all_relations}
+    return _serialise_graph(db.reads.all_entities(project))
 
 
 def search_graph(
-    db: DatabaseManager,
+    db: Storage,
     query: str,
     project: str | None = None,
     match_all: bool = False,
@@ -148,36 +131,15 @@ def search_graph(
 ) -> dict[str, list[dict[str, object]]]:
     """Run the same recency-weighted BM25 search the LLM tools use, as serialisable dicts.
 
-    Faithful to the MCP search tools: calls db.search_nodes directly with the tool default
+    Faithful to the MCP search tools: calls db.reads.search directly with the tool default
     limit for the chosen scope (10 when project-scoped, 50 for all projects). Each entity
     carries a 1-based rank matching its position in the ranked list.
     """
     effective_limit = limit if limit is not None else (10 if project else 50)
-    result = db.search_nodes(project, query, limit=effective_limit, match_all=match_all)
-
-    entities: list[dict[str, object]] = [
-        {
-            "rank": position,
-            "name": entity.name,
-            "entity_type": entity.entity_type,
-            "project": entity.project_name,
-            "status": entity.status,
-            "created_at": entity.created_at,
-            "updated_at": entity.updated_at,
-            "vote_score": entity.vote_score,
-            "observations": [
-                {"content": o.content, "content_hash": o.content_hash, "vote_score": o.vote_score}
-                for o in entity.observations
-            ],
-        }
-        for position, entity in enumerate(result["entities"], start=1)
-    ]
-    relations: list[dict[str, object]] = [
-        {"source": r.source, "target": r.target, "relation_type": r.relation_type}
-        for r in result["relations"]
-    ]
-
-    return {"entities": entities, "relations": relations}
+    return _serialise_graph(
+        db.reads.search(project, query, limit=effective_limit, match_all=match_all),
+        ranked=True,
+    )
 
 
 async def _parse_vote_body(
@@ -209,7 +171,7 @@ async def _parse_vote_body(
     return project, name, vote, (observation_hash if require_hash else None)
 
 
-def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager]) -> None:
+def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], Storage]) -> None:
     """Register the /visualise and /api/* custom routes on the FastMCP server."""
 
     @mcp.custom_route("/api/projects", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
@@ -243,9 +205,7 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
 
     @mcp.custom_route("/api/idle", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_idle(request: Request) -> JSONResponse:
-        return JSONResponse(
-            {"last_activity": activity.last_activity(), "idle_seconds": activity.idle_seconds()}
-        )
+        return JSONResponse({"last_activity": activity.last_activity(), "idle_seconds": activity.idle_seconds()})
 
     @mcp.custom_route("/api/dream", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_dream(request: Request) -> JSONResponse:
@@ -285,9 +245,7 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
         bucket = request.query_params.get("bucket", "day")
         since = request.query_params.get("since")
         buckets = usage_over_time(get_db(), bucket, since)
-        return JSONResponse(
-            {"bucket": bucket, "since": since, "series": [asdict(b) for b in buckets]}
-        )
+        return JSONResponse({"bucket": bucket, "since": since, "series": [asdict(b) for b in buckets]})
 
     @mcp.custom_route("/api/eval", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_eval(request: Request) -> JSONResponse:
@@ -306,7 +264,7 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
             return parsed
         project, name, vote, _ = parsed
         try:
-            new_score = get_db().vote_entity(project, name, vote)
+            new_score = get_db().entities.vote(project, name, vote)
         except ValueError:
             return JSONResponse({"error": "entity not found"}, status_code=404)
         result = {"name": name, "project": project, "vote_score": new_score}
@@ -320,9 +278,7 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
             return parsed
         project, name, vote, observation_hash = parsed
         try:
-            new_score = get_db().vote_observation(
-                project, name, vote, content_hash=observation_hash or ""
-            )
+            new_score = get_db().observations.vote(project, name, vote, content_hash=observation_hash or "")
         except ValueError:
             return JSONResponse({"error": "observation not found"}, status_code=404)
         result = {
@@ -358,11 +314,9 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], DatabaseManager
         source_hash = body.get("sourceHash")
         target_hash = body.get("targetHash")
         if not isinstance(source_hash, str) or not isinstance(target_hash, str):
-            return JSONResponse(
-                {"error": "sourceHash and targetHash are required"}, status_code=400
-            )
+            return JSONResponse({"error": "sourceHash and targetHash are required"}, status_code=400)
         try:
-            result = get_db().merge_observations(project, name, source_hash, target_hash)
+            result = get_db().observations.merge(project, name, source_hash, target_hash)
         except ValueError:
             return JSONResponse({"error": "observation not found"}, status_code=404)
         activity.record_tool(

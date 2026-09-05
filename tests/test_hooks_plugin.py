@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
@@ -12,7 +13,6 @@ import pytest
 pytest.importorskip("cline_hooks")
 
 from mcp_memory.config import get_db_path
-from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.plugin import (
     _EDIT_TOOL_WEIGHT,
     _FRUSTRATION_NUDGE_TEMPLATE,
@@ -34,6 +34,10 @@ from mcp_memory.hooks.plugin import (
     _workspace_entity_note,
 )
 from mcp_memory.path_resolver import normalize_path
+from mcp_memory.storage import open_writable
+
+if TYPE_CHECKING:
+    from mcp_memory.storage import Storage
 
 _needs_profanity_check = pytest.mark.skipif(
     not ENABLE_PROFANITY_CHECK,
@@ -100,9 +104,7 @@ class TestFindProjectFromPath:
 
 
 class TestResolveAnchor:
-    def test_returns_git_root_when_no_marker_configured(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_git_root_when_no_marker_configured(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_MEMORY_WORKSPACE_MARKERS", raising=False)
         pkg = tmp_path / "workspace" / "src" / "PkgA"
         (pkg / ".git").mkdir(parents=True)
@@ -118,9 +120,7 @@ class TestResolveAnchor:
         (pkg / ".git").mkdir(parents=True)
         assert _resolve_anchor(str(pkg / "lib" / "x.py")) == (workspace.resolve(), "PkgA")
 
-    def test_returns_none_when_no_git_root(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_none_when_no_git_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_MEMORY_WORKSPACE_MARKERS", raising=False)
         plain = tmp_path / "plain"
         plain.mkdir()
@@ -129,30 +129,28 @@ class TestResolveAnchor:
 
 class TestSafeProject:
     def test_reuses_project_already_mapped_under_anchor(self, tmp_path: Path) -> None:
-        db = DatabaseManager(tmp_path / "memory.db")
+        db = open_writable(tmp_path / "memory.db")
         workspace = tmp_path / "workspace"
         (workspace / "src" / "PkgA").mkdir(parents=True)
-        db.set_project_paths("platform", [str(workspace)])
+        db.projects.set_paths("platform", [str(workspace)])
         assert _safe_project(workspace, "PkgA", db) == "platform"
 
     def test_pins_to_existing_project_matching_basename(self, tmp_path: Path) -> None:
-        db = DatabaseManager(tmp_path / "memory.db")
-        db.create_entities(
-            "PkgA", [{"name": "task/x", "entityType": "task", "observations": ["o"]}]
-        )
+        db = open_writable(tmp_path / "memory.db")
+        db.entities.create("PkgA", [{"name": "task/x", "entityType": "task", "observations": ["o"]}])
         anchor = tmp_path / "PkgA"
         anchor.mkdir()
         assert _safe_project(anchor, "PkgA", db) == "PkgA"
 
     def test_reuses_project_already_mapped_below_anchor(self, tmp_path: Path) -> None:
-        db = DatabaseManager(tmp_path / "memory.db")
+        db = open_writable(tmp_path / "memory.db")
         workspace = tmp_path / "workspace"
         (workspace / "src" / "PkgA").mkdir(parents=True)
-        db.set_project_paths("platform", [str(workspace / "src" / "PkgA")])
+        db.projects.set_paths("platform", [str(workspace / "src" / "PkgA")])
         assert _safe_project(workspace, "workspace", db) == "platform"
 
     def test_returns_none_when_name_is_unknown(self, tmp_path: Path) -> None:
-        db = DatabaseManager(tmp_path / "memory.db")
+        db = open_writable(tmp_path / "memory.db")
         anchor = tmp_path / "BrandNew"
         anchor.mkdir()
         assert _safe_project(anchor, "BrandNew", db) is None
@@ -174,18 +172,16 @@ def _real_plugin() -> MemoryPlugin:
 
 
 class TestAutoRegister:
-    def _db(self) -> DatabaseManager:
-        return DatabaseManager(get_db_path())
+    def _db(self) -> Storage:
+        return open_writable(get_db_path())
 
     def test_pins_to_existing_project_matching_basename(self, tmp_path: Path) -> None:
         db = self._db()
-        db.create_entities(
-            "acme", [{"name": "project/acme", "entityType": "project", "observations": ["root"]}]
-        )
+        db.entities.create("acme", [{"name": "project/acme", "entityType": "project", "observations": ["root"]}])
         repo = tmp_path / "acme"
         (repo / ".git").mkdir(parents=True)
         result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert self._db().get_project_for_path(str(repo)) == "acme"
+        assert self._db().projects.get_project_for_path(str(repo)) == "acme"
         assert result is not None
         assert any("acme" in note for note in result.notes)
 
@@ -193,15 +189,15 @@ class TestAutoRegister:
         db = self._db()
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
-        db.set_project_paths("platform", [str(repo / "sub")])
+        db.projects.set_paths("platform", [str(repo / "sub")])
         _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert self._db().get_project_for_path(str(repo)) == "platform"
+        assert self._db().projects.get_project_for_path(str(repo)) == "platform"
 
     def test_note_but_no_mint_when_unknown(self, tmp_path: Path) -> None:
         repo = tmp_path / "weird"
         (repo / ".git").mkdir(parents=True)
         result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert "weird" not in self._db().list_projects()
+        assert "weird" not in self._db().projects.names()
         assert result is not None
         assert any("set_metadata" in note for note in result.notes)
 
@@ -209,48 +205,38 @@ class TestAutoRegister:
         db = self._db()
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
-        db.set_project_paths("platform", [str(repo)])
+        db.projects.set_paths("platform", [str(repo)])
         _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert self._db().get_paths_for_project("platform") == [normalize_path(str(repo))]
+        assert self._db().projects.paths_for("platform") == [normalize_path(str(repo))]
 
-    def test_home_anchor_is_never_registered(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_home_anchor_is_never_registered(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         home = tmp_path / "home"
         (home / ".git").mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: home)
         db = self._db()
-        db.create_entities(
-            "home", [{"name": "project/home", "entityType": "project", "observations": ["r"]}]
-        )
+        db.entities.create("home", [{"name": "project/home", "entityType": "project", "observations": ["r"]}])
         _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(home)])
-        assert self._db().get_project_for_path(str(home)) is None
+        assert self._db().projects.get_project_for_path(str(home)) is None
 
-    def test_collapses_to_workspace_marker_root(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_collapses_to_workspace_marker_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_WORKSPACE_MARKERS", ".marker")
         workspace = tmp_path / "workspace"
         (workspace / ".marker").mkdir(parents=True)
         pkg = workspace / "src" / "PkgA"
         (pkg / ".git").mkdir(parents=True)
         db = self._db()
-        db.create_entities(
-            "PkgA", [{"name": "project/PkgA", "entityType": "project", "observations": ["r"]}]
-        )
+        db.entities.create("PkgA", [{"name": "project/PkgA", "entityType": "project", "observations": ["r"]}])
         _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(pkg)])
-        assert self._db().get_project_for_path(str(workspace / "src" / "PkgB")) == "PkgA"
+        assert self._db().projects.get_project_for_path(str(workspace / "src" / "PkgB")) == "PkgA"
 
-    def test_db_error_does_not_break_task_start(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_db_error_does_not_break_task_start(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = tmp_path / "acme"
         (repo / ".git").mkdir(parents=True)
 
-        def _boom(_path: object) -> DatabaseManager:
+        def _boom(_path: object) -> Storage:
             raise OSError("db unavailable")
 
-        monkeypatch.setattr("mcp_memory.hooks.plugin.DatabaseManager", _boom)
+        monkeypatch.setattr("mcp_memory.hooks.plugin.open_writable", _boom)
         result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
         assert result is not None
 
@@ -282,9 +268,7 @@ class TestMemoryPluginScopeTracking:
     def test_initial_scope_is_unknown(self, plugin: MemoryPlugin) -> None:
         assert plugin._project_scope == "unknown"
 
-    def test_task_start_sets_scope_from_git_repo(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_task_start_sets_scope_from_git_repo(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "test-repo"
         (repo / ".git").mkdir(parents=True)
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
@@ -296,9 +280,7 @@ class TestMemoryPluginScopeTracking:
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(no_repo)])
         assert plugin._project_scope == "plain-workspace"
 
-    def test_post_tool_use_updates_scope_from_file_path(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_post_tool_use_updates_scope_from_file_path(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-a"
         repo_b = tmp_path / "repo-b"
         (repo_a / ".git").mkdir(parents=True)
@@ -316,9 +298,7 @@ class TestMemoryPluginScopeTracking:
         )
         assert plugin._project_scope == "repo-b"
 
-    def test_post_tool_use_updates_scope_from_claude_code_file_path(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_post_tool_use_updates_scope_from_claude_code_file_path(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-a"
         repo_b = tmp_path / "repo-b"
         (repo_a / ".git").mkdir(parents=True)
@@ -334,9 +314,7 @@ class TestMemoryPluginScopeTracking:
         )
         assert plugin._project_scope == "repo-b"
 
-    def test_post_tool_use_updates_scope_from_working_dir(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_post_tool_use_updates_scope_from_working_dir(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "my-repo"
         (repo / ".git").mkdir(parents=True)
 
@@ -368,9 +346,7 @@ class TestMemoryPluginScopeTracking:
 
 
 class TestMemoryPluginMessages:
-    def test_block_message_includes_project_scope(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_block_message_includes_project_scope(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "my-project"
         (repo / ".git").mkdir(parents=True)
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
@@ -389,9 +365,7 @@ class TestMemoryPluginMessages:
         assert result.block is not None
         assert "`my-project`" in result.block
 
-    def test_reminder_message_includes_project_scope(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_reminder_message_includes_project_scope(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "cool-project"
         (repo / ".git").mkdir(parents=True)
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
@@ -457,18 +431,14 @@ class TestMemoryPluginServerDownGating:
 
 
 class TestRegisteredPathResolution:
-    def test_task_start_prefers_registered_project(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_task_start_prefers_registered_project(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "acme-service-infra"
         (repo / ".git").mkdir(parents=True)
         with patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value="platform"):
             plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
         assert plugin._project_scope == "platform"
 
-    def test_update_from_parameters_uses_resolver(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_update_from_parameters_uses_resolver(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "acme-service-infra"
         (repo / ".git").mkdir(parents=True)
         with patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value="platform"):
@@ -499,8 +469,8 @@ class TestRegisteredPathResolution:
 
 
 class TestResolvedProjectSet:
-    def _db(self) -> DatabaseManager:
-        return DatabaseManager(get_db_path())
+    def _db(self) -> Storage:
+        return open_writable(get_db_path())
 
     def test_empty_workspace_roots_returns_global_only(self) -> None:
         assert _resolved_project_set([]) == ["global"]
@@ -512,28 +482,26 @@ class TestResolvedProjectSet:
 
     def test_single_sibling_included(self, tmp_path: Path) -> None:
         db = self._db()
-        db.set_project_groups("llm-prompts", ["tooling"])
-        db.set_project_groups("cline-hooks", ["tooling"])
+        db.projects.set_groups("llm-prompts", ["tooling"])
+        db.projects.set_groups("cline-hooks", ["tooling"])
         repo = tmp_path / "llm-prompts"
         repo.mkdir()
         assert _resolved_project_set([str(repo)]) == ["global", "llm-prompts", "cline-hooks"]
 
     def test_multiple_siblings_included(self, tmp_path: Path) -> None:
         db = self._db()
-        db.set_project_groups("a", ["tooling"])
-        db.set_project_groups("b", ["tooling"])
-        db.set_project_groups("c", ["tooling"])
+        db.projects.set_groups("a", ["tooling"])
+        db.projects.set_groups("b", ["tooling"])
+        db.projects.set_groups("c", ["tooling"])
         repo = tmp_path / "a"
         repo.mkdir()
         assert _resolved_project_set([str(repo)]) == ["global", "a", "b", "c"]
 
-    def test_db_error_falls_back_to_global_and_repo(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def _boom(_path: object) -> DatabaseManager:
+    def test_db_error_falls_back_to_global_and_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _boom(_path: object) -> Storage:
             raise OSError("db unavailable")
 
-        monkeypatch.setattr("mcp_memory.hooks.plugin.DatabaseManager", _boom)
+        monkeypatch.setattr("mcp_memory.hooks.plugin.open_writable", _boom)
         repo = tmp_path / "acme"
         repo.mkdir()
         assert _resolved_project_set([str(repo)]) == ["global", "acme"]
@@ -563,9 +531,9 @@ class TestBuildTaskStartContext:
         assert "Only if the user's opening message is generic" in instructions
 
     def test_project_list_reflects_resolved_scopes(self, tmp_path: Path) -> None:
-        db = DatabaseManager(get_db_path())
-        db.set_project_groups("llm-prompts", ["tooling"])
-        db.set_project_groups("cline-hooks", ["tooling"])
+        db = open_writable(get_db_path())
+        db.projects.set_groups("llm-prompts", ["tooling"])
+        db.projects.set_groups("cline-hooks", ["tooling"])
         repo = tmp_path / "llm-prompts"
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
@@ -944,9 +912,7 @@ class TestMemoryReadsNotGated:
         assert result is None
 
     @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
-    def test_pre_tool_use_read_via_use_mcp_tool_not_blocked(
-        self, plugin: MemoryPlugin, name: str
-    ) -> None:
+    def test_pre_tool_use_read_via_use_mcp_tool_not_blocked(self, plugin: MemoryPlugin, name: str) -> None:
         with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
             result = plugin.on_hook(
                 "PreToolUse",
@@ -1033,9 +999,7 @@ class TestReadOnlyAgentExemption:
             )
         assert result is None
 
-    def test_non_allowlisted_subagent_write_still_scope_checked(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_non_allowlisted_subagent_write_still_scope_checked(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         # Subagents skip the hard block but still get scope-mismatch protection on writes.
         repo = tmp_path / "my-repo"
         (repo / ".git").mkdir(parents=True)
@@ -1051,9 +1015,7 @@ class TestReadOnlyAgentExemption:
         assert result.block is not None
         assert "`wrong-project`" in result.block
 
-    def test_pre_mcp_tool_use_non_allowlisted_subagent_not_blocked(
-        self, plugin: MemoryPlugin
-    ) -> None:
+    def test_pre_mcp_tool_use_non_allowlisted_subagent_not_blocked(self, plugin: MemoryPlugin) -> None:
         with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
             result = plugin.on_hook(
                 "PreMcpToolUse",
@@ -1109,9 +1071,7 @@ class TestReadOnlyAgentExemption:
         mock_increment.assert_not_called()
         assert result is None
 
-    def test_env_var_extends_allowlist(
-        self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_env_var_extends_allowlist(self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_READONLY_AGENTS", "code-reviewer, security-reviewer")
         with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
             result = plugin.on_hook(
@@ -1203,9 +1163,7 @@ class TestMemoryReviewNudge:
 class TestProfanityNudge:
     def _note(self, message: str, verdict: bool, monkeypatch: pytest.MonkeyPatch) -> str:
         """Fire the nudge with a mocked profanity verdict and return the frustration note."""
-        monkeypatch.setattr(
-            "better_profanity.profanity.contains_profanity", lambda _message: verdict
-        )
+        monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: verdict)
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
             plugin = MemoryPlugin()
             result = plugin.on_hook("UserPromptSubmit", task_id="t1", message=message)
@@ -1237,29 +1195,21 @@ class TestProfanityNudge:
         monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: False)
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
             plugin = MemoryPlugin()
-            result = plugin.on_hook(
-                "UserPromptSubmit", task_id="t1", message="can you check the parser"
-            )
+            result = plugin.on_hook("UserPromptSubmit", task_id="t1", message="can you check the parser")
         assert result is None
 
     @_needs_frustration_check
-    def test_fires_on_repeated_punct_when_negative_and_not_shouting(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_fires_on_repeated_punct_when_negative_and_not_shouting(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("really???", False, monkeypatch)
         assert "[mild]" in note
         assert "vote=1" in note
         assert "repeated punctuation" in note
 
-    def test_repeated_punct_false_positive_does_not_fire_nudge(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_repeated_punct_false_positive_does_not_fire_nudge(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: False)
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
             plugin = MemoryPlugin()
-            result = plugin.on_hook(
-                "UserPromptSubmit", task_id="t1", message="self.config.value.thing"
-            )
+            result = plugin.on_hook("UserPromptSubmit", task_id="t1", message="self.config.value.thing")
         assert result is None
 
     @pytest.mark.parametrize(
@@ -1301,9 +1251,7 @@ class TestProfanityNudge:
             "freaking out about the parser",
         ],
     )
-    def test_word_boundaries_do_not_false_trigger(
-        self, message: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_word_boundaries_do_not_false_trigger(self, message: str, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("better_profanity.profanity.contains_profanity", lambda _message: False)
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
             plugin = MemoryPlugin()
@@ -1342,9 +1290,7 @@ class TestProfanityNudge:
         assert "all-caps shouting" in note
 
     @_needs_frustration_check
-    def test_caps_plus_punct_is_elevated_and_names_both(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_caps_plus_punct_is_elevated_and_names_both(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("WHY IS THIS BROKEN!!!", False, monkeypatch)
         assert "[elevated]" in note
         assert "vote=2" in note
@@ -1366,9 +1312,7 @@ class TestProfanityNudge:
 
     @_needs_profanity_check
     @_needs_frustration_check
-    def test_all_three_signals_is_strong_and_names_all(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_all_three_signals_is_strong_and_names_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("WHY IS THIS BROKEN!!!", True, monkeypatch)
         assert "[strong]" in note
         assert "vote=3" in note
@@ -1382,9 +1326,7 @@ class TestProfanityNudge:
         assert "[strong]" not in note
 
     @_needs_frustration_check
-    def test_lone_minced_oath_does_not_reach_elevated(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_lone_minced_oath_does_not_reach_elevated(self, monkeypatch: pytest.MonkeyPatch) -> None:
         note = self._note("geez", False, monkeypatch)
         assert "[mild]" in note
         assert "[elevated]" not in note
@@ -1524,9 +1466,7 @@ class TestFileEditsReducedWeight:
             )
         mock_increment.assert_called_once_with("t1", _EDIT_TOOL_WEIGHT)
 
-    def test_post_tool_use_multiedit_updates_scope(
-        self, plugin: MemoryPlugin, tmp_path: Path
-    ) -> None:
+    def test_post_tool_use_multiedit_updates_scope(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-a"
         repo_b = tmp_path / "repo-b"
         (repo_a / ".git").mkdir(parents=True)
@@ -1556,9 +1496,7 @@ class TestFileEditsReducedWeight:
         assert result is not None
         assert result.block is not None
 
-    def test_env_var_extends_edit_tools(
-        self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_env_var_extends_edit_tools(self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_EDIT_TOOLS", "apply_patch, str_replace")
         with (
             patch("mcp_memory.hooks.plugin.clear"),

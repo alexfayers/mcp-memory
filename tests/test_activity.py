@@ -7,8 +7,8 @@ import json
 import pytest
 
 from mcp_memory import activity
-from mcp_memory.database import _hash_observation
 from mcp_memory.models import Entity, Observation
+from mcp_memory.storage.pure.rows import hash_observation
 
 
 @pytest.fixture(autouse=True)
@@ -71,7 +71,7 @@ class TestRecordAndRecent:
                 "entity": Entity(
                     name="e1",
                     entity_type="task",
-                    observations=[Observation(content="o", content_hash=_hash_observation("o"))],
+                    observations=[Observation(content="o", content_hash=hash_observation("o"))],
                 ),
                 "relations": [],
             },
@@ -181,9 +181,7 @@ class TestWriteExtraction:
         assert event["project"] == "scratch"
 
     def test_move_project_entities_uses_source_as_project(self) -> None:
-        activity.record_tool(
-            "move_project_entities", {"source": "old", "target": "new"}, {"moved": 3}
-        )
+        activity.record_tool("move_project_entities", {"source": "old", "target": "new"}, {"moved": 3})
         event = activity.recent(0)[0]
         assert event["project"] == "old"
         assert event["entities"] == []
@@ -245,9 +243,7 @@ class TestActivityMarker:
         activity.record_tool("list_metadata", {}, {"projects": []})
         assert activity.last_activity() == 1000.0
 
-    def test_idle_seconds_measures_gap_since_last_activity(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_idle_seconds_measures_gap_since_last_activity(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
         activity.record_tool("list_metadata", {}, {"projects": []})
         monkeypatch.setattr(activity.time, "time", lambda: 1075.0)
@@ -259,9 +255,7 @@ class TestActivityMarker:
         assert activity.recent(0) == []
         assert activity.last_activity() == 4242.0
 
-    def test_marker_persists_to_disk_and_seeds_after_clear(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_marker_persists_to_disk_and_seeds_after_clear(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(activity.time, "time", lambda: 5000.0)
         activity.record_tool("list_metadata", {}, {"projects": []})
         assert json.loads(activity._marker_path().read_text())["last_activity"] == 5000.0

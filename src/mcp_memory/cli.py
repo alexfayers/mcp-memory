@@ -118,8 +118,7 @@ def _find_binary(name: str) -> str:
 def _render_plist(spec: _ServiceSpec, *, binary: str) -> str:
     """Render a macOS launchd plist for a service spec."""
     env_entries = "\n".join(
-        f"                <key>{key}</key>\n                <string>{value}</string>"
-        for key, value in spec.env.items()
+        f"                <key>{key}</key>\n                <string>{value}</string>" for key, value in spec.env.items()
     )
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
@@ -305,19 +304,19 @@ def _cmd_migrate_db(args: argparse.Namespace) -> None:
 def _cmd_audit(args: argparse.Namespace) -> None:
     """Emit the read-only structural-hygiene report, or a proposed fix plan, as JSON on stdout."""
     from .audit import audit_graph, propose_plan
-    from .database import DatabaseManager
+    from .storage import open_readonly
 
     db_path = get_db_path()
     if not db_path.exists():
         print(f"Error: database not found: {db_path}", file=sys.stderr)
         sys.exit(1)
 
-    db = DatabaseManager.connect_readonly(db_path)
+    db = open_readonly(db_path)
     try:
         report = audit_graph(db, None if args.all_projects else args.project)
         plan = propose_plan(db, report) if args.propose_plan else None
     finally:
-        db.close()
+        db.connection.close()
     if plan is not None:
         print(json.dumps({"steps": plan}, indent=2))
     else:
@@ -326,19 +325,19 @@ def _cmd_audit(args: argparse.Namespace) -> None:
 
 def _cmd_eval(args: argparse.Namespace) -> None:
     """Report search-ranking quality over recorded retrieval telemetry (read-only)."""
-    from .database import DatabaseManager
     from .eval import evaluate
+    from .storage import open_readonly
 
     db_path = get_db_path()
     if not db_path.exists():
         print(f"Error: database not found: {db_path}", file=sys.stderr)
         sys.exit(1)
 
-    db = DatabaseManager.connect_readonly(db_path)
+    db = open_readonly(db_path)
     try:
         report = evaluate(db, args.k, since=args.since, min_content_tokens=args.min_content_tokens)
     finally:
-        db.close()
+        db.connection.close()
     window = f", since {args.since}" if args.since else ""
     if args.min_content_tokens:
         window += f", min_content_tokens={args.min_content_tokens}"
@@ -357,10 +356,7 @@ def _cmd_eval(args: argparse.Namespace) -> None:
         else f"    1/rank of the first relevant result; {mrr_bounds}"
     )
     print(f"  mean recall@{report.k}: {report.mean_recall_at_k:.3f}")
-    print(
-        f"    fraction of all relevant items that made it into the top {report.k}; "
-        "best case 1.0, worst case 0.0"
-    )
+    print(f"    fraction of all relevant items that made it into the top {report.k}; best case 1.0, worst case 0.0")
     print(f"  mean nDCG@{report.k}: {report.mean_ndcg_at_k:.3f}")
     print(
         "    ranking quality vs. the ideal order, normalised to the true relevant-set size; "
@@ -378,35 +374,35 @@ def _cmd_metrics(args: argparse.Namespace) -> None:
     """Emit per-tool usage metrics (byte-size proxies + option frequencies) as JSON on stdout."""
     from dataclasses import asdict
 
-    from .database import DatabaseManager
     from .metrics import usage_report
+    from .storage import open_writable
 
-    db = DatabaseManager(get_db_path())
+    db = open_writable(get_db_path())
     try:
         report = usage_report(db, since=args.since)
     finally:
-        db.close()
+        db.connection.close()
     print(json.dumps(asdict(report), indent=2))
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
     """Export the entire memory database to a JSON file."""
-    from .database import DatabaseManager
     from .export_import import export_database
+    from .storage import open_writable
 
     output_path = Path(args.output_path).expanduser()
-    db = DatabaseManager(get_db_path())
+    db = open_writable(get_db_path())
     try:
         export_database(db, output_path)
     finally:
-        db.close()
+        db.connection.close()
     print(f"Exported database to {output_path}")
 
 
 def _cmd_import(args: argparse.Namespace) -> None:
     """Merge selected projects from a JSON export into the local database."""
-    from .database import DatabaseManager
     from .export_import import import_projects, list_export_projects, load_export
+    from .storage import open_writable
 
     try:
         data = load_export(Path(args.input_path).expanduser())
@@ -422,14 +418,14 @@ def _cmd_import(args: argparse.Namespace) -> None:
         return
 
     names = [name.strip() for name in args.project.split(",") if name.strip()]
-    db = DatabaseManager(get_db_path())
+    db = open_writable(get_db_path())
     try:
         summary = import_projects(db, data, names, dry_run=args.dry_run)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     finally:
-        db.close()
+        db.connection.close()
     print(summary.render())
 
 
@@ -499,9 +495,7 @@ def _register_claude_code_server(claude_bin: str, name: str, url: str) -> None:
         print(f"Added {name} MCP server to Claude Code (url: {url}).")
 
     settings_path = Path.home() / ".claude" / "settings.json"
-    settings = (
-        json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
-    )
+    settings = json.loads(settings_path.read_text(encoding="utf-8")) if settings_path.exists() else {}
     permissions: dict[str, list[str]] = settings.setdefault("permissions", {})
     allow: list[str] = permissions.setdefault("allow", [])
     rule = f"mcp__{name}__*"
@@ -518,12 +512,8 @@ def _cmd_install_claude_code() -> None:
         print("error: claude not found on PATH", file=sys.stderr)
         sys.exit(1)
 
-    _register_claude_code_server(
-        claude_bin, "memory", f"http://localhost:{_detect_service_port()}/mcp"
-    )
-    _register_claude_code_server(
-        claude_bin, "memory-agent", f"http://localhost:{get_agent_port()}/mcp"
-    )
+    _register_claude_code_server(claude_bin, "memory", f"http://localhost:{_detect_service_port()}/mcp")
+    _register_claude_code_server(claude_bin, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
 
 
 def _register_codex_server(codex_bin: str, name: str, url: str) -> None:
@@ -608,18 +598,10 @@ def _register_copilot_server(mcp_path: Path, name: str, url: str) -> None:
 
 def _cmd_install_copilot(args: argparse.Namespace) -> None:
     """Register memory servers in VS Code Copilot MCP config."""
-    mcp_path = (
-        Path(args.mcp_config).expanduser()
-        if args.mcp_config
-        else _default_copilot_mcp_config_path()
-    )
+    mcp_path = Path(args.mcp_config).expanduser() if args.mcp_config else _default_copilot_mcp_config_path()
     try:
-        _register_copilot_server(
-            mcp_path, "memory", f"http://localhost:{_detect_service_port()}/mcp"
-        )
-        _register_copilot_server(
-            mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp"
-        )
+        _register_copilot_server(mcp_path, "memory", f"http://localhost:{_detect_service_port()}/mcp")
+        _register_copilot_server(mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -654,9 +636,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Source database path (default: auto-detected from the installed service)",
     )
 
-    audit = sub.add_parser(
-        "audit", help="Report structural memory-graph hygiene issues as JSON (read-only)"
-    )
+    audit = sub.add_parser("audit", help="Report structural memory-graph hygiene issues as JSON (read-only)")
     scope = audit.add_mutually_exclusive_group(required=True)
     scope.add_argument("--project", help="Audit a single project scope")
     scope.add_argument("--all-projects", action="store_true", help="Audit every project scope")
@@ -706,18 +686,13 @@ def _build_parser() -> argparse.ArgumentParser:
     metrics_cmd.add_argument(
         "--since",
         default=None,
-        help=(
-            "Only include calls on or after this instant (relative "
-            "'30m'/'1h'/'7d'/'2w'/'3mo' or ISO date)."
-        ),
+        help=("Only include calls on or after this instant (relative '30m'/'1h'/'7d'/'2w'/'3mo' or ISO date)."),
     )
 
     export_cmd = sub.add_parser("export", help="Export the entire memory database to a JSON file")
     export_cmd.add_argument("output_path")
 
-    import_cmd = sub.add_parser(
-        "import", help="Merge selected projects from a JSON export into the local database"
-    )
+    import_cmd = sub.add_parser("import", help="Merge selected projects from a JSON export into the local database")
     import_cmd.add_argument("input_path")
     import_cmd.add_argument(
         "--project",
@@ -727,9 +702,7 @@ def _build_parser() -> argparse.ArgumentParser:
     import_cmd.add_argument("--dry-run", action="store_true")
 
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
-    install.add_argument(
-        "target", choices=["kiro", "claude-code", "codex", "copilot"], help="Agent to install for."
-    )
+    install.add_argument("target", choices=["kiro", "claude-code", "codex", "copilot"], help="Agent to install for.")
     install.add_argument(
         "agent_config",
         nargs="?",

@@ -10,12 +10,12 @@ import socket
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from cline_hooks.core.plugin import HookResult, HooksPlugin
 
 from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
-from mcp_memory.database import DatabaseManager
 from mcp_memory.hooks.review_tracker import (
     record_write,
     should_nudge,
@@ -32,6 +32,10 @@ from mcp_memory.hooks.tracker import (
     should_block,
 )
 from mcp_memory.path_resolver import normalize_path, resolve_project_for_path
+from mcp_memory.storage import open_writable
+
+if TYPE_CHECKING:
+    from mcp_memory.storage import Storage
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(
     {
@@ -81,13 +85,9 @@ _MEMORY_SERVER_DOWN_NOTE = (
     "block so you aren't stuck. Let the user know memory is currently unavailable."
 )
 _MEMORY_COMPLETION_REMINDER = (
-    "REQUIRED before completing:\n"
-    "1. Update `memory`\n"
-    "2. One observation per fact (what changed, why, TODOs)"
+    "REQUIRED before completing:\n1. Update `memory`\n2. One observation per fact (what changed, why, TODOs)"
 )
-_MEMORY_COMPACT_WARNING = (
-    "Save any important context, decisions, or progress to memory NOW before it's lost."
-)
+_MEMORY_COMPACT_WARNING = "Save any important context, decisions, or progress to memory NOW before it's lost."
 _MEMORY_REVIEW_NUDGE = (
     "MEMORY REVIEW DUE: many memory writes have accumulated since the last review. "
     "Mention this to the user and let them run `/memory-review` when they choose - "
@@ -270,7 +270,7 @@ def _resolve_project(path: str) -> str | None:
     return resolve_project_for_path(path) or _find_project_from_path(path)
 
 
-def _safe_project(anchor: Path, basename: str, db: DatabaseManager) -> str | None:
+def _safe_project(anchor: Path, basename: str, db: Storage) -> str | None:
     """Return the project an anchor may be safely registered to, or None.
 
     Only identifies a project that already exists, never invents one:
@@ -282,18 +282,14 @@ def _safe_project(anchor: Path, basename: str, db: DatabaseManager) -> str | Non
       folder name (case-insensitively), pin to that project;
     - otherwise return None so the caller prompts for deliberate registration.
     """
-    existing = db.get_project_for_path(str(anchor))
+    existing = db.projects.get_project_for_path(str(anchor))
     if existing:
         return existing
     anchor_norm = Path(normalize_path(str(anchor)))
-    below = {
-        project
-        for project, registered in db.list_project_paths()
-        if Path(registered).is_relative_to(anchor_norm)
-    }
+    below = {project for project, registered in db.projects.paths() if Path(registered).is_relative_to(anchor_norm)}
     if len(below) == 1:
         return next(iter(below))
-    for project in db.list_projects():
+    for project in db.projects.names():
         if project.casefold() == basename.casefold():
             return project
     return None
@@ -351,7 +347,7 @@ def _workspace_entity_note(workspace_roots: list[str]) -> str | None:
 def _resolved_project_set(workspace_roots: list[str]) -> list[str]:
     """Return [global, <repo-name>, *group siblings] for the current workspace.
 
-    Group siblings come from the project_groups table (set via set_project_groups),
+    Group siblings come from the project_groups table (set via projects.set_groups),
     so distinct project scopes can be scanned together without a hardcoded name or
     a cross-scope relation (relations are hard-scoped to one project). A DB failure
     degrades to [global, repo-name] rather than breaking task start.
@@ -362,8 +358,8 @@ def _resolved_project_set(workspace_roots: list[str]) -> list[str]:
     repo_name = _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
     projects.append(repo_name)
     try:
-        db = DatabaseManager(get_db_path())
-        projects.extend(db.get_group_members(repo_name))
+        db = open_writable(get_db_path())
+        projects.extend(db.projects.group_members(repo_name))
     except (sqlite3.Error, OSError):
         pass
     return projects
@@ -554,9 +550,7 @@ class MemoryPlugin(HooksPlugin):
         self._reminder.reset()
         auto_note = self._maybe_auto_register(workspace_roots)
         if workspace_roots:
-            self._project_scope = (
-                _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
-            )
+            self._project_scope = _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
         notes = _build_task_start_context(workspace_roots)
         if auto_note:
             notes.append(auto_note)
@@ -576,11 +570,11 @@ class MemoryPlugin(HooksPlugin):
             return None
         anchor, basename = target
         try:
-            db = DatabaseManager(get_db_path())
+            db = open_writable(get_db_path())
             project = _safe_project(anchor, basename, db)
             if project is None:
                 return _AUTO_REGISTER_UNKNOWN_NOTE.format(anchor=anchor)
-            db.add_project_path(project, str(anchor))
+            db.projects.add_path(project, str(anchor))
         except (sqlite3.Error, OSError):
             return None
         return _AUTO_REGISTERED_NOTE.format(project=project, anchor=anchor)

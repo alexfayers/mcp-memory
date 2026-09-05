@@ -33,8 +33,7 @@ class TestRecallEfficiency:
                 for i in range(12)
             ],
             "relations": [
-                {"from": f"task/note-{i}", "to": "project/demo", "relationType": "belongs-to"}
-                for i in range(12)
+                {"from": f"task/note-{i}", "to": "project/demo", "relationType": "belongs-to"} for i in range(12)
             ],
         }
 

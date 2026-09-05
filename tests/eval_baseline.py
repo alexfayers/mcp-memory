@@ -64,26 +64,19 @@ def load_baseline(path: Path = BASELINE_PATH) -> Baseline:
     try:
         payload = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
-        raise AssertionError(
-            f"eval baseline at {path} is not valid JSON - {_REBASELINE_HINT}"
-        ) from exc
+        raise AssertionError(f"eval baseline at {path} is not valid JSON - {_REBASELINE_HINT}") from exc
     metrics = payload["metrics"]
     if set(metrics) != set(RANKING_METRICS):
         raise AssertionError(
-            f"eval baseline at {path} covers {sorted(metrics)}, expected "
-            f"{sorted(RANKING_METRICS)} - {_REBASELINE_HINT}"
+            f"eval baseline at {path} covers {sorted(metrics)}, expected {sorted(RANKING_METRICS)} - {_REBASELINE_HINT}"
         )
     out_of_range = sorted(name for name, value in metrics.items() if not 0.0 < value < 1.0)
     if out_of_range:
-        raise AssertionError(
-            f"eval baseline at {path} has metrics outside (0, 1): {out_of_range} - "
-            f"{_REBASELINE_HINT}"
-        )
+        raise AssertionError(f"eval baseline at {path} has metrics outside (0, 1): {out_of_range} - {_REBASELINE_HINT}")
     k, query_count = payload["k"], payload["query_count"]
     if k <= 0 or query_count <= 0:
         raise AssertionError(
-            f"eval baseline at {path} was measured at k={k} query_count={query_count} - "
-            f"{_REBASELINE_HINT}"
+            f"eval baseline at {path} was measured at k={k} query_count={query_count} - {_REBASELINE_HINT}"
         )
     return Baseline(k=k, query_count=query_count, metrics=metrics)
 
@@ -100,7 +93,4 @@ def render(baseline: Baseline) -> str:
 
 def bands(baseline: Baseline, *, band: float = _BAND) -> dict[str, tuple[float, float]]:
     """Return each measured value's (floor, ceiling) as value -/+ `band`, in metric order."""
-    return {
-        metric: (baseline.metrics[metric] - band, baseline.metrics[metric] + band)
-        for metric in RANKING_METRICS
-    }
+    return {metric: (baseline.metrics[metric] - band, baseline.metrics[metric] + band) for metric in RANKING_METRICS}

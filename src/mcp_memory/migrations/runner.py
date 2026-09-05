@@ -17,9 +17,7 @@ def run_migrations(db: sqlite3.Connection) -> None:
         "(version INTEGER PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
     )
 
-    has_entities = db.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='entities'"
-    ).fetchone()
+    has_entities = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='entities'").fetchone()
     has_version = db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
 
     if has_entities and has_version is None:
@@ -48,3 +46,9 @@ def run_migrations(db: sqlite3.Connection) -> None:
                 )
     finally:
         db.execute(f"PRAGMA foreign_keys = {'ON' if original_fk else 'OFF'}")
+
+
+def schema_version(db: sqlite3.Connection) -> int:
+    """Return the highest applied migration version."""
+    row = db.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
+    return int(row["v"])

@@ -5,11 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from mcp_memory import cli
-from mcp_memory.database import DatabaseManager
 from mcp_memory.export_import import (
     EXPORT_FORMAT,
     EXPORT_FORMAT_VERSION,
@@ -19,27 +19,31 @@ from mcp_memory.export_import import (
 )
 from mcp_memory.migrations.schema import MIGRATIONS
 from mcp_memory.models import Relation
-from tests import soft_delete
+from mcp_memory.storage import open_writable
+from tests import soft_delete_store
+
+if TYPE_CHECKING:
+    from mcp_memory.storage import Storage
 
 _OLD_TS = "2020-01-01 00:00:00"
 
 
-def _make_db(path: Path) -> DatabaseManager:
-    db = DatabaseManager(path)
-    db.create_entities(
+def _make_db(path: Path) -> Storage:
+    db = open_writable(path)
+    db.entities.create(
         "global",
         [{"name": "user-preferences/x", "entityType": "user-preferences", "observations": ["a"]}],
     )
-    db.create_entities(
+    db.entities.create(
         "proj",
         [
             {"name": "feature/f", "entityType": "feature", "observations": ["b", "c"]},
             {"name": "task/t", "entityType": "task", "observations": ["d"], "status": "planned"},
         ],
     )
-    db.create_relations("proj", [Relation("task/t", "feature/f", "implements")])
-    db.set_project_paths("proj", ["/tmp/proj"])
-    db.set_project_groups("proj", ["tooling"])
+    db.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
+    db.projects.set_paths("proj", ["/tmp/proj"])
+    db.projects.set_groups("proj", ["tooling"])
     return db
 
 
@@ -47,9 +51,9 @@ class TestExport:
     def test_writes_valid_json_with_all_projects(self, tmp_path: Path) -> None:
         db = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
-        expected_paths = db.get_paths_for_project("proj")
+        expected_paths = db.projects.paths_for("proj")
         export_database(db, out)
-        db.close()
+        db.connection.close()
 
         data = json.loads(out.read_text(encoding="utf-8"))
         assert data["format"] == EXPORT_FORMAT
@@ -68,10 +72,10 @@ class TestExport:
 
     def test_excludes_soft_deleted_entities(self, tmp_path: Path) -> None:
         db = _make_db(tmp_path / "src.db")
-        soft_delete(db, "proj", "task/t")
+        soft_delete_store(db, "proj", "task/t")
         out = tmp_path / "export.json"
         export_database(db, out)
-        db.close()
+        db.connection.close()
 
         data = json.loads(out.read_text(encoding="utf-8"))
         proj = data["projects"]["proj"]
@@ -80,14 +84,14 @@ class TestExport:
 
     def test_preserves_fidelity_fields(self, tmp_path: Path) -> None:
         db = _make_db(tmp_path / "src.db")
-        db.vote_entity("proj", "task/t", 2)
-        db.vote_observation("proj", "task/t", 3, content="d")
-        task = db.get_entity("proj", "task/t")
-        db._db.execute("UPDATE observations SET created_at = ? WHERE content = 'd'", (_OLD_TS,))
-        db._db.commit()
+        db.entities.vote("proj", "task/t", 2)
+        db.observations.vote("proj", "task/t", 3, content="d")
+        task = db.reads.get_entity("proj", "task/t")
+        with db.connection.transaction():
+            db.connection.write("UPDATE observations SET created_at = ? WHERE content = 'd'", (_OLD_TS,))
         out = tmp_path / "export.json"
         export_database(db, out)
-        db.close()
+        db.connection.close()
 
         data = json.loads(out.read_text(encoding="utf-8"))
         exported = next(e for e in data["projects"]["proj"]["entities"] if e["name"] == "task/t")
@@ -106,24 +110,24 @@ class TestExport:
 class TestRoundTrip:
     def test_import_into_fresh_db_reproduces_everything(self, tmp_path: Path) -> None:
         db = _make_db(tmp_path / "src.db")
-        db.vote_entity("proj", "task/t", 2)
-        db.vote_observation("proj", "task/t", 3, content="d")
-        src_task = db.get_entity("proj", "task/t")
-        db._db.execute("UPDATE observations SET created_at = ? WHERE content = 'd'", (_OLD_TS,))
-        db._db.commit()
+        db.entities.vote("proj", "task/t", 2)
+        db.observations.vote("proj", "task/t", 3, content="d")
+        src_task = db.reads.get_entity("proj", "task/t")
+        with db.connection.transaction():
+            db.connection.write("UPDATE observations SET created_at = ? WHERE content = 'd'", (_OLD_TS,))
         out = tmp_path / "export.json"
         export_database(db, out)
-        db.close()
+        db.connection.close()
 
-        dest = DatabaseManager(tmp_path / "dest.db")
+        dest = open_writable(tmp_path / "dest.db")
         import_projects(dest, load_export(out), ["proj"], dry_run=False)
 
-        dest_obs_created = dest._db.execute(
-            "SELECT created_at FROM observations WHERE content = 'd'"
-        ).fetchone()["created_at"]
+        dest_obs_created = dest.connection.query_one("SELECT created_at FROM observations WHERE content = 'd'")[
+            "created_at"
+        ]
         assert dest_obs_created == _OLD_TS
 
-        task = dest.get_entity("proj", "task/t")
+        task = dest.reads.get_entity("proj", "task/t")
         assert task.entity_type == "task"
         assert task.status == "planned"
         assert task.vote_score == 2
@@ -133,139 +137,132 @@ class TestRoundTrip:
             (o.content, o.content_hash, o.vote_score) for o in src_task.observations
         ]
 
-        feature = dest.get_entity("proj", "feature/f")
+        feature = dest.reads.get_entity("proj", "feature/f")
         assert {o.content for o in feature.observations} == {"b", "c"}
 
-        rels = dest.get_entity_with_relations("proj", "task/t")["relations"]
-        assert any(
-            r.source == "task/t" and r.target == "feature/f" and r.relation_type == "implements"
-            for r in rels
-        )
-        assert [g for _, g in dest.list_project_groups("proj")] == ["tooling"]
-        assert dest.get_paths_for_project("proj") == []
-        dest.close()
+        rels = dest.reads.get_entity_with_relations("proj", "task/t")["relations"]
+        assert any(r.source == "task/t" and r.target == "feature/f" and r.relation_type == "implements" for r in rels)
+        assert [g for _, g in dest.projects.groups("proj")] == ["tooling"]
+        assert dest.projects.paths_for("proj") == []
+        dest.connection.close()
 
     def test_imports_only_named_subset(self, tmp_path: Path) -> None:
         db = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(db, out)
-        db.close()
+        db.connection.close()
 
-        dest = DatabaseManager(tmp_path / "dest.db")
+        dest = open_writable(tmp_path / "dest.db")
         import_projects(dest, load_export(out), ["global"], dry_run=False)
 
-        assert dest.entity_exists_in_project("user-preferences/x", "global")
-        assert "proj" not in dest.list_projects()
-        dest.close()
+        assert dest.entities.exists_in("user-preferences/x", "global")
+        assert "proj" not in dest.projects.names()
+        dest.connection.close()
 
     def test_absent_project_raises(self, tmp_path: Path) -> None:
         db = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(db, out)
-        db.close()
+        db.connection.close()
 
-        dest = DatabaseManager(tmp_path / "dest.db")
+        dest = open_writable(tmp_path / "dest.db")
         with pytest.raises(ValueError, match="not found in export file"):
             import_projects(dest, load_export(out), ["nope"], dry_run=False)
-        dest.close()
+        dest.connection.close()
 
 
 class TestMerge:
     def test_merge_same_type_entity(self, tmp_path: Path) -> None:
         src = _make_db(tmp_path / "src.db")
-        src.vote_entity("proj", "feature/f", 3)
-        src._db.execute("UPDATE observations SET created_at = ? WHERE content = 'c'", (_OLD_TS,))
-        src._db.commit()
+        src.entities.vote("proj", "feature/f", 3)
+        with src.connection.transaction():
+            src.connection.write("UPDATE observations SET created_at = ? WHERE content = 'c'", (_OLD_TS,))
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
-        dest = DatabaseManager(tmp_path / "dest.db")
-        dest.create_entities(
-            "proj", [{"name": "feature/f", "entityType": "feature", "observations": ["b", "z"]}]
-        )
-        dest.vote_entity("proj", "feature/f", 1)
-        dest.set_entity_status("proj", "feature/f", "in-progress")
+        dest = open_writable(tmp_path / "dest.db")
+        dest.entities.create("proj", [{"name": "feature/f", "entityType": "feature", "observations": ["b", "z"]}])
+        dest.entities.vote("proj", "feature/f", 1)
+        dest.entities.set_status("proj", "feature/f", "in-progress")
 
         summary = import_projects(dest, load_export(out), ["proj"], dry_run=False)
 
-        feature = dest.get_entity("proj", "feature/f")
+        feature = dest.reads.get_entity("proj", "feature/f")
         assert {o.content for o in feature.observations} == {"b", "c", "z"}
         assert feature.vote_score == 3
         assert feature.status == "in-progress"
-        dest_obs_c_created = dest._db.execute(
-            "SELECT created_at FROM observations WHERE content = 'c'"
-        ).fetchone()["created_at"]
+        dest_obs_c_created = dest.connection.query_one("SELECT created_at FROM observations WHERE content = 'c'")[
+            "created_at"
+        ]
         assert dest_obs_c_created == _OLD_TS
         assert summary.entities_merged == 1
         assert summary.entities_new == 1
         assert summary.observations_new == 2
         assert summary.observations_duplicate == 1
-        dest.close()
+        dest.connection.close()
 
     def test_merge_different_type_is_skipped_and_rest_proceeds(self, tmp_path: Path) -> None:
         src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
-        dest = DatabaseManager(tmp_path / "dest.db")
-        dest.create_entities(
-            "proj", [{"name": "feature/f", "entityType": "task", "observations": ["orig"]}]
-        )
+        dest = open_writable(tmp_path / "dest.db")
+        dest.entities.create("proj", [{"name": "feature/f", "entityType": "task", "observations": ["orig"]}])
 
         summary = import_projects(dest, load_export(out), ["proj"], dry_run=False)
 
         assert summary.entities_skipped_type_mismatch == ["feature/f"]
-        assert dest.get_entity("proj", "feature/f").entity_type == "task"
-        assert {o.content for o in dest.get_entity("proj", "feature/f").observations} == {"orig"}
-        assert dest.entity_exists_in_project("task/t", "proj")
-        dest.close()
+        assert dest.reads.get_entity("proj", "feature/f").entity_type == "task"
+        assert {o.content for o in dest.reads.get_entity("proj", "feature/f").observations} == {"orig"}
+        assert dest.entities.exists_in("task/t", "proj")
+        dest.connection.close()
 
     def test_relation_dedup_on_reimport(self, tmp_path: Path) -> None:
         src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
-        dest = DatabaseManager(tmp_path / "dest.db")
+        dest = open_writable(tmp_path / "dest.db")
         first = import_projects(dest, load_export(out), ["proj"], dry_run=False)
         second = import_projects(dest, load_export(out), ["proj"], dry_run=False)
 
         assert first.relations_new == 1
         assert second.relations_new == 0
         assert second.relations_duplicate == 1
-        rels = dest.get_entity_with_relations("proj", "task/t")["relations"]
+        rels = dest.reads.get_entity_with_relations("proj", "task/t")["relations"]
         assert len(rels) == 1
-        dest.close()
+        dest.connection.close()
 
     def test_groups_imported_additively(self, tmp_path: Path) -> None:
         src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
-        dest = DatabaseManager(tmp_path / "dest.db")
-        dest.set_project_groups("proj", ["existing"])
+        dest = open_writable(tmp_path / "dest.db")
+        dest.projects.set_groups("proj", ["existing"])
         import_projects(dest, load_export(out), ["proj"], dry_run=False)
 
-        assert {g for _, g in dest.list_project_groups("proj")} == {"existing", "tooling"}
-        dest.close()
+        assert {g for _, g in dest.projects.groups("proj")} == {"existing", "tooling"}
+        dest.connection.close()
 
     def test_paths_not_written_but_noticed(self, tmp_path: Path) -> None:
         src = _make_db(tmp_path / "src.db")
-        source_paths = src.get_paths_for_project("proj")
+        source_paths = src.projects.paths_for("proj")
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
-        dest = DatabaseManager(tmp_path / "dest.db")
+        dest = open_writable(tmp_path / "dest.db")
         summary = import_projects(dest, load_export(out), ["proj"], dry_run=False)
 
-        assert dest.get_paths_for_project("proj") == []
+        assert dest.projects.paths_for("proj") == []
         assert summary.path_notices["proj"] == source_paths
         assert source_paths[0] in summary.render()
-        dest.close()
+        dest.connection.close()
 
 
 class TestDryRun:
@@ -273,17 +270,17 @@ class TestDryRun:
         src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
-        dry_db = DatabaseManager(tmp_path / "dry.db")
+        dry_db = open_writable(tmp_path / "dry.db")
         dry = import_projects(dry_db, load_export(out), ["proj"], dry_run=True)
-        assert not dry_db.entity_exists_in_project("task/t", "proj")
-        assert "proj" not in dry_db.list_projects()
-        dry_db.close()
+        assert not dry_db.entities.exists_in("task/t", "proj")
+        assert "proj" not in dry_db.projects.names()
+        dry_db.connection.close()
 
-        real_db = DatabaseManager(tmp_path / "real.db")
+        real_db = open_writable(tmp_path / "real.db")
         real = import_projects(real_db, load_export(out), ["proj"], dry_run=False)
-        real_db.close()
+        real_db.connection.close()
 
         assert dry.entities_new == real.entities_new
         assert dry.observations_new == real.observations_new
@@ -298,7 +295,7 @@ class TestSchemaGuard:
         src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
         data = json.loads(out.read_text(encoding="utf-8"))
         data["schema_version"] = max(m.version for m in MIGRATIONS) + 1
@@ -311,16 +308,16 @@ class TestSchemaGuard:
         src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
         data = json.loads(out.read_text(encoding="utf-8"))
         data["schema_version"] = 1
         out.write_text(json.dumps(data), encoding="utf-8")
 
-        dest = DatabaseManager(tmp_path / "dest.db")
+        dest = open_writable(tmp_path / "dest.db")
         import_projects(dest, load_export(out), ["proj"], dry_run=False)
-        assert dest.entity_exists_in_project("task/t", "proj")
-        dest.close()
+        assert dest.entities.exists_in("task/t", "proj")
+        dest.connection.close()
 
 
 class TestCli:
@@ -330,7 +327,7 @@ class TestCli:
         src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
         dest_path = tmp_path / "dest.db"
         monkeypatch.setattr(cli, "get_db_path", lambda: dest_path)
@@ -340,15 +337,15 @@ class TestCli:
         assert "global" in captured
         assert "proj" in captured
 
-        dest = DatabaseManager(dest_path)
-        assert "proj" not in dest.list_projects()
-        dest.close()
+        dest = open_writable(dest_path)
+        assert "proj" not in dest.projects.names()
+        dest.connection.close()
 
     def test_export_then_import_round_trip_via_cli(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         src_path = tmp_path / "src.db"
-        _make_db(src_path).close()
+        _make_db(src_path).connection.close()
         out = tmp_path / "export.json"
         monkeypatch.setattr(cli, "get_db_path", lambda: src_path)
         cli._cmd_export(argparse.Namespace(output_path=str(out)))
@@ -359,9 +356,9 @@ class TestCli:
         cli._cmd_import(argparse.Namespace(input_path=str(out), project="proj", dry_run=False))
         assert "Import summary" in capsys.readouterr().out
 
-        dest = DatabaseManager(dest_path)
-        assert dest.entity_exists_in_project("task/t", "proj")
-        dest.close()
+        dest = open_writable(dest_path)
+        assert dest.entities.exists_in("task/t", "proj")
+        dest.connection.close()
 
     def test_summary_printed_for_dry_run_and_real(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -369,7 +366,7 @@ class TestCli:
         src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
         export_database(src, out)
-        src.close()
+        src.connection.close()
 
         dest_path = tmp_path / "dest.db"
         monkeypatch.setattr(cli, "get_db_path", lambda: dest_path)

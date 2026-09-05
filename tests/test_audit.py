@@ -4,63 +4,67 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from mcp_memory import cli
 from mcp_memory.audit import audit_graph, propose_plan
-from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
-from tests import soft_delete
+from mcp_memory.storage import open_readonly, open_writable
+from mcp_memory.storage.services.ids import (
+    get_entity_id,
+    get_or_create_project_id,
+    get_or_create_relation_type_id,
+)
+from tests import soft_delete_store
+
+if TYPE_CHECKING:
+    from mcp_memory.storage import Storage
 
 
 def _names(findings: list[dict[str, object]]) -> set[str]:
     return {f["name"] for f in findings}  # type: ignore[misc]
 
 
-def _entity_id(db: DatabaseManager, name: str, project: str = "proj") -> int:
-    project_id = db._get_or_create_project_id(project)
-    entity_id = db._get_entity_id(name, project_id)
+def _entity_id(store: Storage, name: str, project: str = "proj") -> int:
+    project_id = get_or_create_project_id(store.connection, project)
+    entity_id = get_entity_id(store.connection, name, project_id)
     assert entity_id is not None
     return entity_id
 
 
-def _vote_obs(db: DatabaseManager, name: str, content: str, times: int) -> None:
+def _vote_obs(store: Storage, name: str, content: str, times: int) -> None:
     step = 1 if times > 0 else -1
     for _ in range(abs(times)):
-        db.vote_observation("proj", name, step, content=content)
+        store.observations.vote("proj", name, step, content=content)
 
 
-def _insert_relation_row(db: DatabaseManager, project: str, relation: Relation) -> None:
-    project_id = db._get_or_create_project_id(project)
-    source_id = db._get_entity_id(relation.source, project_id)
-    target_id = db._get_entity_id(relation.target, project_id)
+def _insert_relation_row(store: Storage, project: str, relation: Relation) -> None:
+    project_id = get_or_create_project_id(store.connection, project)
+    source_id = get_entity_id(store.connection, relation.source, project_id)
+    target_id = get_entity_id(store.connection, relation.target, project_id)
     assert source_id is not None
     assert target_id is not None
-    relation_type_id = db._get_or_create_relation_type_id(relation.relation_type)
-    db._db.execute(
-        "INSERT INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
-        (source_id, target_id, relation_type_id),
-    )
-    db._db.commit()
+    relation_type_id = get_or_create_relation_type_id(store.connection, relation.relation_type)
+    with store.connection.transaction():
+        store.connection.write(
+            "INSERT INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
+            (source_id, target_id, relation_type_id),
+        )
 
 
 class TestOrphans:
-    def test_flags_non_exempt_entity_with_no_relations(self, db: DatabaseManager) -> None:
-        db.create_entities(
-            "proj", [{"name": "task/lonely", "entityType": "task", "observations": ["o"]}]
-        )
-        assert _names(audit_graph(db, "proj")["orphans"]) == {"task/lonely"}  # type: ignore[arg-type]
+    def test_flags_non_exempt_entity_with_no_relations(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "task/lonely", "entityType": "task", "observations": ["o"]}])
+        assert _names(audit_graph(store, "proj")["orphans"]) == {"task/lonely"}  # type: ignore[arg-type]
 
-    def test_project_root_never_orphaned(self, db: DatabaseManager) -> None:
-        db.create_entities(
-            "proj", [{"name": "project/proj", "entityType": "project", "observations": ["o"]}]
-        )
-        assert audit_graph(db, "proj")["orphans"] == []
+    def test_project_root_never_orphaned(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "project/proj", "entityType": "project", "observations": ["o"]}])
+        assert audit_graph(store, "proj")["orphans"] == []
 
-    def test_user_preferences_without_relation_is_orphaned(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_user_preferences_without_relation_is_orphaned(self, store: Storage) -> None:
+        store.entities.create(
             "global",
             [
                 {
@@ -70,87 +74,77 @@ class TestOrphans:
                 }
             ],
         )
-        assert _names(audit_graph(db, "global")["orphans"]) == {"user-preferences/x"}  # type: ignore[arg-type]
+        assert _names(audit_graph(store, "global")["orphans"]) == {"user-preferences/x"}  # type: ignore[arg-type]
 
-    def test_related_entity_not_orphaned(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_related_entity_not_orphaned(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        db.create_relations("proj", [Relation("task/t", "feature/f", "implements")])
-        assert audit_graph(db, "proj")["orphans"] == []
+        store.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
+        assert audit_graph(store, "proj")["orphans"] == []
 
-    def test_relation_to_soft_deleted_still_orphan(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_relation_to_soft_deleted_still_orphan(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        db.create_relations("proj", [Relation("task/t", "feature/f", "implements")])
-        soft_delete(db, "proj", "feature/f")
-        assert "task/t" in _names(audit_graph(db, "proj")["orphans"])  # type: ignore[arg-type]
+        store.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
+        soft_delete_store(store, "proj", "feature/f")
+        assert "task/t" in _names(audit_graph(store, "proj")["orphans"])  # type: ignore[arg-type]
 
 
 class TestMisusedProjectType:
-    def test_flags_project_type_with_wrong_name(self, db: DatabaseManager) -> None:
-        db.create_entities(
-            "proj", [{"name": "auth_investigation", "entityType": "project", "observations": ["o"]}]
-        )
-        assert _names(audit_graph(db, "proj")["misused_project_type"]) == {  # type: ignore[arg-type]
+    def test_flags_project_type_with_wrong_name(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "auth_investigation", "entityType": "project", "observations": ["o"]}])
+        assert _names(audit_graph(store, "proj")["misused_project_type"]) == {  # type: ignore[arg-type]
             "auth_investigation"
         }
 
-    def test_correct_root_not_flagged(self, db: DatabaseManager) -> None:
-        db.create_entities(
-            "proj", [{"name": "project/proj", "entityType": "project", "observations": ["o"]}]
-        )
-        assert audit_graph(db, "proj")["misused_project_type"] == []
+    def test_correct_root_not_flagged(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "project/proj", "entityType": "project", "observations": ["o"]}])
+        assert audit_graph(store, "proj")["misused_project_type"] == []
 
 
 class TestUnprefixed:
-    def test_flags_name_without_standard_prefix(self, db: DatabaseManager) -> None:
-        db.create_entities(
-            "proj", [{"name": "RandomThing", "entityType": "task", "observations": ["o"]}]
-        )
-        assert _names(audit_graph(db, "proj")["unprefixed"]) == {"RandomThing"}  # type: ignore[arg-type]
+    def test_flags_name_without_standard_prefix(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "RandomThing", "entityType": "task", "observations": ["o"]}])
+        assert _names(audit_graph(store, "proj")["unprefixed"]) == {"RandomThing"}  # type: ignore[arg-type]
 
-    def test_all_standard_prefixes_pass(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_all_standard_prefixes_pass(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "feature/a", "entityType": "feature", "observations": ["o"]},
                 {"name": "knowledge/b", "entityType": "knowledge", "observations": ["o"]},
             ],
         )
-        assert audit_graph(db, "proj")["unprefixed"] == []
+        assert audit_graph(store, "proj")["unprefixed"] == []
 
 
 class TestGhostScopes:
-    def test_flags_scope_with_zero_entities(self, db: DatabaseManager) -> None:
-        db._get_or_create_project_id("ghost")
-        db.create_entities(
-            "real", [{"name": "task/t", "entityType": "task", "observations": ["o"]}]
-        )
-        assert "ghost" in audit_graph(db, None)["ghost_scopes"]  # type: ignore[operator]
-        assert "real" not in audit_graph(db, None)["ghost_scopes"]  # type: ignore[operator]
+    def test_flags_scope_with_zero_entities(self, store: Storage) -> None:
+        get_or_create_project_id(store.connection, "ghost")
+        store.entities.create("real", [{"name": "task/t", "entityType": "task", "observations": ["o"]}])
+        assert "ghost" in audit_graph(store, None)["ghost_scopes"]  # type: ignore[operator]
+        assert "real" not in audit_graph(store, None)["ghost_scopes"]  # type: ignore[operator]
 
-    def test_scoped_audit_only_reports_that_scope(self, db: DatabaseManager) -> None:
-        db._get_or_create_project_id("ghost")
-        assert audit_graph(db, "ghost")["ghost_scopes"] == ["ghost"]
-        db.create_entities(
-            "real", [{"name": "task/t", "entityType": "task", "observations": ["o"]}]
-        )
-        assert audit_graph(db, "real")["ghost_scopes"] == []
+    def test_scoped_audit_only_reports_that_scope(self, store: Storage) -> None:
+        get_or_create_project_id(store.connection, "ghost")
+        assert audit_graph(store, "ghost")["ghost_scopes"] == ["ghost"]
+        store.entities.create("real", [{"name": "task/t", "entityType": "task", "observations": ["o"]}])
+        assert audit_graph(store, "real")["ghost_scopes"] == []
 
 
 class TestOversized:
-    def test_resolved_task_over_three_obs_flagged(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_resolved_task_over_three_obs_flagged(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {
@@ -161,7 +155,7 @@ class TestOversized:
                 }
             ],
         )
-        oversized = cast("list[dict[str, object]]", audit_graph(db, "proj")["oversized"])
+        oversized = cast("list[dict[str, object]]", audit_graph(store, "proj")["oversized"])
         assert len(oversized) == 1
         finding = oversized[0]
         assert finding["name"] == "task/big"
@@ -171,8 +165,8 @@ class TestOversized:
         assert finding["threshold"] == 3
         assert finding["status"] == "resolved"
 
-    def test_unresolved_task_not_size_checked(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_unresolved_task_not_size_checked(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {
@@ -183,10 +177,10 @@ class TestOversized:
                 }
             ],
         )
-        assert audit_graph(db, "proj")["oversized"] == []
+        assert audit_graph(store, "proj")["oversized"] == []
 
-    def test_feature_at_ceiling_not_flagged(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_feature_at_ceiling_not_flagged(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {
@@ -196,108 +190,102 @@ class TestOversized:
                 }
             ],
         )
-        assert audit_graph(db, "proj")["oversized"] == []
+        assert audit_graph(store, "proj")["oversized"] == []
 
 
 class TestRelationViolationsAndStarGraph:
-    def test_task_belongs_to_project_is_violation_and_star(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_task_belongs_to_project_is_violation_and_star(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "project/proj", "entityType": "project", "observations": ["o"]},
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        _insert_relation_row(db, "proj", Relation("task/t", "project/proj", "belongs-to"))
-        report = audit_graph(db, "proj")
+        _insert_relation_row(store, "proj", Relation("task/t", "project/proj", "belongs-to"))
+        report = audit_graph(store, "proj")
         violations = cast("list[dict[str, object]]", report["relation_violations"])
         stars = cast("list[dict[str, object]]", report["star_graph_tasks"])
         assert [v["task"] for v in violations] == ["task/t"]
         assert [v["task"] for v in stars] == ["task/t"]
 
-    def test_task_to_project_via_other_relation_is_star_not_violation(
-        self, db: DatabaseManager
-    ) -> None:
-        db.create_entities(
+    def test_task_to_project_via_other_relation_is_star_not_violation(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "project/proj", "entityType": "project", "observations": ["o"]},
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        _insert_relation_row(db, "proj", Relation("task/t", "project/proj", "relates-to"))
-        report = audit_graph(db, "proj")
+        _insert_relation_row(store, "proj", Relation("task/t", "project/proj", "relates-to"))
+        report = audit_graph(store, "proj")
         assert report["relation_violations"] == []
         stars = cast("list[dict[str, object]]", report["star_graph_tasks"])
         assert [v["task"] for v in stars] == ["task/t"]
 
-    def test_task_implements_feature_is_neither(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_task_implements_feature_is_neither(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        db.create_relations("proj", [Relation("task/t", "feature/f", "implements")])
-        report = audit_graph(db, "proj")
+        store.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
+        report = audit_graph(store, "proj")
         assert report["relation_violations"] == []
         assert report["star_graph_tasks"] == []
 
 
 class TestNegativeVotes:
-    def test_strongly_downvoted_flagged(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_strongly_downvoted_flagged(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        db.create_relations("proj", [Relation("task/t", "feature/f", "implements")])
+        store.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
         for _ in range(5):
-            db.vote_entity("proj", "task/t", -1)
-        flagged = audit_graph(db, "proj")["negative_vote_entities"]
-        assert flagged == [
-            {"name": "task/t", "entity_type": "task", "project": "proj", "vote_score": -5}
-        ]
+            store.entities.vote("proj", "task/t", -1)
+        flagged = audit_graph(store, "proj")["negative_vote_entities"]
+        assert flagged == [{"name": "task/t", "entity_type": "task", "project": "proj", "vote_score": -5}]
 
-    def test_mildly_downvoted_not_flagged(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_mildly_downvoted_not_flagged(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        db.create_relations("proj", [Relation("task/t", "feature/f", "implements")])
+        store.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
         for _ in range(4):
-            db.vote_entity("proj", "task/t", -1)
-        assert audit_graph(db, "proj")["negative_vote_entities"] == []
+            store.entities.vote("proj", "task/t", -1)
+        assert audit_graph(store, "proj")["negative_vote_entities"] == []
 
 
 class TestProjectScoping:
-    def test_scoped_audit_excludes_other_projects(self, db: DatabaseManager) -> None:
-        db.create_entities("a", [{"name": "orphan_a", "entityType": "task", "observations": ["o"]}])
-        db.create_entities("b", [{"name": "orphan_b", "entityType": "task", "observations": ["o"]}])
-        assert _names(audit_graph(db, "a")["orphans"]) == {"orphan_a"}  # type: ignore[arg-type]
+    def test_scoped_audit_excludes_other_projects(self, store: Storage) -> None:
+        store.entities.create("a", [{"name": "orphan_a", "entityType": "task", "observations": ["o"]}])
+        store.entities.create("b", [{"name": "orphan_b", "entityType": "task", "observations": ["o"]}])
+        assert _names(audit_graph(store, "a")["orphans"]) == {"orphan_a"}  # type: ignore[arg-type]
 
-    def test_all_projects_reports_project_on_each_finding(self, db: DatabaseManager) -> None:
-        db.create_entities("a", [{"name": "orphan_a", "entityType": "task", "observations": ["o"]}])
-        db.create_entities("b", [{"name": "orphan_b", "entityType": "task", "observations": ["o"]}])
-        orphans = cast("list[dict[str, object]]", audit_graph(db, None)["orphans"])
+    def test_all_projects_reports_project_on_each_finding(self, store: Storage) -> None:
+        store.entities.create("a", [{"name": "orphan_a", "entityType": "task", "observations": ["o"]}])
+        store.entities.create("b", [{"name": "orphan_b", "entityType": "task", "observations": ["o"]}])
+        orphans = cast("list[dict[str, object]]", audit_graph(store, None)["orphans"])
         by_name = {f["name"]: f["project"] for f in orphans}
         assert by_name == {"orphan_a": "a", "orphan_b": "b"}
 
 
 class TestProposePlan:
-    def _plan(self, db: DatabaseManager, project: str | None) -> list[dict[str, object]]:
-        return propose_plan(db, audit_graph(db, project))
+    def _plan(self, store: Storage, project: str | None) -> list[dict[str, object]]:
+        return propose_plan(store, audit_graph(store, project))
 
-    def test_oversized_trim_keeps_outcome_and_top_vote_deterministically(
-        self, db: DatabaseManager
-    ) -> None:
-        db.create_entities(
+    def test_oversized_trim_keeps_outcome_and_top_vote_deterministically(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {
@@ -308,13 +296,11 @@ class TestProposePlan:
                 }
             ],
         )
-        _vote_obs(db, "task/big", "high", 5)
-        _vote_obs(db, "task/big", "mid", 2)
+        _vote_obs(store, "task/big", "high", 5)
+        _vote_obs(store, "task/big", "mid", 2)
 
-        by_content = {
-            o.content: o.content_hash for o in db._get_observations_full(_entity_id(db, "task/big"))
-        }
-        step = self._plan(db, "proj")[0]
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "task/big"))}
+        step = self._plan(store, "proj")[0]
         assert step["tool"] == "trim_observations_to_outcome"
         assert step["needs_review"] is True  # "low"/"mid" are distinct facts, not duplicates
         keep = set(step["arguments"]["keep_hashes"])  # type: ignore[index]
@@ -322,11 +308,11 @@ class TestProposePlan:
         assert by_content["high"] in keep
         assert len(keep) <= 3
 
-        again = self._plan(db, "proj")[0]
+        again = self._plan(store, "proj")[0]
         assert again["arguments"]["keep_hashes"] == step["arguments"]["keep_hashes"]  # type: ignore[index]
 
-    def test_trim_uses_full_observation_list_not_budgeted(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_trim_uses_full_observation_list_not_budgeted(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {
@@ -337,17 +323,15 @@ class TestProposePlan:
                 }
             ],
         )
-        _vote_obs(db, "task/big", "RESOLVED: done", -3)
+        _vote_obs(store, "task/big", "RESOLVED: done", -3)
 
-        by_content = {
-            o.content: o.content_hash for o in db._get_observations_full(_entity_id(db, "task/big"))
-        }
-        keep = set(self._plan(db, "proj")[0]["arguments"]["keep_hashes"])  # type: ignore[index]
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "task/big"))}
+        keep = set(self._plan(store, "proj")[0]["arguments"]["keep_hashes"])  # type: ignore[index]
         assert by_content["RESOLVED: done"] in keep
 
-    def test_unprefixed_yields_prefixed_rename(self, db: DatabaseManager) -> None:
-        db.create_entities("proj", [{"name": "foo", "entityType": "task", "observations": ["o"]}])
-        step = next(s for s in self._plan(db, "proj") if s["tool"] == "rename_entity")
+    def test_unprefixed_yields_prefixed_rename(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "foo", "entityType": "task", "observations": ["o"]}])
+        step = next(s for s in self._plan(store, "proj") if s["tool"] == "rename_entity")
         assert step["arguments"] == {
             "project": "proj",
             "old_name": "foo",
@@ -355,49 +339,47 @@ class TestProposePlan:
         }
         assert step["needs_review"] is False
 
-    def test_ghost_scope_needs_review(self, db: DatabaseManager) -> None:
-        db._get_or_create_project_id("ghost")
-        step = next(s for s in self._plan(db, None) if s["tool"] == "delete_project")
+    def test_ghost_scope_needs_review(self, store: Storage) -> None:
+        get_or_create_project_id(store.connection, "ghost")
+        step = next(s for s in self._plan(store, None) if s["tool"] == "delete_project")
         assert step["arguments"]["project"] == "ghost"  # type: ignore[index]
         assert step["needs_review"] is True
 
-    def test_negative_vote_needs_review(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_negative_vote_needs_review(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        db.create_relations("proj", [Relation("task/t", "feature/f", "implements")])
+        store.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
         for _ in range(5):
-            db.vote_entity("proj", "task/t", -1)
-        step = next(s for s in self._plan(db, "proj") if s["tool"] == "delete_entity")
+            store.entities.vote("proj", "task/t", -1)
+        step = next(s for s in self._plan(store, "proj") if s["tool"] == "delete_entity")
         assert step["arguments"]["name"] == "task/t"  # type: ignore[index]
         assert step["needs_review"] is True
 
-    def test_orphan_needs_review(self, db: DatabaseManager) -> None:
-        db.create_entities(
-            "proj", [{"name": "task/lonely", "entityType": "task", "observations": ["o"]}]
-        )
-        step = next(s for s in self._plan(db, "proj") if s["tool"] == "create_relations")
+    def test_orphan_needs_review(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "task/lonely", "entityType": "task", "observations": ["o"]}])
+        step = next(s for s in self._plan(store, "proj") if s["tool"] == "create_relations")
         assert step["arguments"]["relations"][0]["source"] == "task/lonely"  # type: ignore[index]
         assert step["needs_review"] is True
 
-    def test_relation_violation_needs_review(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_relation_violation_needs_review(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "project/proj", "entityType": "project", "observations": ["o"]},
                 {"name": "task/t", "entityType": "task", "observations": ["o"]},
             ],
         )
-        _insert_relation_row(db, "proj", Relation("task/t", "project/proj", "belongs-to"))
-        steps = self._plan(db, "proj")
+        _insert_relation_row(store, "proj", Relation("task/t", "project/proj", "belongs-to"))
+        steps = self._plan(store, "proj")
         assert any(s["needs_review"] and "implements" in json.dumps(s["arguments"]) for s in steps)
 
-    def test_multiple_outcomes_yields_consider_split_not_trim(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_multiple_outcomes_yields_consider_split_not_trim(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {
@@ -408,15 +390,15 @@ class TestProposePlan:
                 }
             ],
         )
-        steps = self._plan(db, "proj")
+        steps = self._plan(store, "proj")
         split = next(s for s in steps if s.get("action") == "consider_split")
         assert split["needs_review"] is True
         assert split["entity"] == "task/multi"
         assert "relation" in split["reason"]  # type: ignore[operator]
         assert not any(s.get("tool") == "trim_observations_to_outcome" for s in steps)
 
-    def test_oversized_non_task_yields_review_not_trim(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_oversized_non_task_yields_review_not_trim(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {"name": "project/proj", "entityType": "project", "observations": ["o"]},
@@ -427,15 +409,15 @@ class TestProposePlan:
                 },
             ],
         )
-        db.create_relations("proj", [Relation("feature/f", "project/proj", "belongs-to")])
-        steps = self._plan(db, "proj")
+        store.relations.create("proj", [Relation("feature/f", "project/proj", "belongs-to")])
+        steps = self._plan(store, "proj")
         review = next(s for s in steps if s.get("action") == "review_oversized")
         assert review["entity"] == "feature/f"
         assert review["needs_review"] is True
         assert not any(s.get("tool") == "trim_observations_to_outcome" for s in steps)
 
-    def test_single_outcome_still_trims(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_single_outcome_still_trims(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {
@@ -446,12 +428,12 @@ class TestProposePlan:
                 }
             ],
         )
-        steps = self._plan(db, "proj")
+        steps = self._plan(store, "proj")
         assert any(s.get("tool") == "trim_observations_to_outcome" for s in steps)
         assert not any(s.get("action") == "consider_split" for s in steps)
 
-    def test_trim_dropping_a_distinct_fact_forces_review(self, db: DatabaseManager) -> None:
-        db.create_entities(
+    def test_trim_dropping_a_distinct_fact_forces_review(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {
@@ -467,15 +449,11 @@ class TestProposePlan:
                 }
             ],
         )
-        step = next(
-            s for s in self._plan(db, "proj") if s.get("tool") == "trim_observations_to_outcome"
-        )
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "trim_observations_to_outcome")
         assert step["needs_review"] is True
 
-    def test_trim_dropping_only_near_duplicates_stays_auto_applied(
-        self, db: DatabaseManager
-    ) -> None:
-        db.create_entities(
+    def test_trim_dropping_only_near_duplicates_stays_auto_applied(self, store: Storage) -> None:
+        store.entities.create(
             "proj",
             [
                 {
@@ -491,9 +469,7 @@ class TestProposePlan:
                 }
             ],
         )
-        step = next(
-            s for s in self._plan(db, "proj") if s.get("tool") == "trim_observations_to_outcome"
-        )
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "trim_observations_to_outcome")
         assert step["needs_review"] is False
 
 
@@ -503,13 +479,11 @@ class TestAuditCommand:
     ) -> None:
         db_path = tmp_path / "memory.db"
         monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        DatabaseManager(db_path).create_entities(
+        open_writable(db_path).entities.create(
             "proj", [{"name": "task/lonely", "entityType": "task", "observations": ["o"]}]
         )
 
-        cli._cmd_audit(
-            cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False)
-        )
+        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False))
 
         report = json.loads(capsys.readouterr().out)
         assert report["project"] == "proj"
@@ -520,13 +494,11 @@ class TestAuditCommand:
     ) -> None:
         db_path = tmp_path / "memory.db"
         monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        DatabaseManager(db_path).create_entities(
+        open_writable(db_path).entities.create(
             "proj", [{"name": "RandomThing", "entityType": "task", "observations": ["o"]}]
         )
 
-        cli._cmd_audit(
-            cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=True)
-        )
+        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=True))
 
         payload = json.loads(capsys.readouterr().out)
         assert "rename_entity" in [s["tool"] for s in payload["steps"]]
@@ -536,8 +508,8 @@ class TestAuditCommand:
     ) -> None:
         db_path = tmp_path / "memory.db"
         monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        seeded = DatabaseManager(db_path)
-        seeded.create_entities(
+        seeded = open_writable(db_path)
+        seeded.entities.create(
             "proj",
             [
                 {
@@ -548,19 +520,14 @@ class TestAuditCommand:
                 }
             ],
         )
-        seeded._db.execute("UPDATE entities SET updated_at = datetime('now', '-60 days')")
-        seeded._db.commit()
-        seeded.close()
+        with seeded.connection.transaction():
+            seeded.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days')")
+        seeded.connection.close()
 
-        cli._cmd_audit(
-            cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False)
-        )
+        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False))
         capsys.readouterr()
 
-        assert (
-            DatabaseManager.connect_readonly(db_path).get_entity("proj", "task/old").status
-            == "resolved"
-        )
+        assert open_readonly(db_path).reads.get_entity("proj", "task/old").status == "resolved"
 
     def test_parser_requires_a_scope(self) -> None:
         parser = cli._build_parser()

@@ -18,19 +18,17 @@ from typing import TYPE_CHECKING, Any
 from .config import get_auto_vote_max_per_day, get_auto_vote_window_seconds
 
 if TYPE_CHECKING:
-    from .database import DatabaseManager
+    from .storage import Storage
 
 # Ranked-retrieval tools whose hits are recorded as surfacings. read_graph and direct lookups
 # are excluded: their ordering is recency/identity, not relevance, so ranking quality is moot.
 _SURFACE_TOOLS = frozenset({"search_nodes", "search_all_projects"})
 
 # Write tools that count as "using" a surfaced entity. Deletions are deliberately excluded.
-_USE_TOOLS = frozenset(
-    {"add_observations", "create_entities", "create_relations", "set_entity_status"}
-)
+_USE_TOOLS = frozenset({"add_observations", "create_entities", "create_relations", "set_entity_status"})
 
 
-def observe(db: DatabaseManager, tool_name: str, kwargs: dict[str, Any], result: Any) -> None:
+def observe(db: Storage, tool_name: str, kwargs: dict[str, Any], result: Any) -> None:
     """Record surfacings from searches and cast auto-votes when surfaced entities are edited.
 
     Never raises: instrumentation must not break the tool call it observes.
@@ -46,23 +44,21 @@ def observe(db: DatabaseManager, tool_name: str, kwargs: dict[str, Any], result:
         pass
 
 
-def _record_surfacing(
-    db: DatabaseManager, tool_name: str, kwargs: dict[str, Any], result: Any
-) -> None:
+def _record_surfacing(db: Storage, tool_name: str, kwargs: dict[str, Any], result: Any) -> None:
     """Persist the (project, name, rank) hits a ranked search returned under one retrieval id."""
     hits = _surfaced_hits(result)
     if not hits:
         return
     query = str(kwargs.get("query", ""))
-    db.record_surfaced(tool_name, query, uuid.uuid4().hex, hits)
+    db.telemetry.record_surfaced(tool_name, query, uuid.uuid4().hex, hits)
 
 
-def _register_uses(db: DatabaseManager, tool_name: str, kwargs: dict[str, Any]) -> None:
+def _register_uses(db: Storage, tool_name: str, kwargs: dict[str, Any]) -> None:
     """Cast an auto-vote for each entity a write touched, if it was recently surfaced."""
     window = get_auto_vote_window_seconds()
     max_per_day = get_auto_vote_max_per_day()
     for project, name in _used_targets(tool_name, kwargs):
-        db.register_use(project, name, window_seconds=window, max_per_day=max_per_day)
+        db.telemetry.register_use(project, name, window_seconds=window, max_per_day=max_per_day)
 
 
 def _surfaced_hits(result: Any) -> list[tuple[str, str, int]]:

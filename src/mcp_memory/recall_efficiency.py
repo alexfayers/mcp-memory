@@ -35,9 +35,7 @@ class RecallEfficiency:
     cost_usd: float | None
 
 
-def recall_efficiency(
-    graph_payload: object, recall_output: str, *, record: RecallRecord
-) -> RecallEfficiency:
+def recall_efficiency(graph_payload: object, recall_output: str, *, record: RecallRecord) -> RecallEfficiency:
     """Measure how much a recall compressed the raw graph it was given, plus its cost.
 
     ``input_bytes`` is the serialized size of the raw graph payload (the tool response a

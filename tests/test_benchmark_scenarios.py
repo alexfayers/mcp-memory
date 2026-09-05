@@ -17,17 +17,17 @@ from mcp_memory import eval as ranking_eval
 from mcp_memory.payload import payload_size
 from mcp_memory.recall_efficiency import recall_efficiency
 
-from . import SeedEntity, rank_of, seed
+from . import SeedEntity, rank_of, seed_store
 
 if TYPE_CHECKING:
-    from mcp_memory.database import DatabaseManager
     from mcp_memory.recall_status import RecallRecord
+    from mcp_memory.storage import Storage
 
 
 class TestTargetedRecall:
-    def _seed_and_search(self, db: DatabaseManager) -> tuple[list[str], set[str]]:
-        seed(
-            db,
+    def _seed_and_search(self, store: Storage) -> tuple[list[str], set[str]]:
+        seed_store(
+            store,
             "bench",
             [
                 SeedEntity("task/oauth-token-refresh", ["oauth token refresh rotation"]),
@@ -37,27 +37,27 @@ class TestTargetedRecall:
                 SeedEntity("task/docker-cache", ["docker layer cache prune"]),
             ],
         )
-        ranked = [e.name for e in db.search_nodes("bench", "oauth", limit=10)["entities"]]
+        ranked = [e.name for e in store.reads.search("bench", "oauth", limit=10)["entities"]]
         relevant = {"task/oauth-token-refresh", "task/oauth-scope-config"}
         return ranked, relevant
 
-    def test_recall_at_k_is_one_when_all_relevant_surfaced(self, db: DatabaseManager) -> None:
-        ranked, relevant = self._seed_and_search(db)
+    def test_recall_at_k_is_one_when_all_relevant_surfaced(self, store: Storage) -> None:
+        ranked, relevant = self._seed_and_search(store)
 
         assert ranking_eval.recall_at_k(ranked, relevant, 10) == 1.0
         assert ranking_eval.precision_at_k(ranked, relevant, 2) == 1.0
         assert ranking_eval.reciprocal_rank(ranked, relevant) == 1.0
 
-    def test_ndcg_at_k_is_one_when_relevant_rank_first(self, db: DatabaseManager) -> None:
-        ranked, relevant = self._seed_and_search(db)
+    def test_ndcg_at_k_is_one_when_relevant_rank_first(self, store: Storage) -> None:
+        ranked, relevant = self._seed_and_search(store)
 
         assert ranking_eval.ndcg_at_k(ranked, relevant, 10) == pytest.approx(1.0)
 
 
 class TestDistractorResistance:
-    def test_relevant_outranks_near_miss_distractor(self, db: DatabaseManager) -> None:
-        seed(
-            db,
+    def test_relevant_outranks_near_miss_distractor(self, store: Storage) -> None:
+        seed_store(
+            store,
             "bench",
             [
                 SeedEntity(
@@ -71,7 +71,7 @@ class TestDistractorResistance:
             ],
         )
 
-        entities = db.search_nodes("bench", "redis cache invalidation", limit=10)["entities"]
+        entities = store.reads.search("bench", "redis cache invalidation", limit=10)["entities"]
 
         relevant_rank = rank_of("task/cache-invalidation-redis", entities)
         distractor_rank = rank_of("task/browser-cache-headers", entities)
@@ -81,9 +81,9 @@ class TestDistractorResistance:
 
 
 class TestSupersession:
-    def test_fresher_entity_outranks_stale(self, db: DatabaseManager) -> None:
-        seed(
-            db,
+    def test_fresher_entity_outranks_stale(self, store: Storage) -> None:
+        seed_store(
+            store,
             "bench",
             [
                 SeedEntity(
@@ -99,7 +99,7 @@ class TestSupersession:
             ],
         )
 
-        entities = db.search_nodes("bench", "deploy runbook rollback", limit=10)["entities"]
+        entities = store.reads.search("bench", "deploy runbook rollback", limit=10)["entities"]
 
         fresh_rank = rank_of("task/deploy-runbook-v2", entities)
         stale_rank = rank_of("task/deploy-runbook-v1", entities)
@@ -107,9 +107,9 @@ class TestSupersession:
         assert stale_rank != -1
         assert fresh_rank < stale_rank
 
-    def test_higher_voted_entity_outranks_equal(self, db: DatabaseManager) -> None:
-        seed(
-            db,
+    def test_higher_voted_entity_outranks_equal(self, store: Storage) -> None:
+        seed_store(
+            store,
             "bench",
             [
                 SeedEntity(
@@ -126,7 +126,7 @@ class TestSupersession:
             ],
         )
 
-        entities = db.search_nodes("bench", "api auth bearer", limit=10)["entities"]
+        entities = store.reads.search("bench", "api auth bearer", limit=10)["entities"]
 
         current_rank = rank_of("knowledge/api-auth-current", entities)
         stale_rank = rank_of("knowledge/api-auth-stale", entities)
@@ -136,9 +136,9 @@ class TestSupersession:
 
 
 class TestAbstentionControl:
-    def _seed_noise_and_search(self, db: DatabaseManager) -> list[str]:
-        seed(
-            db,
+    def _seed_noise_and_search(self, store: Storage) -> list[str]:
+        seed_store(
+            store,
             "bench",
             [
                 SeedEntity("task/pytest-fixtures", ["pytest fixture teardown"]),
@@ -146,31 +146,26 @@ class TestAbstentionControl:
                 SeedEntity("task/docker-cache", ["docker layer cache prune"]),
             ],
         )
-        return [
-            e.name
-            for e in db.search_nodes("bench", "quantum cryptography lattice", limit=10)["entities"]
-        ]
+        return [e.name for e in store.reads.search("bench", "quantum cryptography lattice", limit=10)["entities"]]
 
-    def test_no_relevant_entity_yields_zero_metrics(self, db: DatabaseManager) -> None:
-        ranked = self._seed_noise_and_search(db)
+    def test_no_relevant_entity_yields_zero_metrics(self, store: Storage) -> None:
+        ranked = self._seed_noise_and_search(store)
         relevant = {"task/does-not-exist"}
 
         assert ranking_eval.precision_at_k(ranked, relevant, 5) == 0.0
         assert ranking_eval.recall_at_k(ranked, relevant, 5) == 0.0
         assert ranking_eval.ndcg_at_k(ranked, relevant, 5) == 0.0
 
-    def test_query_with_no_token_overlap_returns_empty(self, db: DatabaseManager) -> None:
-        ranked = self._seed_noise_and_search(db)
+    def test_query_with_no_token_overlap_returns_empty(self, store: Storage) -> None:
+        ranked = self._seed_noise_and_search(store)
 
         assert ranked == []
 
 
 class TestRecallVsSearchCostTradeoff:
-    def test_distilled_recall_output_is_smaller_than_raw_search_payload(
-        self, db: DatabaseManager
-    ) -> None:
-        seed(
-            db,
+    def test_distilled_recall_output_is_smaller_than_raw_search_payload(self, store: Storage) -> None:
+        seed_store(
+            store,
             "bench",
             [
                 SeedEntity(
@@ -183,7 +178,7 @@ class TestRecallVsSearchCostTradeoff:
                 for i in range(8)
             ],
         )
-        search_payload = db.search_nodes("bench", "deployment rollback runbook", limit=10)
+        search_payload = store.reads.search("bench", "deployment rollback runbook", limit=10)
         raw_bytes = payload_size(search_payload)
 
         distilled = "Rollback: revert deploy, run runbook step 3."

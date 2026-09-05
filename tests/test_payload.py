@@ -11,13 +11,15 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mcp_memory import payload
-from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
+from mcp_memory.storage import open_writable
 
-from . import SeedEntity, seed
+from . import SeedEntity, seed_store
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from mcp_memory.storage import Storage
 
 
 class TestPayloadSize:
@@ -27,23 +29,23 @@ class TestPayloadSize:
         assert size < 60
 
     def test_payload_size_grows_with_more_entities(self, tmp_path: Path) -> None:
-        small_db = DatabaseManager(tmp_path / "small.db")
-        seed(small_db, "proj", [SeedEntity("task/one", ["alpha beta"])])
-        small_size = payload.payload_size(small_db.search_nodes("proj", "alpha", limit=10))
+        small_db = open_writable(tmp_path / "small.db")
+        seed_store(small_db, "proj", [SeedEntity("task/one", ["alpha beta"])])
+        small_size = payload.payload_size(small_db.reads.search("proj", "alpha", limit=10))
 
-        large_db = DatabaseManager(tmp_path / "large.db")
-        seed(
+        large_db = open_writable(tmp_path / "large.db")
+        seed_store(
             large_db,
             "proj",
             [SeedEntity(f"task/n-{i}", ["alpha beta"]) for i in range(5)],
         )
-        large_size = payload.payload_size(large_db.search_nodes("proj", "alpha", limit=10))
+        large_size = payload.payload_size(large_db.reads.search("proj", "alpha", limit=10))
 
         assert large_size > small_size
 
-    def test_payload_size_serializes_dataclasses(self, db: DatabaseManager) -> None:
-        seed(db, "proj", [SeedEntity("task/a", ["observation content"])])
-        size = payload.payload_size(db.search_nodes("proj", "observation", limit=10))
+    def test_payload_size_serializes_dataclasses(self, store: Storage) -> None:
+        seed_store(store, "proj", [SeedEntity("task/a", ["observation content"])])
+        size = payload.payload_size(store.reads.search("proj", "observation", limit=10))
         assert size > 0
 
     def test_payload_size_raises_on_unserializable(self) -> None:
@@ -61,42 +63,36 @@ def _long_observations() -> list[str]:
 
 
 class TestObservationBudget:
-    def test_budget_cuts_bytes_versus_unlimited(self, db: DatabaseManager) -> None:
-        seed(db, "proj", [SeedEntity("task/cache", _long_observations())])
+    def test_budget_cuts_bytes_versus_unlimited(self, store: Storage) -> None:
+        seed_store(store, "proj", [SeedEntity("task/cache", _long_observations())])
 
-        budgeted = payload.payload_size(
-            db.search_nodes("proj", "cache", max_observation_chars=2000)
-        )
-        unlimited = payload.payload_size(db.search_nodes("proj", "cache", max_observation_chars=-1))
+        budgeted = payload.payload_size(store.reads.search("proj", "cache", max_observation_chars=2000))
+        unlimited = payload.payload_size(store.reads.search("proj", "cache", max_observation_chars=-1))
 
         assert budgeted < unlimited
 
-    def test_budget_is_middle_ground_between_compact_and_unlimited(
-        self, db: DatabaseManager
-    ) -> None:
-        seed(db, "proj", [SeedEntity("task/cache", _long_observations())])
+    def test_budget_is_middle_ground_between_compact_and_unlimited(self, store: Storage) -> None:
+        seed_store(store, "proj", [SeedEntity("task/cache", _long_observations())])
 
-        compact = payload.payload_size(db.search_nodes("proj", "cache", compact=True))
-        budgeted = payload.payload_size(
-            db.search_nodes("proj", "cache", max_observation_chars=2000)
-        )
-        unlimited = payload.payload_size(db.search_nodes("proj", "cache", max_observation_chars=-1))
+        compact = payload.payload_size(store.reads.search("proj", "cache", compact=True))
+        budgeted = payload.payload_size(store.reads.search("proj", "cache", max_observation_chars=2000))
+        unlimited = payload.payload_size(store.reads.search("proj", "cache", max_observation_chars=-1))
 
         assert compact < budgeted < unlimited
 
-    def test_zero_budget_is_smallest_non_compact_result(self, db: DatabaseManager) -> None:
-        seed(db, "proj", [SeedEntity("task/cache", _long_observations())])
+    def test_zero_budget_is_smallest_non_compact_result(self, store: Storage) -> None:
+        seed_store(store, "proj", [SeedEntity("task/cache", _long_observations())])
 
-        compact = payload.payload_size(db.search_nodes("proj", "cache", compact=True))
-        zero = payload.payload_size(db.search_nodes("proj", "cache", max_observation_chars=0))
-        default = payload.payload_size(db.search_nodes("proj", "cache"))
+        compact = payload.payload_size(store.reads.search("proj", "cache", compact=True))
+        zero = payload.payload_size(store.reads.search("proj", "cache", max_observation_chars=0))
+        default = payload.payload_size(store.reads.search("proj", "cache"))
 
         assert compact < zero < default
 
-    def test_get_entity_with_relations_budget_cuts_bytes(self, db: DatabaseManager) -> None:
+    def test_get_entity_with_relations_budget_cuts_bytes(self, store: Storage) -> None:
         obs = _long_observations()
-        seed(
-            db,
+        seed_store(
+            store,
             "proj",
             [
                 SeedEntity("task/primary", obs),
@@ -104,7 +100,7 @@ class TestObservationBudget:
                 SeedEntity("task/related-b", obs),
             ],
         )
-        db.create_relations(
+        store.relations.create(
             "proj",
             [
                 Relation("task/primary", "task/related-a", "relates-to"),
@@ -113,10 +109,10 @@ class TestObservationBudget:
         )
 
         budgeted = payload.payload_size(
-            db.get_entity_with_relations("proj", "task/primary", max_observation_chars=2000)
+            store.reads.get_entity_with_relations("proj", "task/primary", max_observation_chars=2000)
         )
         unlimited = payload.payload_size(
-            db.get_entity_with_relations("proj", "task/primary", max_observation_chars=-1)
+            store.reads.get_entity_with_relations("proj", "task/primary", max_observation_chars=-1)
         )
 
         assert budgeted < unlimited

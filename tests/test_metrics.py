@@ -9,104 +9,101 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mcp_memory import cli, metrics, server
-from mcp_memory.database import DatabaseManager
 from mcp_memory.models import Relation
 from mcp_memory.payload import payload_size
+from mcp_memory.storage import open_writable
 
-from . import SeedEntity, seed
+from . import SeedEntity, seed_store
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from mcp_memory.storage import Storage
+
 
 class TestStorage:
-    def test_record_tool_call_inserts_row(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 120, 3400, {"limit": 5, "compact": True})
+    def test_record_tool_call_inserts_row(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 120, 3400, {"limit": 5, "compact": True})
 
-        row = db._db.execute(
-            "SELECT tool, input_bytes, output_bytes, options FROM tool_calls"
-        ).fetchone()
+        row = store.connection.query_one("SELECT tool, input_bytes, output_bytes, options FROM tool_calls")
         assert row["tool"] == "search_nodes"
         assert row["input_bytes"] == 120
         assert row["output_bytes"] == 3400
         assert json.loads(row["options"]) == {"limit": 5, "compact": True}
 
-    def test_migration_created_tool_calls_table(self, db: DatabaseManager) -> None:
-        row = db._db.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tool_calls'"
-        ).fetchone()
+    def test_migration_created_tool_calls_table(self, store: Storage) -> None:
+        row = store.connection.query_one("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tool_calls'")
         assert row is not None
 
-    def test_prune_tool_calls_removes_only_old_rows(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 10, 20, {})
-        db.record_tool_call("read_graph", 30, 40, {})
-        db._db.execute(
-            "UPDATE tool_calls SET called_at = datetime('now', '-100 days') "
-            "WHERE tool = 'read_graph'"
-        )
-        db._db.commit()
+    def test_prune_tool_calls_removes_only_old_rows(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 10, 20, {})
+        store.telemetry.record_tool_call("read_graph", 30, 40, {})
+        with store.connection.transaction():
+            store.connection.write(
+                "UPDATE tool_calls SET called_at = datetime('now', '-100 days') WHERE tool = 'read_graph'"
+            )
 
-        assert db.prune_tool_calls(90) == 1
-        remaining = db._db.execute("SELECT tool FROM tool_calls").fetchall()
+        assert store.telemetry.prune_tool_calls(90) == 1
+        remaining = store.connection.query_all("SELECT tool FROM tool_calls")
         assert [r["tool"] for r in remaining] == ["search_nodes"]
 
-    def test_negative_retention_window_prunes_nothing(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 10, 20, {})
-        db._db.execute("UPDATE tool_calls SET called_at = datetime('now', '-400 days')")
-        db._db.commit()
+    def test_negative_retention_window_prunes_nothing(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 10, 20, {})
+        with store.connection.transaction():
+            store.connection.write("UPDATE tool_calls SET called_at = datetime('now', '-400 days')")
 
-        assert db.prune_tool_calls(-1) == 0
-        assert db._db.execute("SELECT COUNT(*) AS n FROM tool_calls").fetchone()["n"] == 1
+        assert store.telemetry.prune_tool_calls(-1) == 0
+        assert store.connection.query_one("SELECT COUNT(*) AS n FROM tool_calls")["n"] == 1
 
 
 class TestRecord:
-    def test_records_payload_sizes(self, db: DatabaseManager) -> None:
+    def test_records_payload_sizes(self, store: Storage) -> None:
         kwargs = {"query": "hello world", "limit": 5}
         result = {"entities": [{"name": "a"}, {"name": "b"}]}
-        metrics.record(db, "search_nodes", kwargs, result)
+        metrics.record(store, "search_nodes", kwargs, result)
 
-        row = db._db.execute("SELECT input_bytes, output_bytes FROM tool_calls").fetchone()
+        row = store.connection.query_one("SELECT input_bytes, output_bytes FROM tool_calls")
         assert row["input_bytes"] == payload_size(kwargs)
         assert row["output_bytes"] == payload_size(result)
 
-    def test_skips_error_result(self, db: DatabaseManager) -> None:
-        metrics.record(db, "search_nodes", {"query": "x"}, {"error": "boom"})
-        assert db._db.execute("SELECT COUNT(*) AS n FROM tool_calls").fetchone()["n"] == 0
+    def test_skips_error_result(self, store: Storage) -> None:
+        metrics.record(store, "search_nodes", {"query": "x"}, {"error": "boom"})
+        assert store.connection.query_one("SELECT COUNT(*) AS n FROM tool_calls")["n"] == 0
 
-    def test_stores_only_allowlisted_scalar_options(self, db: DatabaseManager) -> None:
+    def test_stores_only_allowlisted_scalar_options(self, store: Storage) -> None:
         kwargs = {
             "query": "some long text that must never be stored",
             "compact": True,
             "match_all": False,
             "project": "p",
         }
-        metrics.record(db, "search_nodes", kwargs, {"entities": []})
+        metrics.record(store, "search_nodes", kwargs, {"entities": []})
 
-        options = json.loads(db._db.execute("SELECT options FROM tool_calls").fetchone()["options"])
+        row = store.connection.query_one("SELECT options FROM tool_calls")
+        options = json.loads(row["options"])
         assert options == {"compact": True, "match_all": False, "project": "p"}
         assert "query" not in options
 
-    def test_honours_disabled_flag(
-        self, db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_honours_disabled_flag(self, store: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_CALL_METRICS_ENABLED", "false")
-        metrics.record(db, "search_nodes", {"query": "x"}, {"entities": []})
-        assert db._db.execute("SELECT COUNT(*) AS n FROM tool_calls").fetchone()["n"] == 0
+        metrics.record(store, "search_nodes", {"query": "x"}, {"entities": []})
+        assert store.connection.query_one("SELECT COUNT(*) AS n FROM tool_calls")["n"] == 0
 
-    def test_drops_long_allowlisted_string_option(self, db: DatabaseManager) -> None:
-        metrics.record(db, "search_nodes", {"since": "y" * 65}, {"entities": []})
-        options = json.loads(db._db.execute("SELECT options FROM tool_calls").fetchone()["options"])
+    def test_drops_long_allowlisted_string_option(self, store: Storage) -> None:
+        metrics.record(store, "search_nodes", {"since": "y" * 65}, {"entities": []})
+        row = store.connection.query_one("SELECT options FROM tool_calls")
+        options = json.loads(row["options"])
         assert "since" not in options
 
 
 class TestUsageReport:
-    def test_aggregates_per_tool_stats(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 100, 1000, {"compact": True})
-        db.record_tool_call("search_nodes", 200, 3000, {"compact": True})
-        db.record_tool_call("search_nodes", 300, 2000, {"compact": False})
-        db.record_tool_call("read_graph", 50, 500, {})
+    def test_aggregates_per_tool_stats(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 100, 1000, {"compact": True})
+        store.telemetry.record_tool_call("search_nodes", 200, 3000, {"compact": True})
+        store.telemetry.record_tool_call("search_nodes", 300, 2000, {"compact": False})
+        store.telemetry.record_tool_call("read_graph", 50, 500, {})
 
-        report = metrics.usage_report(db)
+        report = metrics.usage_report(store)
         assert report.total_calls == 4
         assert report.since is None
         assert [tool.tool for tool in report.tools] == ["read_graph", "search_nodes"]
@@ -119,56 +116,55 @@ class TestUsageReport:
         assert search.median_output_bytes == statistics.median([1000, 3000, 2000])
         assert search.option_frequencies == {"compact": {"True": 2, "False": 1}}
 
-    def test_totals_and_ratio_sum_across_all_tools(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 100, 1000, {})
-        db.record_tool_call("search_nodes", 200, 3000, {})
-        db.record_tool_call("read_graph", 50, 500, {})
+    def test_totals_and_ratio_sum_across_all_tools(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 100, 1000, {})
+        store.telemetry.record_tool_call("search_nodes", 200, 3000, {})
+        store.telemetry.record_tool_call("read_graph", 50, 500, {})
 
-        report = metrics.usage_report(db)
+        report = metrics.usage_report(store)
         assert report.total_input_bytes == 350
         assert report.total_output_bytes == 4500
         assert report.input_output_ratio == pytest.approx(350 / 4500)
 
-    def test_ratio_is_none_when_no_calls_recorded(self, db: DatabaseManager) -> None:
-        report = metrics.usage_report(db)
+    def test_ratio_is_none_when_no_calls_recorded(self, store: Storage) -> None:
+        report = metrics.usage_report(store)
         assert report.total_input_bytes == 0
         assert report.total_output_bytes == 0
         assert report.input_output_ratio is None
 
-    def test_since_filter_excludes_old_calls(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 10, 20, {})
-        db.record_tool_call("read_graph", 30, 40, {})
-        db._db.execute(
-            "UPDATE tool_calls SET called_at = datetime('now', '-100 days') "
-            "WHERE tool = 'read_graph'"
-        )
-        db._db.commit()
+    def test_since_filter_excludes_old_calls(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 10, 20, {})
+        store.telemetry.record_tool_call("read_graph", 30, 40, {})
+        with store.connection.transaction():
+            store.connection.write(
+                "UPDATE tool_calls SET called_at = datetime('now', '-100 days') WHERE tool = 'read_graph'"
+            )
 
-        report = metrics.usage_report(db, since="30d")
+        report = metrics.usage_report(store, since="30d")
         assert report.total_calls == 1
         assert [tool.tool for tool in report.tools] == ["search_nodes"]
 
 
 class TestUsageOverTime:
-    def test_day_bucketing_splits_across_dates(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 100, 1000, {})
-        db.record_tool_call("search_nodes", 200, 2000, {})
-        db._db.execute(
-            "UPDATE tool_calls SET called_at = datetime('now', '-2 days') WHERE input_bytes = 200"
-        )
-        db._db.commit()
+    def test_day_bucketing_splits_across_dates(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 100, 1000, {})
+        store.telemetry.record_tool_call("search_nodes", 200, 2000, {})
+        with store.connection.transaction():
+            store.connection.write(
+                "UPDATE tool_calls SET called_at = datetime('now', '-2 days') WHERE input_bytes = 200"
+            )
 
-        buckets = metrics.usage_over_time(db, bucket="day")
+        buckets = metrics.usage_over_time(store, bucket="day")
         assert len(buckets) == 2
         assert len({b.bucket for b in buckets}) == 2
         assert all(b.tool == "search_nodes" for b in buckets)
 
-    def test_per_tool_breakdown_same_day(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 100, 1000, {})
-        db.record_tool_call("search_nodes", 200, 3000, {})
-        db.record_tool_call("read_graph", 50, 500, {})
+    def test_per_tool_breakdown_same_day(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 100, 1000, {})
+        store.telemetry.record_tool_call("search_nodes", 200, 3000, {})
+        store.telemetry.record_tool_call("read_graph", 50, 500, {})
 
-        buckets = metrics.usage_over_time(db, bucket="day")
+        buckets = metrics.usage_over_time(store, bucket="day")
         assert len(buckets) == 2
         by_tool = {b.tool: b for b in buckets}
         assert by_tool["search_nodes"].call_count == 2
@@ -178,37 +174,36 @@ class TestUsageOverTime:
         assert by_tool["read_graph"].total_input_bytes == 50
         assert by_tool["read_graph"].total_output_bytes == 500
 
-    def test_since_filter_excludes_old_calls(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 10, 20, {})
-        db.record_tool_call("read_graph", 30, 40, {})
-        db._db.execute(
-            "UPDATE tool_calls SET called_at = datetime('now', '-100 days') "
-            "WHERE tool = 'read_graph'"
-        )
-        db._db.commit()
+    def test_since_filter_excludes_old_calls(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 10, 20, {})
+        store.telemetry.record_tool_call("read_graph", 30, 40, {})
+        with store.connection.transaction():
+            store.connection.write(
+                "UPDATE tool_calls SET called_at = datetime('now', '-100 days') WHERE tool = 'read_graph'"
+            )
 
-        buckets = metrics.usage_over_time(db, bucket="day", since="30d")
+        buckets = metrics.usage_over_time(store, bucket="day", since="30d")
         assert [b.tool for b in buckets] == ["search_nodes"]
 
-    def test_hour_grouping(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 10, 20, {})
-        buckets = metrics.usage_over_time(db, bucket="hour")
+    def test_hour_grouping(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 10, 20, {})
+        buckets = metrics.usage_over_time(store, bucket="hour")
         assert len(buckets) == 1
         assert "T" in buckets[0].bucket
         assert buckets[0].bucket.endswith(":00")
 
-    def test_week_grouping(self, db: DatabaseManager) -> None:
-        db.record_tool_call("search_nodes", 10, 20, {})
-        buckets = metrics.usage_over_time(db, bucket="week")
+    def test_week_grouping(self, store: Storage) -> None:
+        store.telemetry.record_tool_call("search_nodes", 10, 20, {})
+        buckets = metrics.usage_over_time(store, bucket="week")
         assert len(buckets) == 1
         assert "-W" in buckets[0].bucket
 
-    def test_invalid_bucket_raises(self, db: DatabaseManager) -> None:
+    def test_invalid_bucket_raises(self, store: Storage) -> None:
         with pytest.raises(ValueError, match="bucket"):
-            metrics.usage_over_time(db, bucket="year")
+            metrics.usage_over_time(store, bucket="year")
 
-    def test_empty_database_returns_empty(self, db: DatabaseManager) -> None:
-        assert metrics.usage_over_time(db, bucket="day") == []
+    def test_empty_database_returns_empty(self, store: Storage) -> None:
+        assert metrics.usage_over_time(store, bucket="day") == []
 
 
 class TestMetricsCommand:
@@ -219,11 +214,11 @@ class TestMetricsCommand:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         db_path = tmp_path / "cli-metrics.db"
-        seed = DatabaseManager(db_path)
-        seed.record_tool_call("search_nodes", 100, 1000, {"compact": True})
-        seed.record_tool_call("search_nodes", 200, 3000, {"compact": True})
-        seed.record_tool_call("read_graph", 50, 500, {})
-        seed.close()
+        seed = open_writable(db_path)
+        seed.telemetry.record_tool_call("search_nodes", 100, 1000, {"compact": True})
+        seed.telemetry.record_tool_call("search_nodes", 200, 3000, {"compact": True})
+        seed.telemetry.record_tool_call("read_graph", 50, 500, {})
+        seed.connection.close()
 
         monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
         monkeypatch.setattr("sys.argv", ["mcp-memory", "metrics"])
@@ -257,10 +252,10 @@ class TestCostRegression:
     """
 
     @pytest.fixture
-    def seeded_db(self, tmp_path: Path) -> DatabaseManager:
+    def seeded_db(self, tmp_path: Path) -> Storage:
         """Seed five multi-observation entities with relations for stable payload sizes."""
-        db = DatabaseManager(tmp_path / "cost.db")
-        seed(
+        db = open_writable(tmp_path / "cost.db")
+        seed_store(
             db,
             "bench",
             [
@@ -272,7 +267,7 @@ class TestCostRegression:
                 for index in range(5)
             ],
         )
-        db.create_relations(
+        db.relations.create(
             "bench",
             [
                 Relation("task/bench-0", "task/bench-1", "relates-to"),
@@ -281,9 +276,7 @@ class TestCostRegression:
         )
         return db
 
-    def test_output_bytes_stay_under_ceiling(
-        self, seeded_db: DatabaseManager, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_output_bytes_stay_under_ceiling(self, seeded_db: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
         """Each tool's real recorded mean output bytes must stay below its ceiling."""
         monkeypatch.setattr(server, "_db", seeded_db)
 
@@ -305,14 +298,13 @@ class TestCostRegression:
         }
         for tool in report.tools:
             assert tool.mean_output_bytes < ceilings[tool.tool], (
-                f"{tool.tool} output bytes {tool.mean_output_bytes} exceeded "
-                f"ceiling {ceilings[tool.tool]}"
+                f"{tool.tool} output bytes {tool.mean_output_bytes} exceeded ceiling {ceilings[tool.tool]}"
             )
 
 
 class TestServerWiring:
     def test_track_records_tool_call(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        manager = DatabaseManager(tmp_path / "server.db")
+        manager = open_writable(tmp_path / "server.db")
         monkeypatch.setattr(server, "_db", manager)
 
         @server._track
@@ -321,6 +313,6 @@ class TestServerWiring:
 
         search_nodes("needle", limit=3)
 
-        row = manager._db.execute("SELECT tool, options FROM tool_calls").fetchone()
+        row = manager.connection.query_one("SELECT tool, options FROM tool_calls")
         assert row["tool"] == "search_nodes"
         assert json.loads(row["options"]) == {"limit": 3}

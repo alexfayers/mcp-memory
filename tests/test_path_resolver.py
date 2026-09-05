@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from mcp_memory.database import DatabaseManager
 from mcp_memory.path_resolver import (
     match_project_for_path,
     normalize_path,
     resolve_project_for_path,
 )
+from mcp_memory.storage import open_writable
 
 
 class TestNormalizePath:
@@ -81,20 +81,18 @@ class TestResolveProjectForPath:
 
     def test_happy_path(self, tmp_path: Path) -> None:
         db_path = tmp_path / "memory.db"
-        db = DatabaseManager(db_path)
+        store = open_writable(db_path)
         repo = tmp_path / "acme-service-infra"
         repo.mkdir()
-        db.set_project_paths("platform", [str(repo)])
-        db.close()
-        assert (
-            resolve_project_for_path(str(repo / "lib" / "stack.ts"), db_path=db_path) == "platform"
-        )
+        store.projects.set_paths("platform", [str(repo)])
+        store.connection.close()
+        assert resolve_project_for_path(str(repo / "lib" / "stack.ts"), db_path=db_path) == "platform"
 
     def test_unmatched_path_returns_none(self, tmp_path: Path) -> None:
         db_path = tmp_path / "memory.db"
-        db = DatabaseManager(db_path)
+        store = open_writable(db_path)
         repo = tmp_path / "registered"
         repo.mkdir()
-        db.set_project_paths("platform", [str(repo)])
-        db.close()
+        store.projects.set_paths("platform", [str(repo)])
+        store.connection.close()
         assert resolve_project_for_path(str(tmp_path / "elsewhere"), db_path=db_path) is None

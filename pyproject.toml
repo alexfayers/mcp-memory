@@ -32,11 +32,11 @@ packages = ["src/mcp_memory"]
 [tool.ruff]
 target-version = "py312"
 src = ["src", "tests"]
-line-length = 100
+line-length = 120
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = [
+extend-ignore = [
     "D",       # pydocstyle - we use Google docstrings selectively
     "ANN",     # flake8-annotations - we use type hints but not on every function
     "COM812",  # trailing comma - conflicts with ruff format
@@ -63,13 +63,13 @@ ignore = [
 "tests/**" = ["ARG001", "ARG002", "PLR0917", "SLF001", "S108", "ASYNC109", "TC002"]
 "tests/regen_eval_baseline.py" = ["T201"]
 "src/mcp_memory/migrations/schema.py" = ["E501"]
-"src/mcp_memory/visualise.py" = ["E501", "SLF001", "ARG001", "TC002", "C901", "PLR0915"]
-"src/mcp_memory/database.py" = ["SLF001"]
-"src/mcp_memory/eval.py" = ["SLF001"]
-"src/mcp_memory/audit.py" = ["SLF001"]
-"src/mcp_memory/metrics.py" = ["SLF001"]
+"src/mcp_memory/visualise.py" = ["E501", "ARG001", "TC002", "C901", "PLR0915"]
 "src/mcp_memory/cli.py" = ["T201", "S603", "S607", "PLC0415"]
 "src/mcp_memory/agent.py" = ["S603", "S607", "ASYNC109"]
+
+[tool.ruff.format]
+# Frozen migration history - reformatting it breaks the byte-identity check on migrations.
+exclude = ["src/mcp_memory/migrations/schema.py"]
 
 [tool.mypy]
 python_version = "3.12"

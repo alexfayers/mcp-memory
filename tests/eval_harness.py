@@ -17,8 +17,8 @@ from tests.eval_baseline import RANKING_METRICS, bands, load_baseline
 if TYPE_CHECKING:
     import pytest
 
-    from mcp_memory.database import DatabaseManager
     from mcp_memory.eval import EvalReport
+    from mcp_memory.storage import Storage
 
 _FIXTURE_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 _FIXTURE_LATER = datetime(2026, 6, 1, tzinfo=UTC)
@@ -46,24 +46,24 @@ def _row(label: str, before: str, after: str, delta: str) -> str:
     return f"{label:<{_LABEL_W}}{before:>{_COL_W}}{after:>{_COL_W}}{delta:>{_COL_W}}"
 
 
-def mark_used(db: DatabaseManager, retrieval_id: str, *names: str) -> None:
+def mark_used(db: Storage, retrieval_id: str, *names: str) -> None:
     """Mark `names` used within `retrieval_id`, keyed by the (retrieval_id, name) pair."""
     used_at = _pinned(0)
-    db._db.executemany(
-        "UPDATE surfaced_entities SET used_at = ? WHERE retrieval_id = ? AND entity_name = ?",
-        [(used_at, retrieval_id, name) for name in names],
-    )
-    db._db.commit()
+    with db.connection.transaction():
+        db.connection.write_many(
+            "UPDATE surfaced_entities SET used_at = ? WHERE retrieval_id = ? AND entity_name = ?",
+            [(used_at, retrieval_id, name) for name in names],
+        )
 
 
-def _build_eval_fixture(db: DatabaseManager) -> None:
+def _build_eval_fixture(db: Storage) -> None:
     """Seed a labelled-query fixture whose every timestamp is pinned to a fixed instant.
 
     Two entities share the query terms with identical FTS documents (same token counts, so
     identical BM25) and differ only in type half-life and age, so their order depends purely
     on the injected clock. A third entity carries a second, unambiguous query.
     """
-    db.create_entities(
+    db.entities.create(
         "proj",
         [
             {"name": "task/fresh", "entityType": "task", "observations": ["backoff retry"]},
@@ -72,25 +72,26 @@ def _build_eval_fixture(db: DatabaseManager) -> None:
         ],
     )
     pinned = _pinned(0)
-    db._db.execute("UPDATE entities SET created_at = ?, updated_at = ?", (pinned, pinned))
-    db._db.execute(
-        "UPDATE entities SET created_at = ?, updated_at = ? WHERE name = 'pattern/slow'",
-        (_pinned(184), _pinned(184)),
-    )
-    db.record_surfaced(
+    with db.connection.transaction():
+        db.connection.write("UPDATE entities SET created_at = ?, updated_at = ?", (pinned, pinned))
+        db.connection.write(
+            "UPDATE entities SET created_at = ?, updated_at = ? WHERE name = 'pattern/slow'",
+            (_pinned(184), _pinned(184)),
+        )
+    db.telemetry.record_surfaced(
         "search_nodes",
         "backoff retry",
         "rid-1",
         [("proj", "task/fresh", 1), ("proj", "pattern/slow", 2)],
     )
-    db.record_surfaced("search_nodes", "cache eviction", "rid-2", [("proj", "task/unrelated", 1)])
-    db._db.execute("UPDATE surfaced_entities SET surfaced_at = ?", (pinned,))
-    db._db.commit()
+    db.telemetry.record_surfaced("search_nodes", "cache eviction", "rid-2", [("proj", "task/unrelated", 1)])
+    with db.connection.transaction():
+        db.connection.write("UPDATE surfaced_entities SET surfaced_at = ?", (pinned,))
     mark_used(db, "rid-1", "pattern/slow")
     mark_used(db, "rid-2", "task/unrelated")
 
 
-MutateDb = Callable[["DatabaseManager"], None]
+MutateDb = Callable[["Storage"], None]
 
 
 @dataclass(frozen=True)
@@ -103,10 +104,7 @@ class MeasuredChange:
     @property
     def deltas(self) -> dict[str, float]:
         """Per-metric change (after minus before) over the five ranking metrics."""
-        return {
-            metric: getattr(self.after, metric) - getattr(self.before, metric)
-            for metric in RANKING_METRICS
-        }
+        return {metric: getattr(self.after, metric) - getattr(self.before, metric) for metric in RANKING_METRICS}
 
     def format(self) -> str:
         """Render a fixed-width before/after/delta table, including k and query_count."""
@@ -126,9 +124,7 @@ class MeasuredChange:
 def _require_comparable(result: MeasuredChange) -> None:
     """Fail unless before/after are means over the same set of labelled queries."""
     if result.before.query_count == 0:
-        raise AssertionError(
-            f"no labelled queries were evaluated (before.query_count == 0)\n{result.format()}"
-        )
+        raise AssertionError(f"no labelled queries were evaluated (before.query_count == 0)\n{result.format()}")
     if result.after.query_count != result.before.query_count:
         raise AssertionError(
             "before/after query counts are not comparable: "
@@ -137,7 +133,7 @@ def _require_comparable(result: MeasuredChange) -> None:
 
 
 def measure_change(
-    db: DatabaseManager,
+    db: Storage,
     mutate: MutateDb,
     *,
     k: int = 10,
@@ -148,14 +144,14 @@ def measure_change(
 
     `now` is keyword-only with no default, so the two evaluations cannot silently drift apart
     by measuring at different instants. When `require_mutation` is true (the default), this
-    snapshots `db._db.total_changes` immediately either side of `mutate` and fails if it did
-    not move; this only observes writes made through `db`'s own connection, so a mutation that
-    opens its own connection needs `require_mutation=False`.
+    snapshots `db.connection.total_changes` immediately either side of `mutate` and fails if it
+    did not move; this only observes writes made through `db`'s own connection, so a mutation
+    that opens its own connection needs `require_mutation=False`.
     """
     before = evaluate(db, k=k, now=now)
-    changes_before = db._db.total_changes
+    changes_before = db.connection.total_changes
     mutate(db)
-    changes_after = db._db.total_changes
+    changes_after = db.connection.total_changes
     after = evaluate(db, k=k, now=now)
     result = MeasuredChange(before=before, after=after)
     if require_mutation and changes_after == changes_before:

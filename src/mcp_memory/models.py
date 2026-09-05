@@ -78,6 +78,14 @@ def normalize_relation_type(relation_type: str) -> str:
     return RELATION_TYPE_ALIASES.get(canonical, canonical)
 
 
+def validate_vote(vote: int) -> None:
+    """Raise ValueError unless vote is a nonzero integer within MAX_VOTE_MAGNITUDE."""
+    if vote == 0 or abs(vote) > MAX_VOTE_MAGNITUDE:
+        raise ValueError(
+            f"Invalid vote '{vote}'. Must be a nonzero integer from -{MAX_VOTE_MAGNITUDE} to {MAX_VOTE_MAGNITUDE}"
+        )
+
+
 @dataclass
 class Observation:
     content: str

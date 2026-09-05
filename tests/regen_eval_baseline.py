@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from mcp_memory.database import DatabaseManager
+from mcp_memory.storage import open_writable
 from tests.eval_baseline import (
     _DP,
     BASELINE_PATH,
@@ -33,11 +33,11 @@ _COL_W = 12
 def measure_baseline() -> Baseline:
     """Build the populated fixture in a temp directory and return its measured baseline."""
     with tempfile.TemporaryDirectory() as tmp:
-        db = DatabaseManager(Path(tmp) / "baseline.db")
+        db = open_writable(Path(tmp) / "baseline.db")
         try:
             return Baseline.from_report(_build_populated_fixture(db).expected_baseline)
         finally:
-            db.close()
+            db.connection.close()
 
 
 def moved(committed: Baseline, measured: Baseline) -> dict[str, tuple[float, float]]:

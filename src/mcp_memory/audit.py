@@ -12,8 +12,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from .database import DatabaseManager
     from .models import Observation
+    from .storage import Storage
 
 Finding = dict[str, object]
 _ORPHAN_EXEMPT_ENTITY_TYPES = frozenset({"project"})
@@ -46,7 +46,7 @@ _OUTCOME_KEYWORDS = ("Decided:", "Resolved:", "RESOLVED")
 
 # vote_score at or below which an entity is surfaced as a rot-review prompt (SKILL.md
 # section 5). Section 5 gives no literal number, only "strongly negative" and a reference
-# to the dream/GC saturation floor of -10 (database.py _GC_DOWNVOTE_FLOOR); -5 is well past
+# to the dream/GC saturation floor of -10 (storage/maintenance.py GC_DOWNVOTE_FLOOR); -5 is well past
 # incidental single downvotes yet short of the floor where the GC would reap the entity.
 _NEGATIVE_VOTE_THRESHOLD = -5
 
@@ -95,7 +95,7 @@ def _ceiling_for(entity_type: str, status: str | None) -> int | None:
     return _OBS_CEILINGS.get(entity_type)
 
 
-def audit_graph(db: DatabaseManager, project: str | None = None) -> dict[str, object]:
+def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
     """Build the structural-hygiene report for one project scope, or all when project is None.
 
     The report is informational: it locates mechanical violations for the memory-review
@@ -104,10 +104,10 @@ def audit_graph(db: DatabaseManager, project: str | None = None) -> dict[str, ob
     """
     entity_params = () if project is None else (project,)
     entity_sql = _ENTITY_SQL + ("" if project is None else " AND p.name = ?")
-    entity_rows = db._db.execute(entity_sql, entity_params).fetchall()
+    entity_rows = db.connection.query_all(entity_sql, entity_params)
 
     relation_sql = _RELATION_SQL + ("" if project is None else " AND sp.name = ?")
-    relation_rows = db._db.execute(relation_sql, entity_params).fetchall()
+    relation_rows = db.connection.query_all(relation_sql, entity_params)
 
     orphans: list[dict[str, object]] = []
     misused_project_type: list[dict[str, object]] = []
@@ -157,12 +157,8 @@ def audit_graph(db: DatabaseManager, project: str | None = None) -> dict[str, ob
             if row["relation_type"] == "belongs-to":
                 relation_violations.append(edge)
 
-    scope_rows = db._db.execute(_SCOPE_COUNT_SQL).fetchall()
-    ghost_scopes = [
-        r["project"]
-        for r in scope_rows
-        if r["n"] == 0 and (project is None or r["project"] == project)
-    ]
+    scope_rows = db.connection.query_all(_SCOPE_COUNT_SQL)
+    ghost_scopes = [r["project"] for r in scope_rows if r["n"] == 0 and (project is None or r["project"] == project)]
 
     return {
         "project": project,
@@ -179,11 +175,7 @@ def audit_graph(db: DatabaseManager, project: str | None = None) -> dict[str, ob
 
 def _keep_hashes(observations: list[Observation], ceiling: int) -> list[str]:
     """Deterministically pick which observations to keep when trimming to the ceiling."""
-    keep = {
-        o.content_hash
-        for o in observations
-        if any(keyword in o.content for keyword in _OUTCOME_KEYWORDS)
-    }
+    keep = {o.content_hash for o in observations if any(keyword in o.content for keyword in _OUTCOME_KEYWORDS)}
     top = min(observations, key=lambda o: (-o.vote_score, o.content_hash))
     keep.add(top.content_hash)
 
@@ -194,9 +186,7 @@ def _keep_hashes(observations: list[Observation], ceiling: int) -> list[str]:
 
 def _outcome_obs_count(observations: list[Observation]) -> int:
     """Count observations that carry an outcome/decision marker."""
-    return sum(
-        1 for o in observations if any(keyword in o.content for keyword in _OUTCOME_KEYWORDS)
-    )
+    return sum(1 for o in observations if any(keyword in o.content for keyword in _OUTCOME_KEYWORDS))
 
 
 def _implements_step(edge: Finding, reason: str) -> dict[str, object]:
@@ -205,9 +195,7 @@ def _implements_step(edge: Finding, reason: str) -> dict[str, object]:
         "tool": "create_relations",
         "arguments": {
             "project": edge["project"],
-            "relations": [
-                {"source": edge["task"], "relationType": "implements", "target": "<FEATURE_TBD>"}
-            ],
+            "relations": [{"source": edge["task"], "relationType": "implements", "target": "<FEATURE_TBD>"}],
         },
         "reason": reason,
         "needs_review": True,
@@ -227,19 +215,16 @@ def _is_subsumed(dropped: Observation, kept: list[Observation]) -> bool:
     caught here forces needs_review rather than risking a silent loss.
     """
     dropped_text = dropped.content.casefold()
-    return any(
-        dropped_text in k.content.casefold() or k.content.casefold() in dropped_text for k in kept
-    )
+    return any(dropped_text in k.content.casefold() or k.content.casefold() in dropped_text for k in kept)
 
 
-def _trim_step(db: DatabaseManager, entity: Finding) -> dict[str, object]:
+def _trim_step(db: Storage, entity: Finding) -> dict[str, object]:
     """A trim step for one oversized entity - auto-applied only if every dropped
     observation is a near-duplicate of a kept one, else flagged for review."""
     ceiling = (
-        _ceiling_for(cast("str", entity["entity_type"]), cast("str | None", entity["status"]))
-        or _RESOLVED_TASK_CEILING
+        _ceiling_for(cast("str", entity["entity_type"]), cast("str | None", entity["status"])) or _RESOLVED_TASK_CEILING
     )
-    observations = db._get_observations_full(cast("int", entity["entity_id"]))
+    observations = db.observations.for_entity(cast("int", entity["entity_id"]))
     keep_hashes = _keep_hashes(observations, ceiling)
     kept = [o for o in observations if o.content_hash in keep_hashes]
     dropped = [o for o in observations if o.content_hash not in keep_hashes]
@@ -255,8 +240,7 @@ def _trim_step(db: DatabaseManager, entity: Finding) -> dict[str, object]:
             f"{entity['entity_type']} '{entity['name']}' has {entity['count']} "
             f"observations (ceiling {ceiling})"
             + (
-                "; some dropped observations are not near-duplicates of a kept one - review "
-                "before applying"
+                "; some dropped observations are not near-duplicates of a kept one - review before applying"
                 if needs_review
                 else ""
             )
@@ -304,23 +288,21 @@ def _review_step(entity: Finding) -> dict[str, object]:
     }
 
 
-def _oversized_step(db: DatabaseManager, entity: Finding) -> dict[str, object]:
+def _oversized_step(db: Storage, entity: Finding) -> dict[str, object]:
     """Propose a split for a resolved task bundling multiple outcomes, else a deterministic
     trim - or, for non-task types, an advisory review step (see _review_step)."""
     entity_type = cast("str", entity["entity_type"])
     if entity_type != "task":
         return _review_step(entity)
-    ceiling = (
-        _ceiling_for(entity_type, cast("str | None", entity["status"])) or _RESOLVED_TASK_CEILING
-    )
-    observations = db._get_observations_full(cast("int", entity["entity_id"]))
+    ceiling = _ceiling_for(entity_type, cast("str | None", entity["status"])) or _RESOLVED_TASK_CEILING
+    observations = db.observations.for_entity(cast("int", entity["entity_id"]))
     outcome_count = _outcome_obs_count(observations)
     if outcome_count > ceiling:
         return _split_step(entity, ceiling, outcome_count)
     return _trim_step(db, entity)
 
 
-def propose_plan(db: DatabaseManager, report: dict[str, object]) -> list[dict[str, object]]:
+def propose_plan(db: Storage, report: dict[str, object]) -> list[dict[str, object]]:
     """Turn an audit report into a structured, deterministic list of fix-it tool calls."""
     steps: list[dict[str, object]] = []
 

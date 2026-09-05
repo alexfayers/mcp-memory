@@ -16,11 +16,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .config import get_call_metrics_enabled
-from .database import _parse_date
 from .payload import payload_size
+from .storage.pure.sql import parse_date
 
 if TYPE_CHECKING:
-    from .database import DatabaseManager
+    from .storage import Storage
 
 # Safe scalar option names recorded in the per-call options breakdown. Deliberately EXCLUDES
 # content-bearing params (query/name/observations/entities/relations/content) so raw text is
@@ -54,19 +54,15 @@ def _is_trackable(value: Any) -> bool:
     return isinstance(value, str) and len(value) <= _MAX_OPTION_STR_LEN
 
 
-def record(db: DatabaseManager, tool_name: str, kwargs: dict[str, Any], result: Any) -> None:
+def record(db: Storage, tool_name: str, kwargs: dict[str, Any], result: Any) -> None:
     """Record one tool call's byte-size proxies and allowlisted options. Never raises."""
     try:
         if not get_call_metrics_enabled():
             return
         if isinstance(result, dict) and "error" in result:
             return
-        options = {
-            key: value
-            for key, value in kwargs.items()
-            if key in _TRACKED_OPTIONS and _is_trackable(value)
-        }
-        db.record_tool_call(tool_name, payload_size(kwargs), payload_size(result), options)
+        options = {key: value for key, value in kwargs.items() if key in _TRACKED_OPTIONS and _is_trackable(value)}
+        db.telemetry.record_tool_call(tool_name, payload_size(kwargs), payload_size(result), options)
     except Exception:  # noqa: S110 - instrumentation must never break a tool call
         pass
 
@@ -110,9 +106,7 @@ class UsageBucket:
 _BUCKET_FORMATS = {"hour": "%Y-%m-%dT%H:00", "day": "%Y-%m-%d", "week": "%Y-W%W"}
 
 
-def usage_over_time(
-    db: DatabaseManager, bucket: str = "day", since: str | None = None
-) -> list[UsageBucket]:
+def usage_over_time(db: Storage, bucket: str = "day", since: str | None = None) -> list[UsageBucket]:
     """Aggregate recorded tool_calls into per-tool call count and summed bytes per time bucket.
 
     ``bucket`` is one of 'hour', 'day', or 'week'; any other value raises ``ValueError``. When
@@ -131,9 +125,9 @@ def usage_over_time(
     params: list[str] = [fmt]
     if since is not None:
         sql += "WHERE datetime(called_at) >= datetime(?) "
-        params.append(_parse_date(since))
+        params.append(parse_date(since))
     sql += "GROUP BY b, tool ORDER BY b, tool"
-    rows = db._db.execute(sql, params).fetchall()
+    rows = db.connection.query_all(sql, params)
 
     return [
         UsageBucket(
@@ -147,7 +141,7 @@ def usage_over_time(
     ]
 
 
-def usage_report(db: DatabaseManager, since: str | None = None) -> UsageReport:
+def usage_report(db: Storage, since: str | None = None) -> UsageReport:
     """Aggregate recorded tool_calls into per-tool byte-size stats and option-usage frequency.
 
     When ``since`` is given (relative '30m'/'1h'/'7d'/'2w'/'3mo' or ISO date), only calls
@@ -157,9 +151,9 @@ def usage_report(db: DatabaseManager, since: str | None = None) -> UsageReport:
     params: list[str] = []
     if since is not None:
         sql += "WHERE datetime(called_at) >= datetime(?) "
-        params.append(_parse_date(since))
+        params.append(parse_date(since))
     sql += "ORDER BY tool"
-    rows = db._db.execute(sql, params).fetchall()
+    rows = db.connection.query_all(sql, params)
 
     grouped: dict[str, list[Any]] = {}
     for row in rows:

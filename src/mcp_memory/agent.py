@@ -48,7 +48,7 @@ from .config import (
     get_recall_max_turns,
     get_recall_model,
 )
-from .database import _GC_DOWNVOTE_FLOOR
+from .storage.operations.maintenance import GC_DOWNVOTE_FLOOR
 
 __all__ = ["anyio", "dream_status", "shutil", "time"]
 
@@ -364,7 +364,7 @@ def build_dream_command(
         claude_bin=claude_bin,
         model=model,
         mcp_config_path=mcp_config_path,
-        prompt=DREAM_RITUAL.format(max_votes=max_votes, gc_floor=_GC_DOWNVOTE_FLOOR),
+        prompt=DREAM_RITUAL.format(max_votes=max_votes, gc_floor=GC_DOWNVOTE_FLOOR),
         disallowed=DREAM_DISALLOWED_TOOLS,
     )
 
@@ -381,7 +381,7 @@ def build_heavy_dream_command(
         claude_bin=claude_bin,
         model=model,
         mcp_config_path=mcp_config_path,
-        prompt=HEAVY_DREAM_RITUAL.format(max_ops=max_ops, gc_floor=_GC_DOWNVOTE_FLOOR),
+        prompt=HEAVY_DREAM_RITUAL.format(max_ops=max_ops, gc_floor=GC_DOWNVOTE_FLOOR),
         disallowed=HEAVY_DREAM_DISALLOWED_TOOLS,
     )
 
@@ -543,13 +543,9 @@ async def _run_isolated_agent(
     try:
         config_path.write_text(json.dumps(build_mcp_config(get_memory_url())), encoding="utf-8")
         isolated_config_dir.mkdir()
-        (isolated_config_dir / "settings.json").write_text(
-            json.dumps(AGENT_SETTINGS), encoding="utf-8"
-        )
+        (isolated_config_dir / "settings.json").write_text(json.dumps(AGENT_SETTINGS), encoding="utf-8")
         command = build_command(claude_bin, str(config_path))
-        stdout = await _spawn_recall(
-            command, env=build_spawn_env(str(isolated_config_dir)), timeout=timeout
-        )
+        stdout = await _spawn_recall(command, env=build_spawn_env(str(isolated_config_dir)), timeout=timeout)
         return parse_recall_result(stdout, expected_model=model)
     except RuntimeError as exc:
         return _failed_spawn(str(exc))
@@ -759,9 +755,7 @@ async def _run_guarded(spec: TierSpec) -> bool:
     return True
 
 
-def _due_tiers(
-    state: _SessionState, now: float, idle: float, tiers: list[TierSpec]
-) -> list[TierSpec]:
+def _due_tiers(state: _SessionState, now: float, idle: float, tiers: list[TierSpec]) -> list[TierSpec]:
     """Observe one (now, idle) sample: update the session and return the tiers due to fire.
 
     A pure, synchronous decision function - the tricky session-detection logic lives
@@ -783,11 +777,7 @@ def _due_tiers(
         state.anchor = now - idle
     genuine_idle = now - state.anchor
     return sorted(
-        (
-            spec
-            for spec in tiers
-            if spec.name not in state.fired and genuine_idle >= spec.idle_getter()
-        ),
+        (spec for spec in tiers if spec.name not in state.fired and genuine_idle >= spec.idle_getter()),
         key=lambda spec: spec.idle_getter(),
     )
 
@@ -930,9 +920,7 @@ def main(argv: list[str] | None = None) -> None:
     background service.
     """
     parser = argparse.ArgumentParser(prog="memory-agent", description="Memory recall agent server")
-    parser.add_subparsers(dest="command").add_parser(
-        "setup-service", help="Install as a persistent background service"
-    )
+    parser.add_subparsers(dest="command").add_parser("setup-service", help="Install as a persistent background service")
     args = parser.parse_args(argv)
 
     if args.command == "setup-service":

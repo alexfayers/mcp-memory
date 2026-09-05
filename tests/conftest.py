@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from mcp_memory.database import DatabaseManager
+from mcp_memory.storage import open_writable
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from mcp_memory.storage import Storage
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +21,6 @@ def _isolate_db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def db(tmp_path: Path) -> DatabaseManager:
-    """Create a fresh database for each test."""
-    return DatabaseManager(tmp_path / "test.db")
+def store(tmp_path: Path) -> Storage:
+    """Create a fresh store-backed database for each test."""
+    return open_writable(tmp_path / "test.db")

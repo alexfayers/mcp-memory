@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
-    from mcp_memory.database import DatabaseManager
     from mcp_memory.eval import EvalReport
+    from mcp_memory.storage import Storage
 
 _K = 10
 _POOL_TERM = "service"
@@ -247,9 +247,7 @@ _CROSS_PROJECT_QUERIES: tuple[tuple[tuple[int, ...], tuple[tuple[int, str], ...]
 )
 
 
-def _shaped(
-    archetype: str, delta: tuple[int, int, int, int]
-) -> tuple[str, int, int, int, int, str | None]:
+def _shaped(archetype: str, delta: tuple[int, int, int, int]) -> tuple[str, int, int, int, int, str | None]:
     """Apply `delta` to `archetype`'s base (type, age, vote, obs_count, obs_chars, status)."""
     entity_type, age, vote, obs_count, obs_chars, status = _ARCHETYPES[archetype]
     age_delta, vote_delta, count_delta, chars_delta = delta
@@ -276,7 +274,7 @@ def _observation_set(terms: tuple[str, ...], count: int, chars: int) -> list[str
 
 
 def _record_retrieval(
-    db: DatabaseManager,
+    db: Storage,
     retrieval_id: str,
     tool: str,
     query: str,
@@ -284,13 +282,13 @@ def _record_retrieval(
     used: tuple[str, ...],
 ) -> None:
     """Record one labelled retrieval with its `used` entities and surfaced_at both pinned."""
-    db.record_surfaced(tool, query, retrieval_id, hits)
+    db.telemetry.record_surfaced(tool, query, retrieval_id, hits)
     mark_used(db, retrieval_id, *used)
-    db._db.execute(
-        "UPDATE surfaced_entities SET surfaced_at = ? WHERE retrieval_id = ?",
-        (_pinned(0), retrieval_id),
-    )
-    db._db.commit()
+    with db.connection.transaction():
+        db.connection.write(
+            "UPDATE surfaced_entities SET surfaced_at = ? WHERE retrieval_id = ?",
+            (_pinned(0), retrieval_id),
+        )
 
 
 def _topic_query_specs(
@@ -315,7 +313,7 @@ def _topic_query_specs(
 
 
 def _seed_topic_queries(
-    db: DatabaseManager,
+    db: Storage,
     topic_index: int,
     term: str,
     project: str,
@@ -352,7 +350,7 @@ def _seed_topic_queries(
 
 
 def _seed_cross_project_queries(
-    db: DatabaseManager,
+    db: Storage,
     topics: tuple[tuple[int, str, str], ...],
     spine_names: dict[tuple[int, str], str],
     built_topics: set[int],
@@ -372,10 +370,7 @@ def _seed_cross_project_queries(
             continue
         query = " ".join(topic_term[t] for t in topics_involved)
         used = tuple(spine_names[(t, role)] for t, role in roles)
-        hits = [
-            (topic_project[t], spine_names[(t, "decoy")], rank)
-            for rank, t in enumerate(topics_involved, start=1)
-        ]
+        hits = [(topic_project[t], spine_names[(t, "decoy")], rank) for rank, t in enumerate(topics_involved, start=1)]
         hits += [
             (topic_project[t], spine_names[(t, role)], rank)
             for rank, (t, role) in enumerate(roles, start=len(hits) + 1)
@@ -388,7 +383,7 @@ def _seed_cross_project_queries(
 
 
 def _seed_scope_queries(
-    db: DatabaseManager,
+    db: Storage,
     marker_names: dict[str, str],
     entities_by_project: dict[str, list[str]],
 ) -> tuple[int, set[str]]:
@@ -421,7 +416,7 @@ def _seed_scope_queries(
 class EvalFixture:
     """A built populated fixture: the database plus everything a test needs to measure it."""
 
-    db: DatabaseManager
+    db: Storage
     path: Path
     now: datetime
     k: int
@@ -561,9 +556,7 @@ def _seed_fill_entities(
             {
                 "name": name,
                 "entityType": entity_type,
-                "observations": _observation_set(
-                    (_SCOPE_MARKERS[project], _POOL_TERM), obs_count, obs_chars
-                ),
+                "observations": _observation_set((_SCOPE_MARKERS[project], _POOL_TERM), obs_count, obs_chars),
                 "status": status,
             }
         )
@@ -619,31 +612,31 @@ def _manifest_rows(
     return rows
 
 
-def _apply_votes(db: DatabaseManager, votes: dict[str, int]) -> None:
+def _apply_votes(db: Storage, votes: dict[str, int]) -> None:
     """Write every nonzero `votes` entry onto its entity in one batch."""
-    db._db.executemany(
-        "UPDATE entities SET vote_score = ? WHERE name = ?",
-        [(vote, name) for name, vote in votes.items() if vote != 0],
-    )
-    db._db.commit()
+    with db.connection.transaction():
+        db.connection.write_many(
+            "UPDATE entities SET vote_score = ? WHERE name = ?",
+            [(vote, name) for name, vote in votes.items() if vote != 0],
+        )
 
 
-def _pin_timestamps(db: DatabaseManager, ages: dict[str, int]) -> None:
+def _pin_timestamps(db: Storage, ages: dict[str, int]) -> None:
     """Backdate every entity's `created_at`/`updated_at` to its designed age.
 
     Must run after every other write - see H1 in the design doc.
     """
-    for name, age in ages.items():
-        pinned = _pinned(age)
-        db._db.execute(
-            "UPDATE entities SET created_at = ?, updated_at = ? WHERE name = ?",
-            (pinned, pinned, name),
-        )
-    db._db.commit()
+    with db.connection.transaction():
+        for name, age in ages.items():
+            pinned = _pinned(age)
+            db.connection.write(
+                "UPDATE entities SET created_at = ?, updated_at = ? WHERE name = ?",
+                (pinned, pinned, name),
+            )
 
 
 def _build_populated_fixture(
-    db: DatabaseManager,
+    db: Storage,
     *,
     projects: tuple[tuple[str, int, int], ...] = _PROJECTS,
     topics: tuple[tuple[int, str, str], ...] = _TOPICS,
@@ -677,11 +670,9 @@ def _build_populated_fixture(
         entities += _seed_structural_entities(project, jitter, remaining, ages, votes)
 
         fill_needed = size - len(hosted) * len(_SPINE) - len(_STRUCTURAL_SEEDS.get(project, ()))
-        entities += _seed_fill_entities(
-            project, fill_needed, jitter, remaining, ages, votes, marker_names
-        )
+        entities += _seed_fill_entities(project, fill_needed, jitter, remaining, ages, votes, marker_names)
 
-        db.create_entities(project, entities)
+        db.entities.create(project, entities)
         # Built from the entities just passed to `create_entities`, in that exact order,
         # so manifest row n is entity id n (ascending ids are the exact-score tiebreak).
         manifest += _manifest_rows(project, entities, ages, votes)
@@ -712,7 +703,7 @@ def _build_populated_fixture(
 
     return EvalFixture(
         db=db,
-        path=db.path,
+        path=db.connection.path,
         now=_FIXTURE_NOW,
         k=_K,
         project_names=tuple(p for p, _, _ in projects),

@@ -80,9 +80,7 @@ class TestLoadBaseline:
             load_baseline(path)
 
     @pytest.mark.parametrize("shape", [{"k": 0}, {"k": -1}, {"query_count": 0}])
-    def test_an_impossible_measurement_shape_is_rejected(
-        self, tmp_path: Path, shape: dict[str, int]
-    ) -> None:
+    def test_an_impossible_measurement_shape_is_rejected(self, tmp_path: Path, shape: dict[str, int]) -> None:
         payload = {"k": 10, "query_count": 96, "metrics": _baseline().metrics} | shape
         path = tmp_path / "baseline.json"
         path.write_text(json.dumps(payload))
@@ -120,9 +118,7 @@ class TestBands:
     def test_each_band_is_the_measured_value_plus_or_minus_one_constant(self) -> None:
         baseline = _baseline()
         for metric, (low, high) in bands(baseline).items():
-            assert (low, high) == pytest.approx(
-                (baseline.metrics[metric] - _BAND, baseline.metrics[metric] + _BAND)
-            )
+            assert (low, high) == pytest.approx((baseline.metrics[metric] - _BAND, baseline.metrics[metric] + _BAND))
 
     def test_band_order_matches_the_ranking_metric_order(self) -> None:
         assert tuple(bands(_baseline())) == RANKING_METRICS
@@ -161,9 +157,7 @@ class TestRegenGuard:
         assert "--rebaseline" in capsys.readouterr().out
         assert path.read_text() == before
 
-    def test_rebaseline_writes_the_measured_values(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_rebaseline_writes_the_measured_values(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         path = tmp_path / "baseline.json"
         path.write_text(render(_baseline()))
         improved = _baseline(mrr=0.6)
@@ -171,9 +165,7 @@ class TestRegenGuard:
         assert "wrote" in capsys.readouterr().out
         assert load_baseline(path) == improved
 
-    def test_rebaseline_announces_a_lowered_metric(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_rebaseline_announces_a_lowered_metric(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         path = tmp_path / "baseline.json"
         path.write_text(render(_baseline()))
         assert main(["--rebaseline"], path=path, measure=lambda: _baseline(mrr=0.5)) == 0

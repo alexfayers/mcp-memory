@@ -21,15 +21,11 @@ def _eval_since_help() -> str:
 
 
 class TestEvalSinceHelp:
-    def test_describes_unlimited_retention_without_a_negative_day_count(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_describes_unlimited_retention_without_a_negative_day_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", "-1")
         assert "-1 days" not in _eval_since_help()
 
-    def test_names_the_window_when_retention_is_finite(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_names_the_window_when_retention_is_finite(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", "30")
         assert "~30 days" in _eval_since_help()
 
@@ -37,18 +33,14 @@ class TestEvalSinceHelp:
 class TestSetupServiceDispatch:
     def test_uses_memory_spec(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, cli._ServiceSpec] = {}
-        monkeypatch.setattr(
-            cli, "_setup_service_from_spec", lambda spec: captured.update(spec=spec)
-        )
+        monkeypatch.setattr(cli, "_setup_service_from_spec", lambda spec: captured.update(spec=spec))
         cli._cmd_setup_service(argparse.Namespace(port="3000", db_path="/x/m.db"))
         assert captured["spec"].binary_name == "mcp-memory"
         assert captured["spec"].port == "3000"
 
 
 class TestRegisterClaudeCodeServer:
-    def test_adds_server_and_allow_rule(
-        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_adds_server_and_allow_rule(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path))
         (tmp_path / ".claude").mkdir()
         calls: list[list[str]] = []
@@ -58,9 +50,7 @@ class TestRegisterClaudeCodeServer:
             return type("R", (), {"returncode": 1, "stdout": ""})()
 
         monkeypatch.setattr(cli.subprocess, "run", fake_run)
-        cli._register_claude_code_server(
-            "/usr/bin/claude", "memory-agent", "http://localhost:8100/mcp"
-        )
+        cli._register_claude_code_server("/usr/bin/claude", "memory-agent", "http://localhost:8100/mcp")
 
         allow = json.loads((tmp_path / ".claude" / "settings.json").read_text())
         assert "mcp__memory-agent__*" in allow["permissions"]["allow"]
@@ -145,9 +135,7 @@ class TestCopilotPathSelection:
         resolved = cli._default_copilot_mcp_config_path()
         assert str(resolved) == str(remote / "mcp.json")
 
-    def test_prefers_xdg_config_home_on_linux(
-        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_prefers_xdg_config_home_on_linux(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("mcp_memory.cli.platform.system", lambda: "Linux")
         monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
         monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path / "home"))
@@ -159,9 +147,7 @@ class TestCopilotPathSelection:
         resolved = cli._default_copilot_mcp_config_path()
         assert str(resolved) == str(xdg / "mcp.json")
 
-    def test_uses_macos_user_path(
-        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_uses_macos_user_path(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path))
         monkeypatch.setattr("mcp_memory.cli.platform.system", lambda: "Darwin")
         mac = tmp_path / "Library" / "Application Support" / "Code" / "User"
@@ -186,9 +172,7 @@ class TestMemorySpec:
         spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
         assert spec.env["MCP_MEMORY_GC_ENABLED"] == "true"
 
-    def test_propagates_agent_locator_env_into_service(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_propagates_agent_locator_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_AGENT_PORT", "9100")
         spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
         assert spec.env["MCP_AGENT_PORT"] == "9100"
@@ -309,9 +293,7 @@ class TestCmdRestart:
         plist.write_text("", encoding="utf-8")
         monkeypatch.setattr(cli, "_LAUNCHD_PLIST", plist)
         monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
-        monkeypatch.setattr(
-            cli.subprocess, "run", lambda *_a, **_kw: type("R", (), {"returncode": 1})()
-        )
+        monkeypatch.setattr(cli.subprocess, "run", lambda *_a, **_kw: type("R", (), {"returncode": 1})())
 
         with pytest.raises(SystemExit) as exc_info:
             cli._cmd_restart()

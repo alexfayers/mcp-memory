@@ -1,4 +1,4 @@
-@_default: lint type-check test
+@_default: lint type-check naming-check test
 
 lint:
     uv run ruff check --fix src/ tests/
@@ -6,6 +6,12 @@ lint:
 
 type-check:
     uv run mypy src/
+
+naming-check:
+    uv run python tests/naming_check.py src/mcp_memory/storage
+
+naming-check-final:
+    uv run python tests/naming_check.py src/mcp_memory/storage --final
 
 test *args:
     uv run pytest {{args}}

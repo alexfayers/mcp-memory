@@ -10,19 +10,19 @@ import pytest
 
 from mcp_memory import cli
 from mcp_memory.config import get_db_path, get_default_db_path
-from mcp_memory.database import DatabaseManager
 from mcp_memory.relocate import (
     parse_db_path_from_plist,
     parse_db_path_from_systemd,
     relocate_db,
 )
+from mcp_memory.storage import open_writable
 
 
 def _make_db(path: Path, entities: int = 1) -> None:
-    db = DatabaseManager(path)
+    db = open_writable(path)
     for i in range(entities):
-        db.create_entities("proj", [{"name": f"e{i}", "entityType": "task", "observations": ["x"]}])
-    db.close()
+        db.entities.create("proj", [{"name": f"e{i}", "entityType": "task", "observations": ["x"]}])
+    db.connection.close()
 
 
 class TestRelocateDb:
@@ -34,7 +34,7 @@ class TestRelocateDb:
         moved = relocate_db(src, dst)
         assert moved == 3
         assert not src.exists()
-        assert DatabaseManager(dst).list_projects() == ["proj"]
+        assert open_writable(dst).projects.names() == ["proj"]
 
     def test_noop_when_source_equals_target(self, tmp_path: Path) -> None:
         path = tmp_path / "memory.db"
@@ -58,7 +58,7 @@ class TestRelocateDb:
         src = tmp_path / "src.db"
         _make_db(src, 2)
         dst = tmp_path / "dst.db"
-        DatabaseManager(dst).close()
+        open_writable(dst).connection.close()
         assert relocate_db(src, dst) == 2
 
     def test_survives_open_connection_on_source(self, tmp_path: Path) -> None:
@@ -73,7 +73,7 @@ class TestRelocateDb:
         finally:
             holder.close()
         assert moved == 2
-        assert DatabaseManager(tmp_path / "dst.db").list_projects() == ["proj"]
+        assert open_writable(tmp_path / "dst.db").projects.names() == ["proj"]
 
     def test_moves_wal_sidecars_when_present(self, tmp_path: Path) -> None:
         src = tmp_path / "src.db"
@@ -86,7 +86,7 @@ class TestRelocateDb:
         dst = tmp_path / "dst.db"
         relocate_db(src, dst)
         conn.close()
-        assert "walproj" in DatabaseManager(dst).list_projects()
+        assert "walproj" in open_writable(dst).projects.names()
 
     def test_cleans_source_sidecars(self, tmp_path: Path) -> None:
         src = tmp_path / "src.db"
@@ -122,7 +122,7 @@ class TestMigrateDbCommand:
         out = capsys.readouterr().out
         assert "Moved 2 entities" in out
         assert not src.exists()
-        assert DatabaseManager(target).list_projects() == ["proj"]
+        assert open_writable(target).projects.names() == ["proj"]
 
     def test_noop_when_already_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -139,9 +139,7 @@ class TestMigrateDbCommand:
 
 class TestParseServiceConfig:
     def test_parse_plist(self) -> None:
-        content = (
-            "<key>MCP_MEMORY_DB_PATH</key>\n        <string>/Users/x/.memory/memory.db</string>"
-        )
+        content = "<key>MCP_MEMORY_DB_PATH</key>\n        <string>/Users/x/.memory/memory.db</string>"
         assert parse_db_path_from_plist(content) == "/Users/x/.memory/memory.db"
 
     def test_parse_plist_missing(self) -> None:

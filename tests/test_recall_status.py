@@ -21,9 +21,7 @@ def _finish(
     num_turns: int | None = 6,
     cost_usd: float | None = 0.09,
 ) -> None:
-    recall_status.record_finish(
-        query, ok=ok, duration_ms=duration_ms, num_turns=num_turns, cost_usd=cost_usd
-    )
+    recall_status.record_finish(query, ok=ok, duration_ms=duration_ms, num_turns=num_turns, cost_usd=cost_usd)
 
 
 class TestRecordAndRead:

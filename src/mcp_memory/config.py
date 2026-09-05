@@ -231,9 +231,7 @@ def get_surfaced_retention_days() -> int:
     Negative values mean unlimited (the default): the used_at labels are the ranking eval's
     only ground truth and cannot be regenerated once deleted.
     """
-    return int(
-        os.environ.get("MCP_MEMORY_SURFACED_RETENTION_DAYS", _DEFAULT_SURFACED_RETENTION_DAYS)
-    )
+    return int(os.environ.get("MCP_MEMORY_SURFACED_RETENTION_DAYS", _DEFAULT_SURFACED_RETENTION_DAYS))
 
 
 def get_max_observation_chars() -> int:
@@ -253,11 +251,7 @@ def get_call_metrics_enabled() -> bool:
 
 def get_call_metrics_retention_days() -> int:
     """Return how long tool_calls usage telemetry is retained before pruning."""
-    return int(
-        os.environ.get(
-            "MCP_MEMORY_CALL_METRICS_RETENTION_DAYS", _DEFAULT_CALL_METRICS_RETENTION_DAYS
-        )
-    )
+    return int(os.environ.get("MCP_MEMORY_CALL_METRICS_RETENTION_DAYS", _DEFAULT_CALL_METRICS_RETENTION_DAYS))
 
 
 def get_eval_cache_ttl_seconds() -> int:
@@ -269,7 +263,7 @@ def get_archive_enabled() -> bool:
     """Return whether stale resolved entities are auto-archived on startup.
 
     On by default, unlike the GC/purge sweeps below: leaving it off means nobody would
-    ever see the feature. See DatabaseManager.archive_stale_entities for the criteria.
+    ever see the feature. See the archive sweep in the storage maintenance module for the criteria.
     """
     return os.environ.get("MCP_MEMORY_ARCHIVE_ENABLED", "true").strip().lower() in _TRUTHY
 

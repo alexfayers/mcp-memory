@@ -58,9 +58,7 @@ def _recall_payload(
 class TestBuildMcpConfig:
     def test_points_only_at_memory_server(self) -> None:
         config = agent.build_mcp_config("http://localhost:3000/mcp")
-        assert config == {
-            "mcpServers": {"memory": {"type": "http", "url": "http://localhost:3000/mcp"}}
-        }
+        assert config == {"mcpServers": {"memory": {"type": "http", "url": "http://localhost:3000/mcp"}}}
 
 
 class TestRegisterRecall:
@@ -190,25 +188,19 @@ class TestBuildDreamCommand:
         assert command[command.index("--output-format") + 1] == "json"
 
     def test_prompt_is_downvote_only_and_embeds_the_cap(self) -> None:
-        command = agent.build_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7
-        )
+        command = agent.build_dream_command(claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7)
         prompt = command[command.index("-p") + 1]
         assert "7" in prompt
         assert "vote" in prompt
         assert "-1" in prompt
 
     def test_prompt_interpolates_the_gc_downvote_floor(self) -> None:
-        command = agent.build_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7
-        )
+        command = agent.build_dream_command(claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7)
         prompt = command[command.index("-p") + 1]
         assert "-10" in prompt
 
     def test_prompt_specifies_a_parseable_audit_format(self) -> None:
-        command = agent.build_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7
-        )
+        command = agent.build_dream_command(claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7)
         prompt = command[command.index("-p") + 1]
         assert "[project/entity-name] - reason" in prompt
         assert "nothing demoted" in prompt
@@ -242,17 +234,13 @@ class TestBuildDreamCommand:
         assert "mcp__memory__merge_observations" in denied
 
     def test_prompt_permits_observation_demotion(self) -> None:
-        command = agent.build_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7
-        )
+        command = agent.build_dream_command(claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7)
         prompt = command[command.index("-p") + 1]
         assert "vote" in prompt
         assert "content_hash" in prompt
 
     def test_ritual_observation_line_round_trips_to_obs_demote(self) -> None:
-        operations = dream_status.parse_operations(
-            "[myproj/task/a#a1b2c3d4] - observation demoted: stale"
-        )
+        operations = dream_status.parse_operations("[myproj/task/a#a1b2c3d4] - observation demoted: stale")
         assert operations[0]["action"] == "obs-demote"
         assert operations[0]["hash"] == "a1b2c3d4"
 
@@ -364,9 +352,7 @@ class TestFetchIdleSeconds:
             lambda **_kw: real_client(transport=httpx.MockTransport(handler)),
         )
 
-    def test_queries_api_idle_stripping_the_mcp_suffix(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_queries_api_idle_stripping_the_mcp_suffix(self, monkeypatch: pytest.MonkeyPatch) -> None:
         requested: dict[str, str] = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -431,9 +417,7 @@ class TestDueTiers:
     def test_user_activity_ends_the_session_and_rearms(self) -> None:
         # Both tiers fired; then a marker touch well after our last pass = the user
         # returned. The session resets, so a fresh idle window can fire them again.
-        state = agent._SessionState(
-            anchor=98_200.0, fired={"light", "heavy"}, last_pass_end=100_000.0
-        )
+        state = agent._SessionState(anchor=98_200.0, fired={"light", "heavy"}, last_pass_end=100_000.0)
         due = agent._due_tiers(state, now=200_000.0, idle=50.0, tiers=[self._LIGHT, self._HEAVY])
         assert due == []  # just-active, nothing due yet
         assert state.anchor is None
@@ -480,9 +464,7 @@ class TestCoordinatorTick:
             run_pass=fake_pass,
         )
 
-    def test_light_fires_once_then_not_again_while_idle(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_light_fires_once_then_not_again_while_idle(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runs: list[str] = []
         light = self._run_spec("light", 1800.0, runs)
         self._wire(monkeypatch, idle=1800.0, now=100_000.0, tiers=[light])
@@ -501,9 +483,7 @@ class TestCoordinatorTick:
         asyncio.run(agent._coordinator_tick())
         assert runs == ["heavy"]
 
-    def test_light_then_heavy_fire_in_the_same_idle_session(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_light_then_heavy_fire_in_the_same_idle_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runs: list[str] = []
         light = self._run_spec("light", 1800.0, runs)
         heavy = self._run_spec("heavy", 5400.0, runs)
@@ -516,9 +496,7 @@ class TestCoordinatorTick:
         asyncio.run(agent._coordinator_tick())
         assert runs == ["light", "heavy"]
 
-    def test_returns_without_firing_when_idle_unavailable(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_without_firing_when_idle_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runs: list[str] = []
         light = self._run_spec("light", 1800.0, runs)
         self._wire(monkeypatch, idle=None, now=100_000.0, tiers=[light])
@@ -587,9 +565,7 @@ class TestRunGuarded:
         assert asyncio.run(agent._run_guarded(spec)) is False
         assert passes == []
 
-    def test_releases_the_slot_even_when_the_pass_raises(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_releases_the_slot_even_when_the_pass_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent.dream_status, "record_pass", lambda *_args, **_kwargs: None)
 
         async def boom() -> str:
@@ -626,9 +602,7 @@ class TestTriggerDream:
         result = agent.trigger_dream("light")
         assert result == {"started": False, "reason": "already running"}
 
-    def test_starts_a_background_pass_regardless_of_enabled_flag(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_starts_a_background_pass_regardless_of_enabled_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "_claude_bin", lambda: "/usr/bin/claude")
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
         passes: list[str] = []
@@ -667,9 +641,7 @@ class TestDreamTriggerRoute:
 
     @pytest.mark.anyio
     async def test_rejected_returns_409(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            agent, "trigger_dream", lambda _tier: {"started": False, "reason": "already running"}
-        )
+        monkeypatch.setattr(agent, "trigger_dream", lambda _tier: {"started": False, "reason": "already running"})
         async with self._client() as client:
             resp = await client.post("/api/dream/trigger", json={"tier": "light"})
         assert resp.status_code == 409
@@ -710,9 +682,7 @@ class TestCoordinatorLoop:
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
         monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
         recorded: list[dict[str, object]] = []
-        monkeypatch.setattr(
-            agent.dream_status, "record_startup", lambda **kwargs: recorded.append(kwargs)
-        )
+        monkeypatch.setattr(agent.dream_status, "record_startup", lambda **kwargs: recorded.append(kwargs))
 
         async def fake_tick() -> None:
             pass
@@ -733,9 +703,7 @@ class TestCoordinatorLoop:
 class TestAgentCli:
     def test_setup_service_installs_agent_spec(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, object] = {}
-        monkeypatch.setattr(
-            agent, "_setup_service_from_spec", lambda spec: captured.update(spec=spec)
-        )
+        monkeypatch.setattr(agent, "_setup_service_from_spec", lambda spec: captured.update(spec=spec))
         agent.main(["setup-service"])
         spec = captured["spec"]
         assert isinstance(spec, cli._ServiceSpec)
@@ -762,9 +730,7 @@ class TestServe:
         monkeypatch.setattr(agent, "_coordinator_loop", fake_loop)
         monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
 
-    def test_starts_coordinator_when_a_tier_is_enabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_starts_coordinator_when_a_tier_is_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
         monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
         monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
@@ -773,9 +739,7 @@ class TestServe:
         asyncio.run(agent._serve())
         assert started == ["coordinating"]
 
-    def test_starts_coordinator_when_only_heavy_enabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_starts_coordinator_when_only_heavy_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: False)
         monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: True)
         monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
@@ -816,9 +780,7 @@ class TestServe:
         assert status is not None
         assert status["active"] == 0
 
-    def test_records_dream_startup_for_both_tiers_on_boot(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_records_dream_startup_for_both_tiers_on_boot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent, "get_dream_enabled", lambda: True)
         monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
         monkeypatch.setattr(agent, "get_dream_idle_seconds", lambda: 1800.0)
@@ -827,9 +789,7 @@ class TestServe:
         monkeypatch.setattr(agent, "get_dream_heavy_poll_seconds", lambda: 900.0)
         monkeypatch.setattr(agent.shutil, "which", lambda _: None)
         recorded: list[dict[str, object]] = []
-        monkeypatch.setattr(
-            agent.dream_status, "record_startup", lambda **kwargs: recorded.append(kwargs)
-        )
+        monkeypatch.setattr(agent.dream_status, "record_startup", lambda **kwargs: recorded.append(kwargs))
 
         async def fake_serve_http() -> None:
             await asyncio.sleep(0.01)
@@ -1096,9 +1056,7 @@ class TestRunHeavyDreamPass:
             env: dict[str, str] | None = None,
             timeout: float = 0,
         ) -> str:
-            return _recall_payload(
-                "[p/task/x] - merged", model="global.anthropic.claude-opus-4-8-v1:0"
-            )
+            return _recall_payload("[p/task/x] - merged", model="global.anthropic.claude-opus-4-8-v1:0")
 
         monkeypatch.setattr(agent, "_spawn_recall", fake_spawn)
         result = asyncio.run(agent.run_heavy_dream_pass())
@@ -1122,9 +1080,7 @@ class TestRecallRecording:
 
         monkeypatch.setattr(agent, "_spawn_recall", fake_spawn)
 
-    def test_successful_recall_is_recorded_with_metrics(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_successful_recall_is_recorded_with_metrics(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._wire_spawn(monkeypatch, _recall_payload("- Owned by team [bre/x]", metrics=True))
         asyncio.run(agent.recall("who owns billing"))
         status = recall_status.read_status()

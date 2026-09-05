@@ -156,15 +156,11 @@ def _read_marker() -> float | None:
     return float(value) if isinstance(value, (int, float)) else None
 
 
-def _extract(
-    tool_name: str, kind: Kind, kwargs: dict[str, Any], result: Any
-) -> tuple[list[str], str | None]:
+def _extract(tool_name: str, kind: Kind, kwargs: dict[str, Any], result: Any) -> tuple[list[str], str | None]:
     """Derive the affected entity names and project from a tool call."""
     if kind == "read":
         return _names_from_read_result(result), kwargs.get("project")
-    project = (
-        kwargs.get("source") if tool_name == "move_project_entities" else kwargs.get("project")
-    )
+    project = kwargs.get("source") if tool_name == "move_project_entities" else kwargs.get("project")
     return _names_from_write_kwargs(tool_name, kwargs), project
 
 

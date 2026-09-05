@@ -1,7 +1,7 @@
 """Export the whole memory database and merge selected projects back in.
 
 Owns file I/O, format validation, and orchestration; the CLI stays a thin dispatcher and
-the merge itself lives in DatabaseManager.import_project_data.
+the merge itself lives in Storage.transfer.import_project_data.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from .models import Relation
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from .database import DatabaseManager
+    from .storage import Storage
 
 EXPORT_FORMAT = "mcp-memory-export"
 EXPORT_FORMAT_VERSION = 1
@@ -60,9 +60,9 @@ class ImportSummary:
         return "\n".join(lines)
 
 
-def export_database(db: DatabaseManager, output_path: Path) -> None:
+def export_database(db: Storage, output_path: Path) -> None:
     """Write every live project of the database to a JSON export file."""
-    snapshot = db.export_data()
+    snapshot = db.transfer.export_data()
     data = {
         "format": EXPORT_FORMAT,
         "format_version": EXPORT_FORMAT_VERSION,
@@ -102,9 +102,7 @@ def list_export_projects(data: dict[str, Any]) -> list[str]:
     return sorted(data.get("projects", {}))
 
 
-def import_projects(
-    db: DatabaseManager, data: dict[str, Any], projects: list[str], *, dry_run: bool
-) -> ImportSummary:
+def import_projects(db: Storage, data: dict[str, Any], projects: list[str], *, dry_run: bool) -> ImportSummary:
     """Merge the named projects from an export into the database, returning a summary."""
     available = data.get("projects", {})
     missing = [p for p in projects if p not in available]
@@ -120,7 +118,7 @@ def import_projects(
         entities = block.get("entities", [])
         relations = [Relation(**r) for r in block.get("relations", [])]
         groups = block.get("groups", [])
-        counts = db.import_project_data(project, entities, relations, groups, dry_run=dry_run)
+        counts = db.transfer.import_project_data(project, entities, relations, groups, dry_run=dry_run)
         summary.entities_new += counts["entities_new"]
         summary.entities_merged += counts["entities_merged"]
         summary.entities_skipped_type_mismatch += counts["entities_skipped_type_mismatch"]

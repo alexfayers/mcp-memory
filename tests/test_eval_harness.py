@@ -22,7 +22,7 @@ from tests.eval_harness import (
 )
 
 if TYPE_CHECKING:
-    from mcp_memory.database import DatabaseManager
+    from mcp_memory.storage import Storage
 
 
 def _report(**overrides: float) -> EvalReport:
@@ -45,27 +45,25 @@ def _floor_midpoints() -> dict[str, float]:
     return {metric: (low + high) / 2 for metric, (low, high) in FLOOR.items()}
 
 
-def _touch_every_entity(db: DatabaseManager) -> None:
+def _touch_every_entity(db: Storage) -> None:
     """Rewrite every entity's `updated_at` to its own value: a real write, no ranking effect."""
-    db._db.execute("UPDATE entities SET updated_at = updated_at")
-    db._db.commit()
+    with db.connection.transaction():
+        db.connection.write("UPDATE entities SET updated_at = updated_at")
 
 
-def _noop(db: DatabaseManager) -> None:
+def _noop(db: Storage) -> None:
     """Deliberately make no database changes."""
 
 
-def _create_one_entity(db: DatabaseManager) -> None:
+def _create_one_entity(db: Storage) -> None:
     """Insert a single unrelated entity, a real write with no labelled queries either side."""
-    db.create_entities("proj", [{"name": "task/x", "entityType": "task", "observations": ["x"]}])
+    db.entities.create("proj", [{"name": "task/x", "entityType": "task", "observations": ["x"]}])
 
 
-def _add_a_third_labelled_query(db: DatabaseManager) -> None:
+def _add_a_third_labelled_query(db: Storage) -> None:
     """Add a new labelled query, changing query_count between before and after."""
-    db.create_entities(
-        "proj", [{"name": "task/extra", "entityType": "task", "observations": ["needle"]}]
-    )
-    db.record_surfaced("search_nodes", "needle", "rid-extra", [("proj", "task/extra", 1)])
+    db.entities.create("proj", [{"name": "task/extra", "entityType": "task", "observations": ["needle"]}])
+    db.telemetry.record_surfaced("search_nodes", "needle", "rid-extra", [("proj", "task/extra", 1)])
     mark_used(db, "rid-extra", "task/extra")
 
 
@@ -78,21 +76,19 @@ class TestPinned:
 
 
 class TestMeasureChange:
-    def test_evaluates_before_and_after_with_the_same_k_and_now(self, db: DatabaseManager) -> None:
-        _build_eval_fixture(db)
+    def test_evaluates_before_and_after_with_the_same_k_and_now(self, store: Storage) -> None:
+        _build_eval_fixture(store)
 
-        result = measure_change(db, _touch_every_entity, now=_FIXTURE_NOW)
+        result = measure_change(store, _touch_every_entity, now=_FIXTURE_NOW)
 
         assert result.before.query_count == 2
         assert result.before.mean_precision_at_k == pytest.approx(0.75)
         assert result.after == result.before
 
-    def test_deltas_are_zero_when_the_mutation_has_no_ranking_effect(
-        self, db: DatabaseManager
-    ) -> None:
-        _build_eval_fixture(db)
+    def test_deltas_are_zero_when_the_mutation_has_no_ranking_effect(self, store: Storage) -> None:
+        _build_eval_fixture(store)
 
-        result = measure_change(db, _touch_every_entity, now=_FIXTURE_NOW)
+        result = measure_change(store, _touch_every_entity, now=_FIXTURE_NOW)
 
         assert result.deltas == pytest.approx(
             {
@@ -104,44 +100,42 @@ class TestMeasureChange:
             }
         )
 
-    def test_format_includes_k_and_query_count(self, db: DatabaseManager) -> None:
-        _build_eval_fixture(db)
+    def test_format_includes_k_and_query_count(self, store: Storage) -> None:
+        _build_eval_fixture(store)
 
-        result = measure_change(db, _touch_every_entity, now=_FIXTURE_NOW)
+        result = measure_change(store, _touch_every_entity, now=_FIXTURE_NOW)
         text = result.format()
 
         assert "k" in text
         assert "query_count" in text
         assert "mean_recall_at_k" in text
 
-    def test_requires_mutation_by_default(self, db: DatabaseManager) -> None:
-        _build_eval_fixture(db)
+    def test_requires_mutation_by_default(self, store: Storage) -> None:
+        _build_eval_fixture(store)
 
         with pytest.raises(AssertionError, match="no changes"):
-            measure_change(db, _noop, now=_FIXTURE_NOW)
+            measure_change(store, _noop, now=_FIXTURE_NOW)
 
-    def test_require_mutation_false_permits_a_no_op(self, db: DatabaseManager) -> None:
-        _build_eval_fixture(db)
+    def test_require_mutation_false_permits_a_no_op(self, store: Storage) -> None:
+        _build_eval_fixture(store)
 
-        result = measure_change(db, _noop, now=_FIXTURE_NOW, require_mutation=False)
+        result = measure_change(store, _noop, now=_FIXTURE_NOW, require_mutation=False)
 
         assert result.before == result.after
 
-    def test_rejects_an_empty_before_query_set(self, db: DatabaseManager) -> None:
+    def test_rejects_an_empty_before_query_set(self, store: Storage) -> None:
         with pytest.raises(AssertionError, match="no labelled queries"):
-            measure_change(db, _create_one_entity, now=_FIXTURE_NOW)
+            measure_change(store, _create_one_entity, now=_FIXTURE_NOW)
 
-    def test_rejects_differing_before_and_after_query_counts(self, db: DatabaseManager) -> None:
-        _build_eval_fixture(db)
+    def test_rejects_differing_before_and_after_query_counts(self, store: Storage) -> None:
+        _build_eval_fixture(store)
 
         with pytest.raises(AssertionError, match="not comparable"):
-            measure_change(db, _add_a_third_labelled_query, now=_FIXTURE_NOW)
+            measure_change(store, _add_a_third_labelled_query, now=_FIXTURE_NOW)
 
 
 class TestAttachEvalReport:
-    def test_adds_a_report_section_with_the_formatted_table(
-        self, request: pytest.FixtureRequest
-    ) -> None:
+    def test_adds_a_report_section_with_the_formatted_table(self, request: pytest.FixtureRequest) -> None:
         result = MeasuredChange(before=_report(), after=_report())
 
         attach_eval_report(request, result)
@@ -163,24 +157,18 @@ class TestAssertNoRegression:
 
 
 class TestAssertImproves:
-    def test_passes_on_a_strict_gain_without_regressing_gates(
-        self, request: pytest.FixtureRequest
-    ) -> None:
+    def test_passes_on_a_strict_gain_without_regressing_gates(self, request: pytest.FixtureRequest) -> None:
         result = MeasuredChange(before=_report(), after=_report(mrr=0.75))
 
         assert_improves(result, request, "mrr")
 
-    def test_fails_on_a_zero_delta_rather_than_passing_vacuously(
-        self, request: pytest.FixtureRequest
-    ) -> None:
+    def test_fails_on_a_zero_delta_rather_than_passing_vacuously(self, request: pytest.FixtureRequest) -> None:
         result = MeasuredChange(before=_report(), after=_report())
 
         with pytest.raises(AssertionError, match="did not improve"):
             assert_improves(result, request, "mean_recall_at_k")
 
-    def test_fails_when_a_gate_metric_regresses_alongside_the_gain(
-        self, request: pytest.FixtureRequest
-    ) -> None:
+    def test_fails_when_a_gate_metric_regresses_alongside_the_gain(self, request: pytest.FixtureRequest) -> None:
         result = MeasuredChange(before=_report(), after=_report(mrr=0.75, mean_recall_at_k=0.25))
 
         with pytest.raises(AssertionError, match="regression"):
@@ -226,20 +214,16 @@ class TestAssertWithinFloor:
 
 
 class TestMarkUsed:
-    def test_marks_only_the_named_entity_within_the_given_retrieval(
-        self, db: DatabaseManager
-    ) -> None:
-        db.create_entities(
-            "proj", [{"name": "task/shared", "entityType": "task", "observations": ["needle"]}]
-        )
-        db.record_surfaced("search_nodes", "needle", "rid-a", [("proj", "task/shared", 1)])
-        db.record_surfaced("search_nodes", "needle", "rid-b", [("proj", "task/shared", 1)])
+    def test_marks_only_the_named_entity_within_the_given_retrieval(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "task/shared", "entityType": "task", "observations": ["needle"]}])
+        store.telemetry.record_surfaced("search_nodes", "needle", "rid-a", [("proj", "task/shared", 1)])
+        store.telemetry.record_surfaced("search_nodes", "needle", "rid-b", [("proj", "task/shared", 1)])
 
-        mark_used(db, "rid-a", "task/shared")
+        mark_used(store, "rid-a", "task/shared")
 
-        rows = db._db.execute(
+        rows = store.connection.query_all(
             "SELECT retrieval_id, used_at FROM surfaced_entities "
             "WHERE entity_name = 'task/shared' ORDER BY retrieval_id"
-        ).fetchall()
+        )
         assert rows[0]["used_at"] is not None
         assert rows[1]["used_at"] is None
