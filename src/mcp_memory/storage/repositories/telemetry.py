@@ -6,7 +6,7 @@ import json
 from typing import TYPE_CHECKING
 
 from mcp_memory.storage.pure.sql import days_ago, seconds_ago
-from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
+from mcp_memory.storage.services.ids import get_entity_id, get_project_id
 
 if TYPE_CHECKING:
     from mcp_memory.storage.connection import Connection
@@ -66,7 +66,9 @@ class TelemetryRepository:
                 (surfaced["id"],),
             )
 
-            project_id = get_or_create_project_id(self._conn, project)
+            project_id = get_project_id(self._conn, project)
+            if project_id is None:
+                return None
             entity_id = get_entity_id(self._conn, name, project_id)
             if entity_id is None:
                 return None

@@ -142,6 +142,32 @@ class TestDeleteProject:
             store.projects.delete("global")
 
 
+class TestReadsDoNotCreateProjects:
+    """A lookup in an unknown project must not intern that project as a side effect."""
+
+    def test_get_entity_leaves_no_project_row(self, store: Storage) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            store.reads.get_entity("ghost", "e1")
+        assert "ghost" not in store.projects.names()
+
+    def test_get_entity_with_relations_leaves_no_project_row(self, store: Storage) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            store.reads.get_entity_with_relations("ghost", "e1")
+        assert "ghost" not in store.projects.names()
+
+    def test_search_leaves_no_project_row(self, store: Storage) -> None:
+        assert store.reads.search("ghost", "needle")["entities"] == []
+        assert "ghost" not in store.projects.names()
+
+    def test_recent_leaves_no_project_row(self, store: Storage) -> None:
+        assert store.reads.recent("ghost")["entities"] == []
+        assert "ghost" not in store.projects.names()
+
+    def test_all_entities_leaves_no_project_row(self, store: Storage) -> None:
+        assert store.reads.all_entities("ghost")["entities"] == []
+        assert "ghost" not in store.projects.names()
+
+
 class TestProjectCaseInsensitivity:
     def test_project_names_are_case_insensitive(self, store: Storage) -> None:
         store.entities.create("MyProject", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
@@ -487,6 +513,12 @@ class TestRegisterUse:
         self._surface(store, "task/gone")
 
         assert store.telemetry.register_use("proj", "task/gone", window_seconds=1800, max_per_day=3) is None
+
+    def test_missing_entity_leaves_no_project_row(self, store: Storage) -> None:
+        store.telemetry.record_surfaced("search_nodes", "q", "rid", [("ghost", "task/a", 1)])
+
+        assert store.telemetry.register_use("ghost", "task/a", window_seconds=1800.0, max_per_day=3) is None
+        assert "ghost" not in store.projects.names()
 
 
 class TestPruneSurfaced:

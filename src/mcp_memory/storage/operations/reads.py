@@ -10,7 +10,7 @@ from mcp_memory.storage.pure.ranking import score_row
 from mcp_memory.storage.pure.rows import build_entity
 from mcp_memory.storage.pure.sql import parse_date, placeholders
 from mcp_memory.storage.services.fts import sanitize_fts_query
-from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
+from mcp_memory.storage.services.ids import get_entity_id, get_project_id
 
 if TYPE_CHECKING:
     from mcp_memory.models import Entity, EntityStatus, Observation, Relation
@@ -122,15 +122,17 @@ class Reads:
         max_observation_chars: int | None = None,
     ) -> Entity:
         """Get a single entity by name."""
-        project_id = get_or_create_project_id(self._conn, project)
-        row = self._conn.query_one(
-            "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at, "
-            "e.vote_score "
-            "FROM entities e "
-            "JOIN entity_types et ON e.entity_type_id = et.id "
-            "WHERE e.name = ? AND e.project_id = ? AND e.deleted_at IS NULL",
-            (name, project_id),
-        )
+        project_id = get_project_id(self._conn, project)
+        row: sqlite3.Row | None = None
+        if project_id is not None:
+            row = self._conn.query_one(
+                "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at, "
+                "e.vote_score "
+                "FROM entities e "
+                "JOIN entity_types et ON e.entity_type_id = et.id "
+                "WHERE e.name = ? AND e.project_id = ? AND e.deleted_at IS NULL",
+                (name, project_id),
+            )
         if row is None:
             raise ValueError(f"Entity '{name}' not found in project '{project}'")
         return self._hydrate_entity(row, row["id"], compact=compact, max_observation_chars=max_observation_chars)
@@ -157,7 +159,8 @@ class Reads:
             max_observation_chars: Per-entity observation character budget.
         """
         entity = self.get_entity(project, name, compact=compact, max_observation_chars=max_observation_chars)
-        project_id = get_or_create_project_id(self._conn, project)
+        project_id = get_project_id(self._conn, project)
+        assert project_id is not None
         entity_id = get_entity_id(self._conn, name, project_id)
 
         relations = self._relations.for_entities(project_id, [entity_id])  # type: ignore[list-item]
@@ -256,7 +259,9 @@ class Reads:
         entity_ids = [row["id"] for row in top_rows]
 
         if isinstance(project, str):
-            project_id = get_or_create_project_id(self._conn, project)
+            project_id = get_project_id(self._conn, project)
+            if project_id is None:
+                return {"entities": entities, "relations": []}
             return {
                 "entities": entities,
                 "relations": self._relations.for_entities(project_id, entity_ids),
@@ -277,7 +282,9 @@ class Reads:
         max_observation_chars: int | None = None,
     ) -> NodeList:
         """Return the 10 most recently created entities and their relations."""
-        project_id = get_or_create_project_id(self._conn, project)
+        project_id = get_project_id(self._conn, project)
+        if project_id is None:
+            return {"entities": [], "relations": []}
 
         sql = (
             "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, e.updated_at, "
@@ -314,8 +321,11 @@ class Reads:
         where = "WHERE e.deleted_at IS NULL"
         params: list[str | int] = []
         if project is not None:
+            project_id = get_project_id(self._conn, project)
+            if project_id is None:
+                return {"entities": [], "relations": []}
             where += " AND e.project_id = ?"
-            params.append(get_or_create_project_id(self._conn, project))
+            params.append(project_id)
 
         rows = self._conn.query_all(
             "SELECT e.id, e.name, et.name AS entity_type, e.status, e.project_id, "

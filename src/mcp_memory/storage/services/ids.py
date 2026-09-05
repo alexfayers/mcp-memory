@@ -22,6 +22,12 @@ def get_or_create_project_id(connection: Connection, project: str) -> int:
     return _intern(connection, "projects", project)
 
 
+def get_project_id(connection: Connection, project: str) -> int | None:
+    """Return the project's row id, or None when the project does not exist."""
+    row = connection.query_one("SELECT id FROM projects WHERE name = ?", (project,))
+    return int(row["id"]) if row else None
+
+
 def get_or_create_entity_type_id(connection: Connection, entity_type: str) -> int:
     return _intern(connection, "entity_types", entity_type)
 
