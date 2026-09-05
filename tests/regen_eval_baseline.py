@@ -8,8 +8,8 @@ meaningful while the artefact predates the run being judged.
 from __future__ import annotations
 
 import argparse
-import tempfile
 from pathlib import Path
+import tempfile
 from typing import TYPE_CHECKING
 
 from mcp_memory.storage import open_writable
@@ -93,7 +93,7 @@ def main(
     committed = None if bootstrap else load_baseline(path)
     measured = measure()
     if committed is None:
-        path.write_text(render(measured))
+        path.write_text(render(measured), encoding="utf-8")
         print(f"wrote {path} (first baseline)")
         return 0
     print(format_moves(committed, measured))
@@ -107,7 +107,7 @@ def main(
     lowered = sorted(metric for metric, (old, new) in drift.items() if new < old)
     if lowered:
         print(f"LOWERED: {lowered} - a lowered bound weakens the gate; justify it in the commit")
-    path.write_text(render(measured))
+    path.write_text(render(measured), encoding="utf-8")
     print(f"wrote {path}")
     return 0
 

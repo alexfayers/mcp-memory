@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime, timedelta
+import re
 
 _RELATIVE_DATE_RE = re.compile(r"^(\d+)(m|h|d|w|mo)$")
 _RELATIVE_UNITS = {

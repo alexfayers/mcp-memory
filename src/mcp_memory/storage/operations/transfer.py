@@ -75,18 +75,16 @@ class Transfer:
                 entity_id = int(row["id"])
                 entity_ids.append(entity_id)
                 built = build_entity(row, [], 0, project_name=project)
-                entities.append(
-                    {
-                        "name": built.name,
-                        "entity_type": built.entity_type,
-                        "observations": self._observations.export_rows(entity_id),
-                        "status": built.status,
-                        "created_at": built.created_at,
-                        "updated_at": built.updated_at,
-                        "project_name": project,
-                        "vote_score": built.vote_score,
-                    }
-                )
+                entities.append({
+                    "name": built.name,
+                    "entity_type": built.entity_type,
+                    "observations": self._observations.export_rows(entity_id),
+                    "status": built.status,
+                    "created_at": built.created_at,
+                    "updated_at": built.updated_at,
+                    "project_name": project,
+                    "vote_score": built.vote_score,
+                })
             relations = self._relations.for_entities(project_id, entity_ids)
             projects[project] = {
                 "paths": self._projects.paths_for(project),

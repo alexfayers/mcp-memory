@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import getpass
 import json
 import os
+from pathlib import Path
 import platform
 import shutil
 import subprocess
 import sys
 import textwrap
-from dataclasses import dataclass
-from pathlib import Path
 
 from .config import (
     _DEFAULT_PORT,
@@ -59,7 +59,7 @@ def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
         env["MCP_MEMORY_SURFACED_RETENTION_DAYS"] = os.environ["MCP_MEMORY_SURFACED_RETENTION_DAYS"]
     # Carry the agent locator through so the visualiser's dream-trigger proxy can reach
     # a non-default memory-agent port (the server does not otherwise know it).
-    env.update({k: v for k, v in os.environ.items() if k in ("MCP_AGENT_URL", "MCP_AGENT_PORT")})
+    env.update({k: v for k, v in os.environ.items() if k in {"MCP_AGENT_URL", "MCP_AGENT_PORT"}})
     return _ServiceSpec(
         name="memory",
         binary_name="mcp-memory",

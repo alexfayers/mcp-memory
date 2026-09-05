@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import fcntl
 import json
 import logging
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
 from mcp_memory.config import get_data_dir

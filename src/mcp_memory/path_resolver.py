@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import sqlite3
-import sys
 from collections.abc import Iterable
 from pathlib import Path
+import sqlite3
+import sys
 
 from .config import get_db_path
 

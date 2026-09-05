@@ -10,9 +10,9 @@ it, never raises.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import statistics
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .config import get_call_metrics_enabled
@@ -25,24 +25,22 @@ if TYPE_CHECKING:
 # Safe scalar option names recorded in the per-call options breakdown. Deliberately EXCLUDES
 # content-bearing params (query/name/observations/entities/relations/content) so raw text is
 # never stored - only small structural knobs whose distribution is worth measuring.
-_TRACKED_OPTIONS = frozenset(
-    {
-        "compact",
-        "match_all",
-        "include_archived",
-        "max_observation_chars",
-        "limit",
-        "k",
-        "since",
-        "status",
-        "entityType",
-        "min_content_tokens",
-        "vote",
-        "project",
-        "start",
-        "end",
-    }
-)
+_TRACKED_OPTIONS = frozenset({
+    "compact",
+    "match_all",
+    "include_archived",
+    "max_observation_chars",
+    "limit",
+    "k",
+    "since",
+    "status",
+    "entityType",
+    "min_content_tokens",
+    "vote",
+    "project",
+    "start",
+    "end",
+})
 
 _MAX_OPTION_STR_LEN = 64  # guard: skip any allowlisted str value longer than this
 
@@ -63,7 +61,7 @@ def record(db: Storage, tool_name: str, kwargs: dict[str, Any], result: Any) -> 
             return
         options = {key: value for key, value in kwargs.items() if key in _TRACKED_OPTIONS and _is_trackable(value)}
         db.telemetry.record_tool_call(tool_name, payload_size(kwargs), payload_size(result), options)
-    except Exception:  # noqa: S110 - instrumentation must never break a tool call
+    except Exception:  # ruff: ignore[try-except-pass] - instrumentation must never break a tool call
         pass
 
 

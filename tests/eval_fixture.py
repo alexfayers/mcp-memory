@@ -8,8 +8,8 @@ invented; every count, age, vote and length below is a measured live quantile.
 
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass, field
+import itertools
 from typing import TYPE_CHECKING
 
 from mcp_memory.eval import evaluate
@@ -325,7 +325,7 @@ def _seed_topic_queries(
     """
 
     def slot(role: str) -> str:
-        return spine_names[(topic_index, role)]
+        return spine_names[topic_index, role]
 
     decoy = slot("decoy")
     relevant: set[str] = set()
@@ -369,11 +369,10 @@ def _seed_cross_project_queries(
         if not set(topics_involved) <= built_topics:
             continue
         query = " ".join(topic_term[t] for t in topics_involved)
-        used = tuple(spine_names[(t, role)] for t, role in roles)
-        hits = [(topic_project[t], spine_names[(t, "decoy")], rank) for rank, t in enumerate(topics_involved, start=1)]
+        used = tuple(spine_names[t, role] for t, role in roles)
+        hits = [(topic_project[t], spine_names[t, "decoy"], rank) for rank, t in enumerate(topics_involved, start=1)]
         hits += [
-            (topic_project[t], spine_names[(t, role)], rank)
-            for rank, (t, role) in enumerate(roles, start=len(hits) + 1)
+            (topic_project[t], spine_names[t, role], rank) for rank, (t, role) in enumerate(roles, start=len(hits) + 1)
         ]
         _record_retrieval(db, f"rid-cross-{index}", "search_all_projects", query, hits, used)
         relevant.update(used)
@@ -431,7 +430,7 @@ class EvalFixture:
 
     def name_for(self, topic: int, slot: str) -> str:
         """Return the entity name at `slot` ('decoy', 'durable-hit', ...) in `topic`."""
-        return self._spine_names[(topic, slot)]
+        return self._spine_names[topic, slot]
 
     def tie_pair(self, topic: int) -> tuple[str, str]:
         """Return `topic`'s (tie-a, tie-b) entity names, an exact-score tie pair."""
@@ -462,24 +461,22 @@ def _seed_spine_entities(
     entities: list[dict[str, object]] = []
     for role, primary_archetype in _SPINE:
         archetype = _resolve_archetype(role, primary_archetype, remaining)
-        delta = _JITTER[0] if role in ("tie-a", "tie-b") else next(jitter)
+        delta = _JITTER[0] if role in {"tie-a", "tie-b"} else next(jitter)
         entity_type, age, vote, obs_count, obs_chars, status = _shaped(archetype, delta)
         remaining[archetype] -= 1
         slug, head_in_name, head_in_obs = _SPINE_CONTENT[role]
         slug = f"{term}-{slug}" if head_in_name else f"t{topic_index}-{slug}"
         name = f"{entity_type}/{slug}"
         terms = (term, _POOL_TERM) if head_in_obs else (_POOL_TERM,)
-        entities.append(
-            {
-                "name": name,
-                "entityType": entity_type,
-                "observations": _observation_set(terms, obs_count, obs_chars),
-                "status": status,
-            }
-        )
+        entities.append({
+            "name": name,
+            "entityType": entity_type,
+            "observations": _observation_set(terms, obs_count, obs_chars),
+            "status": status,
+        })
         ages[name] = age
         votes[name] = vote
-        spine_names[(topic_index, role)] = name
+        spine_names[topic_index, role] = name
 
     return entities
 
@@ -498,14 +495,12 @@ def _seed_structural_entities(
         entity_type, age, vote, obs_count, obs_chars, status = _shaped(archetype, delta)
         remaining[archetype] -= 1
         name = f"{entity_type}/{archetype}-{project}-struct{index}"
-        entities.append(
-            {
-                "name": name,
-                "entityType": entity_type,
-                "observations": _observation_set((_POOL_TERM,), obs_count, obs_chars),
-                "status": status,
-            }
-        )
+        entities.append({
+            "name": name,
+            "entityType": entity_type,
+            "observations": _observation_set((_POOL_TERM,), obs_count, obs_chars),
+            "status": status,
+        })
         ages[name] = age
         votes[name] = vote
 
@@ -552,14 +547,12 @@ def _seed_fill_entities(
         filled += 1
         name = f"{entity_type}/{marker_archetype}-{project}-{filled}"
         marker_names[project] = name
-        entities.append(
-            {
-                "name": name,
-                "entityType": entity_type,
-                "observations": _observation_set((_SCOPE_MARKERS[project], _POOL_TERM), obs_count, obs_chars),
-                "status": status,
-            }
-        )
+        entities.append({
+            "name": name,
+            "entityType": entity_type,
+            "observations": _observation_set((_SCOPE_MARKERS[project], _POOL_TERM), obs_count, obs_chars),
+            "status": status,
+        })
         ages[name] = age
         votes[name] = vote
 
@@ -572,14 +565,12 @@ def _seed_fill_entities(
             remaining[archetype] -= 1
             filled += 1
             name = f"{entity_type}/{archetype}-{project}-{filled}"
-            entities.append(
-                {
-                    "name": name,
-                    "entityType": entity_type,
-                    "observations": _observation_set((_POOL_TERM,), obs_count, obs_chars),
-                    "status": status,
-                }
-            )
+            entities.append({
+                "name": name,
+                "entityType": entity_type,
+                "observations": _observation_set((_POOL_TERM,), obs_count, obs_chars),
+                "status": status,
+            })
             ages[name] = age
             votes[name] = vote
         if filled >= fill_needed:
@@ -598,17 +589,15 @@ def _manifest_rows(
     rows: list[tuple[str, str, str, int, int, int, str | None]] = []
     for entity in entities:
         name = entity["name"]
-        rows.append(
-            (
-                project,
-                name,
-                entity["entityType"],
-                ages[name],
-                votes[name],
-                len(entity["observations"]),
-                entity["status"],
-            )
-        )
+        rows.append((
+            project,
+            name,
+            entity["entityType"],
+            ages[name],
+            votes[name],
+            len(entity["observations"]),
+            entity["status"],
+        ))
     return rows
 
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
+import re
 from typing import Literal, get_args
 
 EntityStatus = Literal["planned", "in-progress", "blocked", "resolved", "archived"]

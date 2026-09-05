@@ -14,12 +14,13 @@ did. Concurrent writers plus a cross-process reader mean the write must be atomi
 
 from __future__ import annotations
 
+from collections import deque
+import contextlib
 import json
 import os
+from pathlib import Path
 import tempfile
 import time
-from collections import deque
-from pathlib import Path
 from typing import TypedDict
 
 from .config import get_data_dir
@@ -55,7 +56,7 @@ class RecallStatus(TypedDict):
 
 def record_start() -> None:
     """Mark a recall as in flight."""
-    global _active  # noqa: PLW0603
+    global _active  # ruff: ignore[global-statement]
     _active += 1
     _write()
 
@@ -69,18 +70,16 @@ def record_finish(
     cost_usd: float | None,
 ) -> None:
     """Record a finished recall (truncating the query) and clear its in-flight slot."""
-    global _active  # noqa: PLW0603
+    global _active  # ruff: ignore[global-statement]
     _active = max(0, _active - 1)
-    _recent.append(
-        {
-            "ts": time.time(),
-            "query": query[:_MAX_QUERY_CHARS],
-            "ok": ok,
-            "duration_ms": duration_ms,
-            "num_turns": num_turns,
-            "cost_usd": cost_usd,
-        }
-    )
+    _recent.append({
+        "ts": time.time(),
+        "query": query[:_MAX_QUERY_CHARS],
+        "ok": ok,
+        "duration_ms": duration_ms,
+        "num_turns": num_turns,
+        "cost_usd": cost_usd,
+    })
     _write()
 
 
@@ -90,7 +89,7 @@ def record_startup() -> None:
     Resetting ``active`` bounds a stale count a crash may have left mid-recall - on
     a fresh process nothing is truly in flight.
     """
-    global _active  # noqa: PLW0603
+    global _active  # ruff: ignore[global-statement]
     if not _recent:
         _recent.extend(_read_recent())
     _active = 0
@@ -104,7 +103,7 @@ def read_status() -> RecallStatus | None:
 
 def clear() -> None:
     """Reset the in-memory count and history (for test isolation)."""
-    global _active  # noqa: PLW0603
+    global _active  # ruff: ignore[global-statement]
     _active = 0
     _recent.clear()
 
@@ -114,6 +113,20 @@ def _status_path() -> Path:
     return get_data_dir() / "recall-status.json"
 
 
+def _atomic_write(path: Path, data: object) -> None:
+    """Write ``data`` as JSON to ``path`` atomically (temp file plus replace)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    tmp_path = Path(tmp)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        tmp_path.replace(path)
+    except OSError:
+        tmp_path.unlink()
+        raise
+
+
 def _write() -> None:
     """Persist the current count and history atomically (temp file plus replace).
 
@@ -121,20 +134,8 @@ def _write() -> None:
     a plain write could expose a torn file; ``os.replace`` swaps it in atomically.
     """
     status: RecallStatus = {"schema": _SCHEMA, "active": _active, "recent": list(_recent)}
-    try:
-        path = _status_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-        tmp_path = Path(tmp)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(status, handle)
-            tmp_path.replace(path)
-        except OSError:
-            tmp_path.unlink()
-            raise
-    except OSError:
-        pass
+    with contextlib.suppress(OSError):
+        _atomic_write(_status_path(), status)
 
 
 def _read_file() -> RecallStatus | None:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import re
 import sqlite3
-from pathlib import Path
 
 _PLIST_DB_RE = re.compile(
     r"<key>MCP_MEMORY_DB_PATH</key>\s*<string>([^<]+)</string>",

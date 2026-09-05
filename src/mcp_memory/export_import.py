@@ -6,9 +6,9 @@ the merge itself lives in Storage.transfer.import_project_data.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import json
 from typing import TYPE_CHECKING, Any
 
 from .migrations.schema import MIGRATIONS

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import UTC, datetime
+import sqlite3
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 from mcp_memory.storage.pure.ranking import score_row
@@ -139,6 +139,7 @@ class Reads:
         self,
         project: str,
         name: str,
+        *,
         entity_type: str | None = None,
         relation_type: str | None = None,
         compact: bool = False,
@@ -189,6 +190,7 @@ class Reads:
         self,
         project: str | list[str] | None,
         query: str,
+        *,
         limit: int = 10,
         entity_type: str | None = None,
         status: EntityStatus | list[EntityStatus] | None = None,

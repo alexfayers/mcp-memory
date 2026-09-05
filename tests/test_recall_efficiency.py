@@ -26,8 +26,10 @@ class TestRecallEfficiency:
                     "name": f"task/note-{i}",
                     "entityType": "task",
                     "observations": [
-                        "deployment rollback runbook detail with substantial "
-                        f"observation text to inflate the payload number {i}"
+                        (
+                            "deployment rollback runbook detail with substantial "
+                            f"observation text to inflate the payload number {i}"
+                        )
                     ],
                 }
                 for i in range(12)

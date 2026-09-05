@@ -142,23 +142,21 @@ class TestRecordAndRead:
         path = dream_status._status_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            json.dumps(
-                {
-                    "schema": 1,
-                    "config": {
-                        "enabled": True,
-                        "idle_threshold_seconds": 3600.0,
-                        "poll_seconds": 900.0,
-                    },
-                    "last_pass": {
-                        "ts": 1.0,
-                        "ok": True,
-                        "tier": "light",
-                        "audit_text": "[p/task/x] - stale",
-                        "demotions": [{"project": "p", "name": "task/x", "reason": "stale"}],
-                    },
-                }
-            ),
+            json.dumps({
+                "schema": 1,
+                "config": {
+                    "enabled": True,
+                    "idle_threshold_seconds": 3600.0,
+                    "poll_seconds": 900.0,
+                },
+                "last_pass": {
+                    "ts": 1.0,
+                    "ok": True,
+                    "tier": "light",
+                    "audit_text": "[p/task/x] - stale",
+                    "demotions": [{"project": "p", "name": "task/x", "reason": "stale"}],
+                },
+            }),
             encoding="utf-8",
         )
         status = dream_status.read_status()
@@ -177,20 +175,18 @@ class TestRecordAndRead:
         path = dream_status._status_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            json.dumps(
-                {
-                    "schema": 2,
-                    "configs": {
-                        "heavy": {
-                            "enabled": True,
-                            "idle_threshold_seconds": 1800.0,
-                            "interval_seconds": 86400.0,
-                            "poll_seconds": 900.0,
-                        }
-                    },
-                    "last_pass": None,
-                }
-            ),
+            json.dumps({
+                "schema": 2,
+                "configs": {
+                    "heavy": {
+                        "enabled": True,
+                        "idle_threshold_seconds": 1800.0,
+                        "interval_seconds": 86400.0,
+                        "poll_seconds": 900.0,
+                    }
+                },
+                "last_pass": None,
+            }),
             encoding="utf-8",
         )
         status = dream_status.read_status()

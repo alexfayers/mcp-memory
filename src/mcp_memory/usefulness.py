@@ -12,8 +12,8 @@ with a live database handle. Only real ranked-search tools surface; the visualis
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING, Any
+import uuid
 
 from .config import get_auto_vote_max_per_day, get_auto_vote_window_seconds
 
@@ -40,7 +40,7 @@ def observe(db: Storage, tool_name: str, kwargs: dict[str, Any], result: Any) ->
             _record_surfacing(db, tool_name, kwargs, result)
         elif tool_name in _USE_TOOLS:
             _register_uses(db, tool_name, kwargs)
-    except Exception:  # noqa: S110 - instrumentation must never break a tool call
+    except Exception:  # ruff: ignore[try-except-pass] - instrumentation must never break a tool call
         pass
 
 

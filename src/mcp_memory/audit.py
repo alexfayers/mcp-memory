@@ -9,6 +9,7 @@ only finds the violations. Never mutates the graph.
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -95,27 +96,15 @@ def _ceiling_for(entity_type: str, status: str | None) -> int | None:
     return _OBS_CEILINGS.get(entity_type)
 
 
-def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
-    """Build the structural-hygiene report for one project scope, or all when project is None.
-
-    The report is informational: it locates mechanical violations for the memory-review
-    skill to act on. It never mutates the graph. Every finding carries its project, so an
-    all-projects report stays attributable.
-    """
-    entity_params = () if project is None else (project,)
-    entity_sql = _ENTITY_SQL + ("" if project is None else " AND p.name = ?")
-    entity_rows = db.connection.query_all(entity_sql, entity_params)
-
-    relation_sql = _RELATION_SQL + ("" if project is None else " AND sp.name = ?")
-    relation_rows = db.connection.query_all(relation_sql, entity_params)
-
+def _scan_entities(rows: list[sqlite3.Row]) -> dict[str, list[dict[str, object]]]:
+    """Classify entity rows into the orphan/misused/unprefixed/oversized/negative-vote buckets."""
     orphans: list[dict[str, object]] = []
     misused_project_type: list[dict[str, object]] = []
     unprefixed: list[dict[str, object]] = []
     oversized: list[dict[str, object]] = []
     negative_vote_entities: list[dict[str, object]] = []
 
-    for row in entity_rows:
+    for row in rows:
         ref = {"name": row["name"], "entity_type": row["entity_type"], "project": row["project"]}
         entity_type = row["entity_type"]
 
@@ -130,22 +119,31 @@ def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
 
         ceiling = _ceiling_for(entity_type, row["status"])
         if ceiling is not None and row["obs_count"] > ceiling:
-            oversized.append(
-                {
-                    **ref,
-                    "count": row["obs_count"],
-                    "threshold": ceiling,
-                    "status": row["status"],
-                    "entity_id": row["entity_id"],
-                }
-            )
+            oversized.append({
+                **ref,
+                "count": row["obs_count"],
+                "threshold": ceiling,
+                "status": row["status"],
+                "entity_id": row["entity_id"],
+            })
 
         if row["vote_score"] <= _NEGATIVE_VOTE_THRESHOLD:
             negative_vote_entities.append({**ref, "vote_score": row["vote_score"]})
 
+    return {
+        "orphans": orphans,
+        "misused_project_type": misused_project_type,
+        "unprefixed": unprefixed,
+        "oversized": oversized,
+        "negative_vote_entities": negative_vote_entities,
+    }
+
+
+def _scan_relations(rows: list[sqlite3.Row]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Classify relation rows into star-graph task-to-project edges and belongs-to violations among them."""
     relation_violations: list[dict[str, object]] = []
     star_graph_tasks: list[dict[str, object]] = []
-    for row in relation_rows:
+    for row in rows:
         if row["source_type"] == "task" and row["target_type"] == "project":
             edge = {
                 "task": row["source"],
@@ -156,20 +154,35 @@ def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
             star_graph_tasks.append(edge)
             if row["relation_type"] == "belongs-to":
                 relation_violations.append(edge)
+    return relation_violations, star_graph_tasks
+
+
+def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
+    """Build the structural-hygiene report for one project scope, or all when project is None.
+
+    The report is informational: it locates mechanical violations for the memory-review
+    skill to act on. It never mutates the graph. Every finding carries its project, so an
+    all-projects report stays attributable.
+    """
+    entity_params = () if project is None else (project,)
+    entity_sql = _ENTITY_SQL + ("" if project is None else " AND p.name = ?")
+    entity_rows = db.connection.query_all(entity_sql, entity_params)
+
+    relation_sql = _RELATION_SQL + ("" if project is None else " AND sp.name = ?")
+    relation_rows = db.connection.query_all(relation_sql, entity_params)
+
+    entity_findings = _scan_entities(entity_rows)
+    relation_violations, star_graph_tasks = _scan_relations(relation_rows)
 
     scope_rows = db.connection.query_all(_SCOPE_COUNT_SQL)
     ghost_scopes = [r["project"] for r in scope_rows if r["n"] == 0 and (project is None or r["project"] == project)]
 
     return {
         "project": project,
-        "orphans": orphans,
-        "misused_project_type": misused_project_type,
-        "unprefixed": unprefixed,
         "ghost_scopes": ghost_scopes,
-        "oversized": oversized,
         "relation_violations": relation_violations,
         "star_graph_tasks": star_graph_tasks,
-        "negative_vote_entities": negative_vote_entities,
+        **entity_findings,
     }
 
 

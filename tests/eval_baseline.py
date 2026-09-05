@@ -10,8 +10,8 @@ transitively; recover it with `git checkout tests/eval_baseline.json`.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -62,7 +62,7 @@ def load_baseline(path: Path = BASELINE_PATH) -> Baseline:
     if not path.exists():
         raise AssertionError(f"no eval baseline at {path} - {_REBASELINE_HINT}")
     try:
-        payload = json.loads(path.read_text())
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise AssertionError(f"eval baseline at {path} is not valid JSON - {_REBASELINE_HINT}") from exc
     metrics = payload["metrics"]

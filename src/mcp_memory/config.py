@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
+import re
 
 _DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
 _DEFAULT_PORT = "8000"

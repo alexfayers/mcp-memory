@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
+import re
 
 
 def _consume_string_char(ch: str, escape: bool) -> tuple[bool, bool]:

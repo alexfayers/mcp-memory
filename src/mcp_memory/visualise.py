@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.resources
 from dataclasses import asdict
+import importlib.resources
 from typing import TYPE_CHECKING
 
 import httpx
@@ -166,7 +166,7 @@ async def _parse_vote_body(
     observation_hash = body.get("observationHash")
     if require_hash and not isinstance(observation_hash, str):
         return JSONResponse({"error": "observationHash is required"}, status_code=400)
-    if not isinstance(vote, int) or isinstance(vote, bool) or vote not in (1, -1):
+    if not isinstance(vote, int) or isinstance(vote, bool) or vote not in {1, -1}:
         return JSONResponse({"error": "vote must be 1 or -1"}, status_code=400)
     return project, name, vote, (observation_hash if require_hash else None)
 
@@ -191,7 +191,7 @@ def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], Storage]) -> No
     async def api_search(request: Request) -> JSONResponse:
         query = request.query_params.get("q") or ""
         project = request.query_params.get("project") or None
-        match_all = request.query_params.get("match_all", "").lower() in ("1", "true", "yes")
+        match_all = request.query_params.get("match_all", "").lower() in {"1", "true", "yes"}
         return JSONResponse(search_graph(get_db(), query, project, match_all=match_all))
 
     @mcp.custom_route("/api/activity", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]

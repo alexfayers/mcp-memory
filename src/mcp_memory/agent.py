@@ -11,15 +11,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+from dataclasses import dataclass, field
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
 import anyio
@@ -716,7 +716,7 @@ _session = _SessionState()
 
 def _claim_dream() -> bool:
     """Claim the single-flight slot, returning False if a dream is already running."""
-    global _dream_running  # noqa: PLW0603
+    global _dream_running  # ruff: ignore[global-statement]
     if _dream_running:
         return False
     _dream_running = True
@@ -732,7 +732,7 @@ async def _run_claimed(spec: TierSpec) -> None:
     here - the single chokepoint shared by the scheduled and manual paths - is what
     lets the coordinator tell the dream's own marker reset from real user activity.
     """
-    global _dream_running  # noqa: PLW0603
+    global _dream_running  # ruff: ignore[global-statement]
     dream_status.record_pass_start(spec.name)
     try:
         audit = await spec.run_pass()
@@ -803,10 +803,10 @@ async def _coordinator_tick() -> None:
 # monkeypatching the tests rely on.
 _LIGHT_TIER = TierSpec(
     name="light",
-    enabled_getter=lambda: get_dream_enabled(),  # noqa: PLW0108
-    idle_getter=lambda: get_dream_idle_seconds(),  # noqa: PLW0108
-    poll_getter=lambda: get_dream_poll_seconds(),  # noqa: PLW0108
-    run_pass=lambda: run_dream_pass(),  # noqa: PLW0108
+    enabled_getter=lambda: get_dream_enabled(),  # ruff: ignore[unnecessary-lambda]
+    idle_getter=lambda: get_dream_idle_seconds(),  # ruff: ignore[unnecessary-lambda]
+    poll_getter=lambda: get_dream_poll_seconds(),  # ruff: ignore[unnecessary-lambda]
+    run_pass=lambda: run_dream_pass(),  # ruff: ignore[unnecessary-lambda]
 )
 
 # The heavy tier fires once per idle session at a longer genuine-idle threshold,
@@ -815,10 +815,10 @@ _LIGHT_TIER = TierSpec(
 # clock climbs freely to the heavy threshold.
 _HEAVY_TIER = TierSpec(
     name="heavy",
-    enabled_getter=lambda: get_dream_heavy_enabled(),  # noqa: PLW0108
-    idle_getter=lambda: get_dream_heavy_idle_seconds(),  # noqa: PLW0108
-    poll_getter=lambda: get_dream_heavy_poll_seconds(),  # noqa: PLW0108
-    run_pass=lambda: run_heavy_dream_pass(),  # noqa: PLW0108
+    enabled_getter=lambda: get_dream_heavy_enabled(),  # ruff: ignore[unnecessary-lambda]
+    idle_getter=lambda: get_dream_heavy_idle_seconds(),  # ruff: ignore[unnecessary-lambda]
+    poll_getter=lambda: get_dream_heavy_poll_seconds(),  # ruff: ignore[unnecessary-lambda]
+    run_pass=lambda: run_heavy_dream_pass(),  # ruff: ignore[unnecessary-lambda]
 )
 
 _ALL_TIERS = (_LIGHT_TIER, _HEAVY_TIER)

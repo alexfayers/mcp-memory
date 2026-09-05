@@ -119,11 +119,15 @@ class Maintenance:
         try:
             self._telemetry.prune_tool_calls(get_call_metrics_retention_days())
             self._telemetry.prune_surfaced(get_surfaced_retention_days())
-            if get_gc_enabled():
-                self._gc_downvoted_orphans()
-            if get_purge_enabled():
-                self._purge_soft_deleted(get_purge_grace_days())
-            if get_archive_enabled():
-                self._archive_stale_entities()
+            self._run_gated_sweeps()
         except sqlite3.OperationalError:
             pass
+
+    def _run_gated_sweeps(self) -> None:
+        """Run the config-gated startup sweeps: orphan GC, soft-delete purge, and stale archival."""
+        if get_gc_enabled():
+            self._gc_downvoted_orphans()
+        if get_purge_enabled():
+            self._purge_soft_deleted(get_purge_grace_days())
+        if get_archive_enabled():
+            self._archive_stale_entities()

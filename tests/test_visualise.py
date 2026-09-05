@@ -6,11 +6,16 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
 import httpx
-import pytest
 from mcp.server.fastmcp import FastMCP
+import pytest
 
-from mcp_memory import activity, dream_status, recall_status, visualise
-from mcp_memory import eval as eval_module
+from mcp_memory import (
+    activity,
+    dream_status,
+    eval as eval_module,
+    recall_status,
+    visualise,
+)
 from mcp_memory.models import Relation
 from mcp_memory.storage.pure.rows import hash_observation
 from mcp_memory.visualise import (

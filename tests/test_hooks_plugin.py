@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import socket
 from collections.abc import Iterator
 from pathlib import Path
+import socket
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 

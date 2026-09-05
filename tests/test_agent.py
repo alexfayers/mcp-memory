@@ -7,8 +7,8 @@ import json
 from typing import TYPE_CHECKING, cast
 
 import httpx
-import pytest
 from mcp.server.fastmcp import FastMCP
+import pytest
 
 from mcp_memory import agent, cli, dream_status, recall_status, server
 

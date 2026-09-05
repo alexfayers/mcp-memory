@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import os
+from pathlib import Path
 import random
 import re
 import socket
 import sqlite3
-from collections.abc import Callable
-from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -18,10 +18,8 @@ from cline_hooks.core.plugin import HookResult, HooksPlugin
 from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
 from mcp_memory.hooks.review_tracker import (
     record_write,
-    should_nudge,
-)
-from mcp_memory.hooks.review_tracker import (
     reset as reset_review,
+    should_nudge,
 )
 from mcp_memory.hooks.tracker import (
     clear,
@@ -37,36 +35,30 @@ from mcp_memory.storage import open_writable
 if TYPE_CHECKING:
     from mcp_memory.storage import Storage
 
-_MEMORY_WRITE_TOOL_NAMES = frozenset(
-    {
-        "create_entities",
-        "create_relations",
-        "add_observations",
-        "delete_entity",
-        "delete_relation",
-        "delete_observations",
-        "set_entity_status",
-    }
-)
+_MEMORY_WRITE_TOOL_NAMES = frozenset({
+    "create_entities",
+    "create_relations",
+    "add_observations",
+    "delete_entity",
+    "delete_relation",
+    "delete_observations",
+    "set_entity_status",
+})
 
-_MEMORY_READ_TOOL_NAMES = frozenset(
-    {
-        "search_nodes",
-        "read_graph",
-        "list_metadata",
-        "search_all_projects",
-        "get_entity_with_relations",
-    }
-)
+_MEMORY_READ_TOOL_NAMES = frozenset({
+    "search_nodes",
+    "read_graph",
+    "list_metadata",
+    "search_all_projects",
+    "get_entity_with_relations",
+})
 
-_MEMORY_REMINDER_TOOLS = frozenset(
-    {
-        "replace_in_file",
-        "write_to_file",
-        "execute_command",
-        "plan_mode_respond",
-    }
-)
+_MEMORY_REMINDER_TOOLS = frozenset({
+    "replace_in_file",
+    "write_to_file",
+    "execute_command",
+    "plan_mode_respond",
+})
 
 # Update prompts/shared/rules/hooks-mcp-memory.md if any of these messages change.
 _MEMORY_REMINDER_TEMPLATE = (
@@ -123,9 +115,14 @@ _AUTO_REGISTER_UNKNOWN_NOTE = (
 _DEFAULT_READ_ONLY_AGENT_TYPES = frozenset({"Explore", "Plan"})
 _READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
 
-_DEFAULT_FILE_EDIT_TOOL_NAMES = frozenset(
-    {"Edit", "Write", "MultiEdit", "NotebookEdit", "replace_in_file", "write_to_file"}
-)
+_DEFAULT_FILE_EDIT_TOOL_NAMES = frozenset({
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "replace_in_file",
+    "write_to_file",
+})
 _FILE_EDIT_TOOLS_ENV = "MCP_MEMORY_EDIT_TOOLS"
 _EDIT_TOOL_WEIGHT = 0.25
 
@@ -495,7 +492,7 @@ def _contains_profanity(message: str) -> bool:
     if not ENABLE_PROFANITY_CHECK:
         return False
 
-    from better_profanity import profanity  # noqa: PLC0415
+    from better_profanity import profanity  # ruff: ignore[import-outside-top-level]
 
     if not profanity.CENSOR_WORDSET:
         profanity.load_censor_words(whitelist_words=SWEAR_EXCLUSIONS)
@@ -671,7 +668,7 @@ class MemoryPlugin(HooksPlugin):
         task_id = str(kwargs.get("task_id", ""))
         tool_name = str(kwargs.get("tool_name", ""))
         parameters = _str_dict(kwargs.get("parameters", {}))
-        is_state_write = bool(kwargs.get("is_state_write", False))
+        is_state_write = bool(kwargs.get("is_state_write"))
         is_memory_write = _is_memory_write(tool_name, parameters)
         self._derive_scope_from_workspace_roots(kwargs)
 
@@ -692,7 +689,7 @@ class MemoryPlugin(HooksPlugin):
 
         if tool_name in _MEMORY_REMINDER_TOOLS:
             self._reminder.step()
-            if random.random() < self._reminder.chance:  # noqa: S311
+            if random.random() < self._reminder.chance:
                 self._reminder.reset()
                 reminder = _MEMORY_REMINDER_TEMPLATE.format(
                     project=self._project_scope,

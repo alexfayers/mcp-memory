@@ -171,8 +171,10 @@ class TestRecallVsSearchCostTradeoff:
                 SeedEntity(
                     f"task/note-{i}",
                     [
-                        f"deployment rollback runbook detail number {i} "
-                        "with substantial observation text to inflate payload"
+                        (
+                            f"deployment rollback runbook detail number {i} "
+                            "with substantial observation text to inflate payload"
+                        )
                     ],
                 )
                 for i in range(8)

@@ -6,8 +6,8 @@ for token cost.
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, is_dataclass
+import json
 
 
 def _json_default(obj: object) -> object:

@@ -697,8 +697,8 @@ MIGRATIONS: list[Migration] = [
                 used_at DATETIME,
                 vote_cast INTEGER NOT NULL DEFAULT 0
             )""",
-            "CREATE INDEX IF NOT EXISTS idx_surfaced_project_name "
-            "ON surfaced_entities(project, entity_name, surfaced_at)",
+            ("CREATE INDEX IF NOT EXISTS idx_surfaced_project_name "
+            "ON surfaced_entities(project, entity_name, surfaced_at)"),
             "CREATE INDEX IF NOT EXISTS idx_surfaced_retrieval ON surfaced_entities(retrieval_id)",
         ],
     ),
@@ -726,8 +726,8 @@ MIGRATIONS: list[Migration] = [
             # backfilled at startup and written at every insert site. Nullable and
             # not part of the FTS projection, so no trigger changes (mirrors v20/v22).
             "ALTER TABLE observations ADD COLUMN content_hash TEXT",
-            "CREATE INDEX IF NOT EXISTS idx_observations_content_hash "
-            "ON observations(entity_id, content_hash)",
+            ("CREATE INDEX IF NOT EXISTS idx_observations_content_hash "
+            "ON observations(entity_id, content_hash)"),
         ],
     ),
     Migration(

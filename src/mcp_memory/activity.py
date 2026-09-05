@@ -11,10 +11,10 @@ graph has been untouched even across a server restart.
 
 from __future__ import annotations
 
-import json
-import time
 from collections import deque
+import json
 from pathlib import Path
+import time
 from typing import Any, Literal, TypedDict
 
 from .config import get_data_dir
@@ -74,20 +74,18 @@ def record_tool(tool_name: str, kwargs: dict[str, Any], result: Any) -> None:
     if isinstance(result, dict) and "error" in result:
         return
 
-    global _seq  # noqa: PLW0603
+    global _seq  # ruff: ignore[global-statement]
     kind = _KIND_BY_TOOL.get(tool_name, "read")
     entities, project = _extract(tool_name, kind, kwargs, result)
     _seq += 1
-    _events.append(
-        {
-            "id": _seq,
-            "ts": time.time(),
-            "kind": kind,
-            "tool": tool_name,
-            "entities": entities,
-            "project": project,
-        }
-    )
+    _events.append({
+        "id": _seq,
+        "ts": time.time(),
+        "kind": kind,
+        "tool": tool_name,
+        "entities": entities,
+        "project": project,
+    })
 
 
 def recent(since: int) -> list[ActivityEvent]:
@@ -102,7 +100,7 @@ def latest_seq() -> int:
 
 def clear() -> None:
     """Empty the buffer and reset the sequence counter (for test isolation)."""
-    global _seq, _last_activity, _last_marker_write  # noqa: PLW0603
+    global _seq, _last_activity, _last_marker_write  # ruff: ignore[global-statement]
     _events.clear()
     _seq = 0
     _last_activity = None
@@ -115,7 +113,7 @@ def last_activity() -> float:
     Falls back to the persisted marker (surviving a restart) and, if none exists,
     to the current time so a fresh install does not look infinitely idle.
     """
-    global _last_activity  # noqa: PLW0603
+    global _last_activity  # ruff: ignore[global-statement]
     if _last_activity is None:
         _last_activity = _read_marker() or time.time()
     return _last_activity
@@ -133,7 +131,7 @@ def _marker_path() -> Path:
 
 def _touch_activity() -> None:
     """Update the in-memory last-activity time and throttle-persist it to disk."""
-    global _last_activity, _last_marker_write  # noqa: PLW0603
+    global _last_activity, _last_marker_write  # ruff: ignore[global-statement]
     now = time.time()
     _last_activity = now
     if now - _last_marker_write < _MARKER_THROTTLE_SECONDS:
@@ -171,13 +169,13 @@ def _names_from_write_kwargs(tool_name: str, kwargs: dict[str, Any]) -> list[str
         for entity in kwargs.get("entities", []) or []:
             if isinstance(entity, dict) and entity.get("name"):
                 names.append(str(entity["name"]))
-    elif tool_name in (
+    elif tool_name in {
         "add_observations",
         "delete_observations",
         "merge_observations",
-    ) and kwargs.get("entityName"):
+    } and kwargs.get("entityName"):
         names.append(str(kwargs["entityName"]))
-    elif tool_name in ("delete_entity", "set_entity_status", "vote") and kwargs.get("name"):
+    elif tool_name in {"delete_entity", "set_entity_status", "vote"} and kwargs.get("name"):
         names.append(str(kwargs["name"]))
     elif tool_name == "create_relations":
         for relation in kwargs.get("relations", []) or []:

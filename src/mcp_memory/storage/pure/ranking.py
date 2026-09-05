@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime
+import math
 
 _RECENCY_HALF_LIFE_DAYS = 30.0
 _RECENCY_FLOOR = 0.1

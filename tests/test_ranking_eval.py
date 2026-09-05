@@ -14,8 +14,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from mcp_memory import cli
-from mcp_memory import eval as ranking_eval
+from mcp_memory import (
+    cli,
+    eval as ranking_eval,
+)
 from mcp_memory.storage import open_readonly, open_writable
 from tests.eval_harness import (
     _FIXTURE_LATER,

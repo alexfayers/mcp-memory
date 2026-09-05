@@ -10,13 +10,13 @@ rather than a guess, and gives phase D a regression gate it must not degrade.
 from __future__ import annotations
 
 import asyncio
-import math
-import sqlite3
-import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+import math
 from pathlib import Path
+import sqlite3
+import time
 from typing import TYPE_CHECKING
 
 from .config import get_eval_cache_ttl_seconds
@@ -126,6 +126,9 @@ def iter_labelled_queries(
     retrievals surfaced on or after that instant are included. When ``min_content_tokens`` is
     given, queries with fewer whitespace-separated tokens than that (e.g. the single word
     "task") are excluded, since a degenerate query is unrankable regardless of ranking quality.
+
+    Yields:
+        Each retrieval as a `LabelledQuery`, in `retrieval_id` order.
     """
     sql = "SELECT retrieval_id, project, query, tool, entity_name, rank, used_at FROM surfaced_entities "
     params: list[str] = []

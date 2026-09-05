@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import functools
 import inspect
 import os
-from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
@@ -40,7 +40,7 @@ def _track[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
             record_tool(fn.__name__, arguments, result)
             usefulness.observe(_get_db(), fn.__name__, arguments, result)
             metrics.record(_get_db(), fn.__name__, arguments, result)
-        except Exception:  # noqa: S110 - instrumentation must never break a tool call
+        except Exception:  # ruff: ignore[try-except-pass] - instrumentation must never break a tool call
             pass
         return result
 
@@ -54,16 +54,14 @@ mcp = FastMCP(
     port=int(os.environ.get("MCP_MEMORY_PORT", "8000")),
 )
 
-VALID_ENTITY_TYPES = frozenset(
-    {
-        "project",
-        "feature",
-        "task",
-        "user-preferences",
-        "pattern",
-        "knowledge",
-    }
-)
+VALID_ENTITY_TYPES = frozenset({
+    "project",
+    "feature",
+    "task",
+    "user-preferences",
+    "pattern",
+    "knowledge",
+})
 _RELATION_EXEMPT_ENTITY_TYPES = frozenset({"project"})
 
 # Mirrors audit._RESOLVED_TASK_CEILING and the memory-review SKILL.md resolved-task
@@ -273,7 +271,7 @@ _db: Storage | None = None
 
 def _get_db() -> Storage:
     """Lazily initialise and return the database manager."""
-    global _db  # noqa: PLW0603
+    global _db  # ruff: ignore[global-statement]
     if _db is None:
         _db = open_writable(get_db_path())
     return _db
@@ -376,13 +374,11 @@ def _prepare_read_result(
                 _wire_in_place(group)
     if not isinstance(relations, list):
         return output
-    offenders = sorted(
-        {
-            rel.relation_type
-            for rel in relations
-            if isinstance(rel, Relation) and rel.relation_type not in VALID_RELATION_TYPES
-        }
-    )
+    offenders = sorted({
+        rel.relation_type
+        for rel in relations
+        if isinstance(rel, Relation) and rel.relation_type not in VALID_RELATION_TYPES
+    })
     if offenders:
         output["relationTypeWarnings"] = offenders
     return output
@@ -462,6 +458,35 @@ def _validate_and_extract_relations(
     return all_relations
 
 
+def _create_entities(
+    project: str, entities: list[dict[str, str | list[str] | list[dict[str, str]] | None]]
+) -> dict[str, str]:
+    """Validate relations, guard cross-scope duplicates, then create the entities and their relations."""
+    db = _get_db()
+    _ensure_project_root(db, project)
+    all_relations = _validate_and_extract_relations(project, entities)
+
+    for entity_data in entities:
+        name = str(entity_data.get("name", ""))
+        if project == _GLOBAL_PROJECT:
+            conflict = db.entities.exists_outside(name, _GLOBAL_PROJECT)
+            if conflict:
+                raise ValueError(
+                    f"Entity '{name}' already exists in project '{conflict}'. Cannot duplicate in global scope."
+                )
+        elif db.entities.exists_in(name, _GLOBAL_PROJECT):
+            raise ValueError(
+                f"Entity '{name}' already exists in global scope. Cannot duplicate in project '{project}'."
+            )
+
+    db.entities.create(project, entities)  # type: ignore[arg-type]
+
+    if all_relations:
+        db.relations.create(project, all_relations)
+
+    return {"message": f"Created {len(entities)} entities in project '{project}'."}
+
+
 @mcp.tool(description=CREATE_ENTITIES_DESC)
 @_track
 def create_entities(
@@ -470,29 +495,7 @@ def create_entities(
 ) -> dict[str, str]:
     """Create or update entities with observations, enforcing relation requirements."""
     try:
-        db = _get_db()
-        _ensure_project_root(db, project)
-        all_relations = _validate_and_extract_relations(project, entities)
-
-        for entity_data in entities:
-            name = str(entity_data.get("name", ""))
-            if project == _GLOBAL_PROJECT:
-                conflict = db.entities.exists_outside(name, _GLOBAL_PROJECT)
-                if conflict:
-                    raise ValueError(
-                        f"Entity '{name}' already exists in project '{conflict}'. Cannot duplicate in global scope."
-                    )
-            elif db.entities.exists_in(name, _GLOBAL_PROJECT):
-                raise ValueError(
-                    f"Entity '{name}' already exists in global scope. Cannot duplicate in project '{project}'."
-                )
-
-        db.entities.create(project, entities)  # type: ignore[arg-type]
-
-        if all_relations:
-            db.relations.create(project, all_relations)
-
-        return {"message": f"Created {len(entities)} entities in project '{project}'."}
+        return _create_entities(project, entities)
     except Exception as e:
         return {"error": str(e)}
 
@@ -502,6 +505,7 @@ def create_entities(
 def search_nodes(
     project: str,
     query: str,
+    *,
     limit: int = 10,
     entityType: str | None = None,
     status: str | list[str] | None = None,
@@ -555,28 +559,47 @@ def read_graph(
         return {"error": str(e)}
 
 
+def _list_metadata(kind: str, project: str | None) -> dict[str, object]:
+    """Look up registry metadata (projects, paths, or groups) for the given kind and scope."""
+    db = _get_db()
+    result: dict[str, object]
+    if kind == "projects":
+        result = {"projects": db.projects.names()}
+    elif kind == "paths" and project is None:
+        result = {"mappings": [{"project": n, "path": p} for n, p in db.projects.paths()]}
+    elif kind == "paths" and project is not None:
+        result = {"paths": db.projects.paths_for(project)}
+    elif kind == "groups" and project is None:
+        result = {"mappings": [{"project": n, "group": g} for n, g in db.projects.groups()]}
+    elif kind == "groups" and project is not None:
+        result = {"mappings": [{"project": n, "group": g} for n, g in db.projects.groups(project)]}
+    else:
+        result = {"error": f"Invalid kind '{kind}'. Must be one of: projects, paths, groups."}
+    return result
+
+
 @mcp.tool(description=LIST_METADATA_DESC)
 @_track
 def list_metadata(kind: str, project: str | None = None) -> dict[str, object]:
     """List registry metadata (projects, paths, or groups)."""
     try:
-        db = _get_db()
-        result: dict[str, object]
-        if kind == "projects":
-            result = {"projects": db.projects.names()}
-        elif kind == "paths" and project is None:
-            result = {"mappings": [{"project": n, "path": p} for n, p in db.projects.paths()]}
-        elif kind == "paths" and project is not None:
-            result = {"paths": db.projects.paths_for(project)}
-        elif kind == "groups" and project is None:
-            result = {"mappings": [{"project": n, "group": g} for n, g in db.projects.groups()]}
-        elif kind == "groups" and project is not None:
-            result = {"mappings": [{"project": n, "group": g} for n, g in db.projects.groups(project)]}
-        else:
-            result = {"error": f"Invalid kind '{kind}'. Must be one of: projects, paths, groups."}
-        return result
+        return _list_metadata(kind, project)
     except Exception as e:
         return {"error": str(e)}
+
+
+def _set_metadata(project: str, kind: str, values: list[str]) -> dict[str, object]:
+    """Replace registry metadata (paths or groups) for a project scope."""
+    db = _get_db()
+    if kind == "paths":
+        _ensure_project_root(db, project)
+        db.projects.set_paths(project, values)
+        return {"project": project, "paths": db.projects.paths_for(project)}
+    if kind == "groups":
+        _ensure_project_root(db, project)
+        db.projects.set_groups(project, values)
+        return {"project": project, "members": db.projects.group_members(project)}
+    return {"error": f"Invalid kind '{kind}'. Must be one of: paths, groups."}
 
 
 @mcp.tool(description=SET_METADATA_DESC)
@@ -584,16 +607,7 @@ def list_metadata(kind: str, project: str | None = None) -> dict[str, object]:
 def set_metadata(project: str, kind: str, values: list[str]) -> dict[str, object]:
     """Replace registry metadata (paths or groups) for a project."""
     try:
-        db = _get_db()
-        if kind == "paths":
-            _ensure_project_root(db, project)
-            db.projects.set_paths(project, values)
-            return {"project": project, "paths": db.projects.paths_for(project)}
-        if kind == "groups":
-            _ensure_project_root(db, project)
-            db.projects.set_groups(project, values)
-            return {"project": project, "members": db.projects.group_members(project)}
-        return {"error": f"Invalid kind '{kind}'. Must be one of: paths, groups."}
+        return _set_metadata(project, kind, values)
     except Exception as e:
         return {"error": str(e)}
 
@@ -685,10 +699,59 @@ def _resolve_projects(db: Storage, projects: list[str], expand_groups: bool) -> 
     return resolved
 
 
+def _search_all_projects(
+    query: str,
+    *,
+    limit: int,
+    entity_type: str | None,
+    status: str | list[str] | None,
+    start: str | None,
+    end: str | None,
+    compact: bool,
+    match_all: bool,
+    max_observation_chars: int | None,
+    projects: list[str] | None,
+    expand_groups: bool,
+    include_archived: bool,
+) -> dict[str, object]:
+    """Search across projects and group the hits by the project each entity belongs to."""
+    if expand_groups and projects is None:
+        return {"error": "expand_groups requires projects"}
+    db = _get_db()
+    resolved_projects = _resolve_projects(db, projects, expand_groups) if projects else None
+    result = db.reads.search(
+        resolved_projects,
+        query,
+        limit=limit,
+        entity_type=entity_type,
+        status=status,  # type: ignore[arg-type]
+        start=start,
+        end=end,
+        compact=compact,
+        match_all=match_all,
+        max_observation_chars=max_observation_chars,
+        include_archived=include_archived,
+    )
+
+    by_project = result.get("relations_by_project", {})
+    grouped: dict[str, dict[str, list[object]]] = {}
+    for entity in result["entities"]:
+        project_name = entity.project_name or "unknown"
+        if project_name not in grouped:
+            grouped[project_name] = {
+                "entities": [],
+                "relations": list(by_project.get(project_name, [])),
+            }
+        grouped[project_name]["entities"].append(entity)
+
+    return _prepare_read_result({"results": grouped}, result["relations"])
+
+
 @mcp.tool(description=SEARCH_ALL_PROJECTS_DESC)
 @_track
 def search_all_projects(
     query: str,
+    *,
     limit: int = 50,
     entityType: str | None = None,
     status: str | list[str] | None = None,
@@ -703,36 +766,20 @@ def search_all_projects(
 ) -> dict[str, object]:
     """Search entities across all projects, returning results grouped by project."""
     try:
-        if expand_groups and projects is None:
-            return {"error": "expand_groups requires projects"}
-        db = _get_db()
-        resolved_projects = _resolve_projects(db, projects, expand_groups) if projects else None
-        result = db.reads.search(
-            resolved_projects,
+        return _search_all_projects(
             query,
             limit=limit,
             entity_type=entityType,
-            status=status,  # type: ignore[arg-type]
+            status=status,
             start=start,
             end=end,
             compact=compact,
             match_all=match_all,
             max_observation_chars=max_observation_chars,
+            projects=projects,
+            expand_groups=expand_groups,
             include_archived=include_archived,
         )
-
-        by_project = result.get("relations_by_project", {})
-        grouped: dict[str, dict[str, list[object]]] = {}
-        for entity in result["entities"]:
-            project_name = entity.project_name or "unknown"
-            if project_name not in grouped:
-                grouped[project_name] = {
-                    "entities": [],
-                    "relations": list(by_project.get(project_name, [])),
-                }
-            grouped[project_name]["entities"].append(entity)
-
-        return _prepare_read_result({"results": grouped}, result["relations"])
     except Exception as e:
         return {"error": str(e)}
 
@@ -814,6 +861,7 @@ def delete_relation(
 def get_entity_with_relations(
     project: str,
     name: str,
+    *,
     entityType: str | None = None,
     relationType: str | None = None,
     compact: bool = False,

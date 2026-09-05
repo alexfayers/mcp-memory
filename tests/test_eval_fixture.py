@@ -7,10 +7,10 @@ that only exist at that scale (the relevant-set histogram, the archive sweep).
 
 from __future__ import annotations
 
+from collections import Counter
 import math
 import re
 import shutil
-from collections import Counter
 from typing import TYPE_CHECKING
 
 import pytest

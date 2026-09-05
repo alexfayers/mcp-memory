@@ -11,12 +11,13 @@ ground truth for what remains demoted, so no rolling history is needed.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+from pathlib import Path
 import re
 import tempfile
 import time
-from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
 from .config import get_data_dir
@@ -138,7 +139,7 @@ def record_startup(
     Resets any ``running`` flag: on a fresh process nothing is truly in flight, so
     this bounds a stale flag a crash may have left mid-pass (mirroring recall_status).
     """
-    global _last_pass, _running  # noqa: PLW0603
+    global _last_pass, _running  # ruff: ignore[global-statement]
     _configs[tier] = {
         "enabled": enabled,
         "idle_threshold_seconds": idle_threshold_seconds,
@@ -152,7 +153,7 @@ def record_startup(
 
 def record_pass_start(tier: str) -> None:
     """Mark a curation pass of ``tier`` as in flight, for the visualiser's live indicator."""
-    global _running  # noqa: PLW0603
+    global _running  # ruff: ignore[global-statement]
     _running = tier
     _write()
 
@@ -163,7 +164,7 @@ def record_pass(audit_text: str, *, ok: bool, tier: str = "light") -> None:
     ``tier`` names which curation tier ran the pass ("light" or "heavy"); the two
     tiers share this single latest-pass slot, so it disambiguates whichever ran last.
     """
-    global _last_pass, _running  # noqa: PLW0603
+    global _last_pass, _running  # ruff: ignore[global-statement]
     _last_pass = {
         "ts": time.time(),
         "ok": ok,
@@ -182,7 +183,7 @@ def read_status() -> DreamStatus | None:
 
 def clear() -> None:
     """Reset the in-memory config, pass, and running flag (for test isolation)."""
-    global _configs, _last_pass, _running  # noqa: PLW0603
+    global _configs, _last_pass, _running  # ruff: ignore[global-statement]
     _configs = {}
     _last_pass = None
     _running = None
@@ -191,6 +192,20 @@ def clear() -> None:
 def _status_path() -> Path:
     """Return the path of the persisted dream-status marker file."""
     return get_data_dir() / "dream-status.json"
+
+
+def _atomic_write(path: Path, data: object) -> None:
+    """Write ``data`` as JSON to ``path`` atomically (temp file + replace)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    tmp_path = Path(tmp)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        tmp_path.replace(path)
+    except OSError:
+        tmp_path.unlink()
+        raise
 
 
 def _write() -> None:
@@ -206,20 +221,8 @@ def _write() -> None:
         "last_pass": _last_pass,
         "running": _running,
     }
-    try:
-        path = _status_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-        tmp_path = Path(tmp)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(status, handle)
-            tmp_path.replace(path)
-        except OSError:
-            tmp_path.unlink()
-            raise
-    except OSError:
-        pass
+    with contextlib.suppress(OSError):
+        _atomic_write(_status_path(), status)
 
 
 def _read_file() -> DreamStatus | None:

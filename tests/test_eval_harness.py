@@ -90,15 +90,13 @@ class TestMeasureChange:
 
         result = measure_change(store, _touch_every_entity, now=_FIXTURE_NOW)
 
-        assert result.deltas == pytest.approx(
-            {
-                "mean_precision_at_k": 0.0,
-                "mrr": 0.0,
-                "mean_recall_at_k": 0.0,
-                "mean_ndcg_at_k": 0.0,
-                "mean_success_at_k": 0.0,
-            }
-        )
+        assert result.deltas == pytest.approx({
+            "mean_precision_at_k": 0.0,
+            "mrr": 0.0,
+            "mean_recall_at_k": 0.0,
+            "mean_ndcg_at_k": 0.0,
+            "mean_success_at_k": 0.0,
+        })
 
     def test_format_includes_k_and_query_count(self, store: Storage) -> None:
         _build_eval_fixture(store)
