@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 from pathlib import Path
 import re
-import tempfile
 import time
 from typing import NotRequired, TypedDict, cast
 
+from .atomic_write import write_json_atomic
 from .config import get_data_dir
 
 __all__ = ["time"]
@@ -194,20 +193,6 @@ def _status_path() -> Path:
     return get_data_dir() / "dream-status.json"
 
 
-def _atomic_write(path: Path, data: object) -> None:
-    """Write ``data`` as JSON to ``path`` atomically (temp file + replace)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    tmp_path = Path(tmp)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle)
-        tmp_path.replace(path)
-    except OSError:
-        tmp_path.unlink()
-        raise
-
-
 def _write() -> None:
     """Persist the current config, last pass, and running flag atomically (temp file + replace).
 
@@ -222,7 +207,7 @@ def _write() -> None:
         "running": _running,
     }
     with contextlib.suppress(OSError):
-        _atomic_write(_status_path(), status)
+        write_json_atomic(_status_path(), status)
 
 
 def _read_file() -> DreamStatus | None:
