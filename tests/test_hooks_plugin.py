@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+import json
 from pathlib import Path
 import socket
 from typing import TYPE_CHECKING
@@ -14,6 +16,7 @@ pytest.importorskip("cline_hooks")
 
 from mcp_memory.config import get_db_path
 from mcp_memory.hooks.plugin import (
+    _DATE_PREFIX_WARNING,
     _EDIT_TOOL_WEIGHT,
     _FRUSTRATION_NUDGE_TEMPLATE,
     ENABLE_FRUSTRATION_CHECK,
@@ -760,6 +763,226 @@ class TestMemoryPluginScopeValidation:
             },
         )
         assert result is None
+
+
+class TestMemoryPluginDatePrefixNudge:
+    def test_flags_today_prefixed_observation_in_add_observations(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="add_observations",
+            parameters={
+                "project": "global",
+                "entityName": "foo",
+                "observations": [f"{today}: fact"],
+            },
+        )
+        assert result is not None
+        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+
+    def test_does_not_flag_yesterday_prefixed_observation(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        yesterday = (datetime.now(tz=UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="add_observations",
+            parameters={
+                "project": "global",
+                "entityName": "foo",
+                "observations": [f"{yesterday}: fact"],
+            },
+        )
+        assert result is None
+
+    def test_does_not_flag_date_without_separator(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="add_observations",
+            parameters={
+                "project": "global",
+                "entityName": "foo",
+                "observations": [f"{today} fact"],
+            },
+        )
+        assert result is None
+
+    def test_flags_today_prefixed_observation_in_nested_create_entities(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="create_entities",
+            parameters={
+                "project": "global",
+                "entities": [
+                    {
+                        "name": "foo",
+                        "entityType": "note",
+                        "observations": [f"{today}: fact"],
+                    }
+                ],
+            },
+        )
+        assert result is not None
+        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+
+    def test_flags_today_prefixed_observation_via_use_mcp_tool_json_string(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="use_mcp_tool",
+            parameters={
+                "tool_name": "add_observations",
+                "arguments": json.dumps({
+                    "project": "global",
+                    "entityName": "foo",
+                    "observations": [f"{today}: fact"],
+                }),
+            },
+        )
+        assert result is not None
+        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+
+    def test_never_flags_merge_observations(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="merge_observations",
+            parameters={
+                "project": "global",
+                "entityName": "foo",
+                "sourceHash": f"{today}: fact",
+                "targetHash": "abcd1234",
+            },
+        )
+        assert result is None
+
+    def test_never_flags_delete_observations(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="delete_observations",
+            parameters={
+                "project": "global",
+                "entityName": "foo",
+                "observations": [f"{today}: fact"],
+            },
+        )
+        assert result is None
+
+    def test_message_renders_count_and_first_example(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="add_observations",
+            parameters={
+                "project": "global",
+                "entityName": "foo",
+                "observations": [f"{today}: first fact", f"{today}: second fact"],
+            },
+        )
+        assert result is not None
+        assert len(result.notes) == 1
+        note = result.notes[0]
+        assert "2 observation(s)" in note
+        assert f"{today}: first fact" in note
+
+    def test_combines_repeated_scope_warning_with_date_prefix_note(
+        self,
+        plugin: MemoryPlugin,
+        tmp_path: Path,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        repo = tmp_path / "my-repo"
+        (repo / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+
+        plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="use_mcp_tool",
+            parameters={
+                "tool_name": "add_observations",
+                "arguments": '{"project": "wrong-project", "entityName": "foo", "observations": ["irrelevant"]}',
+            },
+        )
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="use_mcp_tool",
+            parameters={
+                "tool_name": "add_observations",
+                "arguments": json.dumps({
+                    "project": "wrong-project",
+                    "entityName": "foo",
+                    "observations": [f"{today}: fact"],
+                }),
+            },
+        )
+        assert result is not None
+        assert result.block is None
+        assert len(result.notes) == 2
+        assert any("`wrong-project`" in note for note in result.notes)
+        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+
+    def test_block_precedence_preserved_with_date_prefix_present(
+        self,
+        plugin: MemoryPlugin,
+        tmp_path: Path,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        repo = tmp_path / "my-repo"
+        (repo / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="use_mcp_tool",
+            parameters={
+                "tool_name": "add_observations",
+                "arguments": json.dumps({
+                    "project": "wrong-project",
+                    "entityName": "foo",
+                    "observations": [f"{today}: fact"],
+                }),
+            },
+        )
+        assert result is not None
+        assert result.block is not None
+        assert "`wrong-project`" in result.block
+        assert result.notes == [_DATE_PREFIX_WARNING.format(count=1, example=f"{today}: fact")]
 
 
 class TestDerivesScopeFromWorkspaceRoots:

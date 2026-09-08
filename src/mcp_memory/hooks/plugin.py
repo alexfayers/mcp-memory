@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,7 @@ from mcp_memory.hooks.tracker import (
 )
 from mcp_memory.path_resolver import normalize_path, resolve_project_for_path
 from mcp_memory.storage import open_writable
+from mcp_memory.storage.pure.rows import strip_today_date_prefix
 
 if TYPE_CHECKING:
     from mcp_memory.storage import Storage
@@ -189,18 +191,21 @@ def _extract_mcp_suffix(tool_name: str) -> str:
     return tool_name
 
 
+def _resolve_memory_tool(tool_name: str, parameters: dict[str, object]) -> str:
+    """Return the bare memory tool name for a native or use_mcp_tool call."""
+    if tool_name == "use_mcp_tool":
+        return str(parameters.get("tool_name", ""))
+    return _extract_mcp_suffix(tool_name)
+
+
 def _is_memory_write(tool_name: str, parameters: dict[str, object]) -> bool:
     """Check if a tool call is a memory write operation."""
-    if tool_name == "use_mcp_tool":
-        return str(parameters.get("tool_name", "")) in _MEMORY_WRITE_TOOL_NAMES
-    return _extract_mcp_suffix(tool_name) in _MEMORY_WRITE_TOOL_NAMES
+    return _resolve_memory_tool(tool_name, parameters) in _MEMORY_WRITE_TOOL_NAMES
 
 
 def _is_memory_read(tool_name: str, parameters: dict[str, object]) -> bool:
     """Check if a tool call is a read-only memory operation."""
-    if tool_name == "use_mcp_tool":
-        return str(parameters.get("tool_name", "")) in _MEMORY_READ_TOOL_NAMES
-    return _extract_mcp_suffix(tool_name) in _MEMORY_READ_TOOL_NAMES
+    return _resolve_memory_tool(tool_name, parameters) in _MEMORY_READ_TOOL_NAMES
 
 
 def _find_git_root(file_path: str) -> Path | None:
@@ -300,6 +305,13 @@ _SCOPE_MISMATCH_WARNING = (
     " intentional, run the exact same call again to proceed."
 )
 
+# Update prompts/shared/rules/hooks-mcp-memory.md if this message changes.
+_DATE_PREFIX_WARNING = (
+    "REDUNDANT DATE PREFIX: {count} observation(s) in this call start with today's date"
+    " (first: `{example}`). The server records each observation's timestamp itself and strips"
+    " this prefix on write, so it only wastes text. Drop the date and keep the fact."
+)
+
 
 def _extract_memory_project(
     tool_name: str,
@@ -325,6 +337,43 @@ def _parse_mcp_arguments(
         if isinstance(raw, dict):
             return raw
     return parameters
+
+
+_OBSERVATION_TEXT_TOOLS = frozenset({"create_entities", "add_observations"})
+
+
+def _observation_texts(tool_name: str, parameters: dict[str, object]) -> list[str]:
+    """Return the observation texts a memory write would store, or [] for other tools."""
+    name = _resolve_memory_tool(tool_name, parameters)
+    if name not in _OBSERVATION_TEXT_TOOLS:
+        return []
+    args = _parse_mcp_arguments(tool_name, parameters)
+    if name == "add_observations":
+        return _str_list(args.get("observations"))
+    texts: list[str] = []
+    entities_raw = args.get("entities", [])
+    entities: list[object] = entities_raw if isinstance(entities_raw, list) else []
+    for entity in entities:
+        if isinstance(entity, dict):
+            texts.extend(_str_list(entity.get("observations")))
+    return texts
+
+
+_DATE_PREFIX_EXAMPLE_CHARS = 80
+
+
+def _date_prefix_note(tool_name: str, parameters: dict[str, object]) -> str | None:
+    """Return a nudge when observations carry a date prefix the server would strip."""
+    today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+    flagged = [
+        text for text in _observation_texts(tool_name, parameters) if strip_today_date_prefix(text, today=today) != text
+    ]
+    if not flagged:
+        return None
+    example = flagged[0][:_DATE_PREFIX_EXAMPLE_CHARS]
+    if len(flagged[0]) > _DATE_PREFIX_EXAMPLE_CHARS:
+        example += "..."
+    return _DATE_PREFIX_WARNING.format(count=len(flagged), example=example)
 
 
 def _workspace_entity_note(workspace_roots: list[str]) -> str | None:
@@ -616,7 +665,7 @@ class MemoryPlugin(HooksPlugin):
         parameters = _str_dict(kwargs.get("parameters", {}))
         self._derive_scope_from_workspace_roots(kwargs)
         if _is_memory_write(tool_name, parameters):
-            return self._check_memory_scope(task_id, tool_name, parameters)
+            return self._check_memory_write(task_id, tool_name, parameters)
         if _is_memory_read(tool_name, parameters):
             return None
         if _is_subagent(agent_type):
@@ -635,7 +684,7 @@ class MemoryPlugin(HooksPlugin):
                 "tool_name": mcp_tool_name,
                 "arguments": mcp_arguments,
             }
-            return self._check_memory_scope(task_id, "use_mcp_tool", params)
+            return self._check_memory_write(task_id, "use_mcp_tool", params)
         if mcp_tool_name in _MEMORY_READ_TOOL_NAMES:
             return None
         if _is_subagent(agent_type):
@@ -660,6 +709,22 @@ class MemoryPlugin(HooksPlugin):
             mark_scope_blocked(task_id, target)
             return HookResult(block=message)
         return None
+
+    def _check_memory_write(
+        self,
+        task_id: str,
+        tool_name: str,
+        parameters: dict[str, object],
+    ) -> HookResult | None:
+        """Combine the wrong-scope check with the redundant-date-prefix nudge."""
+        result = self._check_memory_scope(task_id, tool_name, parameters)
+        note = _date_prefix_note(tool_name, parameters)
+        if note is None:
+            return result
+        if result is None:
+            return HookResult(notes=[note])
+        result.notes.append(note)
+        return result
 
     def _on_post_tool_use(self, **kwargs: object) -> HookResult | None:
         agent_type = str(kwargs.get("agent_type", ""))
