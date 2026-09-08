@@ -17,4 +17,4 @@ test *args:
     uv run pytest {{args}}
 
 baseline *args:
-    uv run python -m tests.eval.regen_eval_baseline {{args}}
+    uv run python -m tests.eval.regen_baseline {{args}}
