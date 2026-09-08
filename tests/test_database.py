@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, datetime
 import hashlib
 from pathlib import Path
 import sqlite3
@@ -1125,7 +1125,7 @@ class TestObservations:
         store.observations.add("proj", "e1", ["b"])
         observation = next(o for o in store.reads.get_entity("proj", "e1").observations if o.content == "b")
         assert observation.created_at is not None
-        assert observation.created_at[:10] == date.today().isoformat()
+        assert observation.created_at[:10] == datetime.now(tz=UTC).date().isoformat()
 
     def test_wired_at_key_present_only_when_observation_date_differs_from_entity(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["same-day", "older"]}])
