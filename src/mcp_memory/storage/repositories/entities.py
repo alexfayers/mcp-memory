@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, cast
 
 from mcp_memory.config import get_strict_policy_enabled
 from mcp_memory.models import VALID_STATUSES, validate_vote
-from mcp_memory.storage.pure.rows import build_relation, hash_observation
+from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_today_date_prefix
 from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_entity_type_id, get_or_create_project_id
 from mcp_memory.storage.services.integrity import orphaned_neighbors_if_entity_deleted
@@ -58,6 +58,7 @@ class EntityRepository:
                 name = entity_data.get("name")
                 entity_type = entity_data.get("entityType")
                 observations = cast("list[str]", entity_data.get("observations"))
+                observations = [strip_today_date_prefix(obs) for obs in observations]
                 status = entity_data.get("status")
 
                 entity_type_id = get_or_create_entity_type_id(self._conn, str(entity_type))

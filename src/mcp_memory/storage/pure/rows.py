@@ -2,15 +2,37 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import hashlib
+import re
 import sqlite3
 
 from mcp_memory.models import Entity, Observation, Relation
+
+_TODAY_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ \t]*[:,-][ \t]+")
 
 
 def hash_observation(content: str) -> str:
     """Return the 8-char content-derived hash used to address an observation."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
+
+
+def strip_today_date_prefix(content: str, today: str | None = None) -> str:
+    """Strip a leading "<today's date><separator>" label, since created_at already carries it.
+
+    Only strips when the captured date equals `today` (UTC, defaults to the current date) and
+    the remainder after the required separator and whitespace is non-empty - a bare date with
+    no separator (e.g. "2026-09-08 was the day...") is left untouched as real content, and a
+    past date is left untouched as real history rather than a redundant label.
+    """
+    match = _TODAY_DATE_PREFIX_RE.match(content)
+    if match is None:
+        return content
+    if today is None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+    if match.group(1) != today:
+        return content
+    return content[match.end() :] or content
 
 
 def budget_observations(observations: list[Observation], max_chars: int) -> list[Observation]:

@@ -6,7 +6,12 @@ from typing import TYPE_CHECKING
 
 from mcp_memory.config import get_max_observation_chars
 from mcp_memory.models import validate_vote
-from mcp_memory.storage.pure.rows import budget_observations, build_observation, hash_observation
+from mcp_memory.storage.pure.rows import (
+    budget_observations,
+    build_observation,
+    hash_observation,
+    strip_today_date_prefix,
+)
 from mcp_memory.storage.pure.sql import placeholders
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
 
@@ -53,6 +58,7 @@ class ObservationRepository:
         if entity_id is None:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
 
+        observations = [strip_today_date_prefix(obs) for obs in observations]
         existing = {obs.content for obs in self.for_entity(entity_id)}
         new_observations = [obs for obs in observations if obs not in existing]
 
