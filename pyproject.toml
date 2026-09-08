@@ -72,7 +72,7 @@ extend-ignore = [
     "too-many-locals",
     "non-empty-init-module",
 ]
-"tests/regen_eval_baseline.py" = ["print"]
+"tests/eval/regen_eval_baseline.py" = ["print"]
 "src/mcp_memory/migrations/schema.py" = ["line-too-long"]
 "src/mcp_memory/visualise.py" = [
     "line-too-long",

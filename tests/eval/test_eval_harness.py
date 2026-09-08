@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mcp_memory.eval import EvalReport
-from tests.eval_harness import (
+from tests.eval.eval_harness import (
     _FIXTURE_NOW,
     FLOOR,
     MeasuredChange,

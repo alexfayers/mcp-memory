@@ -5,7 +5,7 @@ separate, explicit act (`just baseline --rebaseline`) - never something a test r
 reference value recomputed from the code under test can never fail.
 
 A corrupt artefact cannot be repaired by `regen_eval_baseline`, which imports this module
-transitively; recover it with `git checkout tests/eval_baseline.json`.
+transitively; recover it with `git checkout tests/eval/eval_baseline.json`.
 """
 
 from __future__ import annotations

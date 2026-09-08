@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from mcp_memory.eval import evaluate
-from tests.eval_baseline import RANKING_METRICS, bands, load_baseline
+from tests.eval.eval_baseline import RANKING_METRICS, bands, load_baseline
 
 if TYPE_CHECKING:
     import pytest

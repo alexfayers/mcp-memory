@@ -13,7 +13,7 @@ import tempfile
 from typing import TYPE_CHECKING
 
 from mcp_memory.storage import open_writable
-from tests.eval_baseline import (
+from tests.eval.eval_baseline import (
     _DP,
     BASELINE_PATH,
     RANKING_METRICS,
@@ -21,7 +21,7 @@ from tests.eval_baseline import (
     load_baseline,
     render,
 )
-from tests.eval_fixture import _build_populated_fixture
+from tests.eval.eval_fixture import _build_populated_fixture
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence

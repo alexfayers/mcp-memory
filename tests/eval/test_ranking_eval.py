@@ -19,7 +19,8 @@ from mcp_memory import (
     eval as ranking_eval,
 )
 from mcp_memory.storage import open_readonly, open_writable
-from tests.eval_harness import (
+from tests import backdate_store, rank_of
+from tests.eval.eval_harness import (
     _FIXTURE_LATER,
     _FIXTURE_NOW,
     _build_eval_fixture,
@@ -29,8 +30,6 @@ from tests.eval_harness import (
     mark_used,
     measure_change,
 )
-
-from . import backdate_store, rank_of
 
 if TYPE_CHECKING:
     from pathlib import Path

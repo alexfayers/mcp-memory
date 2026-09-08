@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mcp_memory.eval import EvalReport
-from tests.eval_baseline import (
+from tests.eval.eval_baseline import (
     _BAND,
     BASELINE_PATH,
     RANKING_METRICS,
@@ -17,8 +17,8 @@ from tests.eval_baseline import (
     load_baseline,
     render,
 )
-from tests.eval_fixture import _K
-from tests.regen_eval_baseline import main
+from tests.eval.eval_fixture import _K
+from tests.eval.regen_eval_baseline import main
 
 if TYPE_CHECKING:
     from pathlib import Path

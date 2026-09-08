@@ -16,8 +16,7 @@ import pytest
 from mcp_memory import eval as ranking_eval
 from mcp_memory.payload import payload_size
 from mcp_memory.recall_efficiency import recall_efficiency
-
-from . import SeedEntity, rank_of, seed_store
+from tests import SeedEntity, rank_of, seed_store
 
 if TYPE_CHECKING:
     from mcp_memory.recall_status import RecallRecord
