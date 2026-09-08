@@ -621,6 +621,7 @@ class TestSearchGraph:
                     "content": "deployment pipeline",
                     "content_hash": hash_observation("deployment pipeline"),
                     "vote_score": 0,
+                    "created_at": entity["observations"][0]["created_at"],
                 }
             ],
         }

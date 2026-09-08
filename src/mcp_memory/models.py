@@ -91,6 +91,7 @@ class Observation:
     content: str
     content_hash: str
     vote_score: int = 0
+    created_at: str | None = None
 
 
 @dataclass

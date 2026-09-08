@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 import hashlib
 from pathlib import Path
 import sqlite3
@@ -13,6 +14,7 @@ from mcp_memory.migrations.runner import run_migrations
 from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
 from mcp_memory.models import MAX_VOTE_MAGNITUDE, Entity, Observation, Relation
 from mcp_memory.path_resolver import normalize_path
+from mcp_memory.server import _wire_entity
 from mcp_memory.storage import open_readonly, open_writable
 from mcp_memory.storage.connection import Connection
 from mcp_memory.storage.pure.rows import budget_observations, hash_observation
@@ -1117,6 +1119,26 @@ class TestObservations:
         assert observations[0].content == "a"
         assert observations[0].content_hash == hash_observation("a")
         assert observations[0].vote_score == 0
+
+    def test_added_observation_carries_todays_date(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        store.observations.add("proj", "e1", ["b"])
+        observation = next(o for o in store.reads.get_entity("proj", "e1").observations if o.content == "b")
+        assert observation.created_at is not None
+        assert observation.created_at[:10] == date.today().isoformat()
+
+    def test_wired_at_key_present_only_when_observation_date_differs_from_entity(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["same-day", "older"]}])
+        with store.connection.transaction():
+            store.connection.write(
+                "UPDATE observations SET created_at = datetime('now', '-2 days') WHERE content = 'older'"
+            )
+        entity = store.reads.get_entity("proj", "e1")
+        wired = {o["content"]: o for o in _wire_entity(entity)["observations"]}
+        older = next(o for o in entity.observations if o.content == "older")
+
+        assert "at" not in wired["same-day"]
+        assert wired["older"]["at"] == older.created_at[:10]
 
     def test_compact_read_yields_no_observations(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])

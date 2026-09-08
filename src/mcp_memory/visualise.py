@@ -86,6 +86,7 @@ def _serialise_observation(observation: Observation) -> dict[str, object]:
         "content": observation.content,
         "content_hash": observation.content_hash,
         "vote_score": observation.vote_score,
+        "created_at": observation.created_at,
     }
 
 

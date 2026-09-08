@@ -24,7 +24,7 @@ class ObservationRepository:
     def for_entity(self, entity_id: int) -> list[Observation]:
         """Return an entity's observations best-first (vote_score DESC, then insertion order)."""
         rows = self._conn.query_all(
-            "SELECT content, content_hash, vote_score FROM observations WHERE entity_id = ? "
+            "SELECT content, content_hash, vote_score, created_at FROM observations WHERE entity_id = ? "
             "ORDER BY vote_score DESC, id",
             (entity_id,),
         )

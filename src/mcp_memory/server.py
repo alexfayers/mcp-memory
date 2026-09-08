@@ -89,7 +89,9 @@ CREATE_ENTITIES_DESC = (
     "Optional keys: status (str), relations (list of {target, type} dicts). "
     "Set `status` via the `status` argument, never as a `STATUS:` observation. Because this "
     "overwrites, read the entity with `get_entity_with_relations` first and pass back ALL "
-    "existing observations."
+    "existing observations. "
+    "The server automatically records each observation's timestamp; do NOT prefix or embed "
+    "a date/timestamp in the observation text yourself."
 )
 SEARCH_NODES_DESC = (
     "Search entities and relations by text query within a project. "
@@ -138,7 +140,9 @@ ADD_OBSERVATIONS_DESC = (
     "Skips duplicates. Throws if the entity does not exist. Returns the content hashes of the "
     "newly-added observations, usable with vote/delete_observations/"
     "merge_observations. "
-    "To reorder existing observations by usefulness rather than add one, see vote."
+    "To reorder existing observations by usefulness rather than add one, see vote. "
+    "The server automatically records each observation's timestamp; do NOT prefix or embed "
+    "a date/timestamp in the observation text yourself."
 )
 DELETE_OBSERVATIONS_DESC = (
     "Delete specific observations from an existing entity by exact content match "
@@ -317,11 +321,13 @@ def _wire_entity(entity: Entity) -> dict[str, object]:
     A default vote score, absent status or empty content hash cost tokens on every entity in
     every read without telling the reader anything, so they are omitted rather than sent.
     """
+    entity_date = entity.created_at[:10] if entity.created_at else None
     wired: dict[str, object] = {"name": entity.name, "entity_type": entity.entity_type}
     wired["observations"] = [
         {"content": obs.content}
         | ({"content_hash": obs.content_hash} if obs.content_hash else {})
         | ({"vote_score": obs.vote_score} if obs.vote_score else {})
+        | ({"at": obs.created_at[:10]} if obs.created_at and obs.created_at[:10] != entity_date else {})
         for obs in entity.observations
     ]
     if entity.observations_omitted:

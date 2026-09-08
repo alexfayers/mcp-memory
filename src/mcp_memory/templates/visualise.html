@@ -23,6 +23,7 @@ select:hover, button:hover { border-color: #58a6ff; }
 #panel .obs:hover .obs-vote { opacity: 1; }
 #panel .obs-score { font-size: 11px; min-width: 18px; text-align: right; }
 #panel .obs-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color:#6e7681; border:1px solid #30363d; border-radius:6px; padding:0 4px; font-size:10px; flex-shrink:0; }
+#panel .obs-date { color:#484f58; font-size:10px; flex-shrink:0; }
 #panel .obs-btn { padding: 0 6px; font-size: 11px; cursor: pointer; }
 #panel .obs.armed { outline: 1px solid #58a6ff; }
 #panel .obs.armed .obs-vote { opacity: 1; }
@@ -534,6 +535,9 @@ function renderObservations(d) {
     const hash = document.createElement("span");
     hash.className = "obs-hash";
     hash.textContent = o.content_hash;
+    const date = document.createElement("span");
+    date.className = "obs-date";
+    date.textContent = o.created_at ? new Date(o.created_at + "Z").toLocaleString() : "";
     const controls = document.createElement("span");
     controls.className = "obs-vote";
     const scoreEl = document.createElement("span");
@@ -564,7 +568,7 @@ function renderObservations(d) {
     controls.append(scoreEl, up, down, merge);
     const meta = document.createElement("span");
     meta.className = "obs-meta";
-    meta.append(hash, controls);
+    meta.append(hash, date, controls);
     row.append(meta, text);
     container.append(row);
   });
