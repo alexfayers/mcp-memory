@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, TypedDict
 import anyio
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from starlette.responses import JSONResponse
 
 from . import dream_status, recall_status
@@ -594,7 +595,12 @@ def _register_recall(server: FastMCP) -> None:
     ``tools/list`` rather than advertised and then failing on every call.
     """
     if _claude_bin():
-        server.add_tool(recall, description=RECALL_DESC)
+        server.add_tool(
+            recall,
+            description=RECALL_DESC,
+            title="Recall from memory",
+            annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=False, openWorldHint=True),
+        )
 
 
 _register_recall(mcp)

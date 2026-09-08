@@ -9,6 +9,7 @@ import os
 from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from . import metrics, usefulness
 from .activity import record_tool
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from .storage import Storage
+
+_READ_ONLY_ANNOTATIONS = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 
 
 def _track[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
@@ -493,7 +496,11 @@ def _create_entities(
     return {"message": f"Created {len(entities)} entities in project '{project}'."}
 
 
-@mcp.tool(description=CREATE_ENTITIES_DESC)
+@mcp.tool(
+    description=CREATE_ENTITIES_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+    title="Create entities",
+)
 @_track
 def create_entities(
     project: str,
@@ -506,7 +513,11 @@ def create_entities(
         return {"error": str(e)}
 
 
-@mcp.tool(description=SEARCH_NODES_DESC)
+@mcp.tool(
+    description=SEARCH_NODES_DESC,
+    annotations=_READ_ONLY_ANNOTATIONS,
+    title="Search memory",
+)
 @_track
 def search_nodes(
     project: str,
@@ -543,7 +554,11 @@ def search_nodes(
         return {"error": str(e)}
 
 
-@mcp.tool(description=READ_GRAPH_DESC)
+@mcp.tool(
+    description=READ_GRAPH_DESC,
+    annotations=_READ_ONLY_ANNOTATIONS,
+    title="Read graph",
+)
 @_track
 def read_graph(
     project: str,
@@ -584,7 +599,7 @@ def _list_metadata(kind: str, project: str | None) -> dict[str, object]:
     return result
 
 
-@mcp.tool(description=LIST_METADATA_DESC)
+@mcp.tool(description=LIST_METADATA_DESC, annotations=_READ_ONLY_ANNOTATIONS, title="List metadata")
 @_track
 def list_metadata(kind: str, project: str | None = None) -> dict[str, object]:
     """List registry metadata (projects, paths, or groups)."""
@@ -608,7 +623,11 @@ def _set_metadata(project: str, kind: str, values: list[str]) -> dict[str, objec
     return {"error": f"Invalid kind '{kind}'. Must be one of: paths, groups."}
 
 
-@mcp.tool(description=SET_METADATA_DESC)
+@mcp.tool(
+    description=SET_METADATA_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Set project metadata",
+)
 @_track
 def set_metadata(project: str, kind: str, values: list[str]) -> dict[str, object]:
     """Replace registry metadata (paths or groups) for a project."""
@@ -618,7 +637,11 @@ def set_metadata(project: str, kind: str, values: list[str]) -> dict[str, object
         return {"error": str(e)}
 
 
-@mcp.tool(description=GET_PROJECT_FOR_PATH_DESC)
+@mcp.tool(
+    description=GET_PROJECT_FOR_PATH_DESC,
+    annotations=_READ_ONLY_ANNOTATIONS,
+    title="Resolve project for path",
+)
 @_track
 def get_project_for_path(path: str) -> dict[str, object]:
     """Return the project associated with a filesystem path, or null."""
@@ -629,7 +652,11 @@ def get_project_for_path(path: str) -> dict[str, object]:
         return {"error": str(e)}
 
 
-@mcp.tool(description=GET_GROUP_MEMBERS_DESC)
+@mcp.tool(
+    description=GET_GROUP_MEMBERS_DESC,
+    annotations=_READ_ONLY_ANNOTATIONS,
+    title="Get group members",
+)
 @_track
 def get_group_members(project: str) -> dict[str, object]:
     """Return the other projects sharing a group with the given project."""
@@ -640,7 +667,11 @@ def get_group_members(project: str) -> dict[str, object]:
         return {"error": str(e)}
 
 
-@mcp.tool(description=MOVE_PROJECT_ENTITIES_DESC)
+@mcp.tool(
+    description=MOVE_PROJECT_ENTITIES_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Move project entities",
+)
 @_track
 def move_project_entities(source: str, target: str) -> dict[str, object]:
     """Move all entities from one project scope into another."""
@@ -652,7 +683,11 @@ def move_project_entities(source: str, target: str) -> dict[str, object]:
         return {"error": str(e)}
 
 
-@mcp.tool(description=MERGE_ENTITIES_DESC)
+@mcp.tool(
+    description=MERGE_ENTITIES_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Merge entities",
+)
 @_track
 def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
     """Fold a duplicate entity into its canonical twin, then soft-delete the source."""
@@ -667,7 +702,11 @@ def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
         return {"error": str(e)}
 
 
-@mcp.tool(description=MERGE_OBSERVATIONS_DESC)
+@mcp.tool(
+    description=MERGE_OBSERVATIONS_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Merge observations",
+)
 @_track
 def merge_observations(project: str, entityName: str, sourceHash: str, targetHash: str) -> dict[str, object]:
     """Fold one observation into another within an entity, addressed by content_hash."""
@@ -682,7 +721,11 @@ def merge_observations(project: str, entityName: str, sourceHash: str, targetHas
         return {"error": str(e)}
 
 
-@mcp.tool(description=DELETE_PROJECT_DESC)
+@mcp.tool(
+    description=DELETE_PROJECT_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Delete project",
+)
 @_track
 def delete_project(project: str) -> dict[str, str]:
     """Delete an empty project and its registered paths."""
@@ -753,7 +796,11 @@ def _search_all_projects(
     return _prepare_read_result({"results": grouped}, result["relations"])
 
 
-@mcp.tool(description=SEARCH_ALL_PROJECTS_DESC)
+@mcp.tool(
+    description=SEARCH_ALL_PROJECTS_DESC,
+    annotations=_READ_ONLY_ANNOTATIONS,
+    title="Search all projects",
+)
 @_track
 def search_all_projects(
     query: str,
@@ -790,7 +837,11 @@ def search_all_projects(
         return {"error": str(e)}
 
 
-@mcp.tool(description=CREATE_RELATIONS_DESC)
+@mcp.tool(
+    description=CREATE_RELATIONS_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+    title="Create relations",
+)
 @_track
 def create_relations(
     project: str,
@@ -813,7 +864,11 @@ def create_relations(
         return {"error": str(e)}
 
 
-@mcp.tool(description=DELETE_ENTITY_DESC)
+@mcp.tool(
+    description=DELETE_ENTITY_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Delete entity",
+)
 @_track
 def delete_entity(
     project: str,
@@ -828,7 +883,11 @@ def delete_entity(
         return {"error": str(e)}
 
 
-@mcp.tool(description=RESTORE_ENTITY_DESC)
+@mcp.tool(
+    description=RESTORE_ENTITY_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    title="Restore deleted entity",
+)
 @_track
 def restore_entity(
     project: str,
@@ -843,7 +902,11 @@ def restore_entity(
         return {"error": str(e)}
 
 
-@mcp.tool(description=DELETE_RELATION_DESC)
+@mcp.tool(
+    description=DELETE_RELATION_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Delete relation",
+)
 @_track
 def delete_relation(
     project: str,
@@ -862,7 +925,11 @@ def delete_relation(
         return {"error": str(e)}
 
 
-@mcp.tool(description=GET_ENTITY_WITH_RELATIONS_DESC)
+@mcp.tool(
+    description=GET_ENTITY_WITH_RELATIONS_DESC,
+    annotations=_READ_ONLY_ANNOTATIONS,
+    title="Get entity",
+)
 @_track
 def get_entity_with_relations(
     project: str,
@@ -889,7 +956,11 @@ def get_entity_with_relations(
         return {"error": str(e)}
 
 
-@mcp.tool(description=ADD_OBSERVATIONS_DESC)
+@mcp.tool(
+    description=ADD_OBSERVATIONS_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    title="Add observations",
+)
 @_track
 def add_observations(
     project: str,
@@ -909,7 +980,11 @@ def add_observations(
         return {"error": str(e)}
 
 
-@mcp.tool(description=DELETE_OBSERVATIONS_DESC)
+@mcp.tool(
+    description=DELETE_OBSERVATIONS_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Delete observations",
+)
 @_track
 def delete_observations(
     project: str,
@@ -926,7 +1001,11 @@ def delete_observations(
         return {"error": str(e)}
 
 
-@mcp.tool(description=TRIM_OBSERVATIONS_TO_OUTCOME_DESC)
+@mcp.tool(
+    description=TRIM_OBSERVATIONS_TO_OUTCOME_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Trim observations to outcome",
+)
 @_track
 def trim_observations_to_outcome(project: str, name: str, keep_hashes: list[str]) -> dict[str, object]:
     """Delete all observations on an entity except those in keep_hashes."""
@@ -938,7 +1017,11 @@ def trim_observations_to_outcome(project: str, name: str, keep_hashes: list[str]
         return {"error": str(e)}
 
 
-@mcp.tool(description=RENAME_ENTITY_DESC)
+@mcp.tool(
+    description=RENAME_ENTITY_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Rename entity",
+)
 @_track
 def rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
     """Rename a single entity in place, preserving its relations and observations."""
@@ -950,7 +1033,11 @@ def rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
         return {"error": str(e)}
 
 
-@mcp.tool(description=MOVE_ENTITY_CROSS_SCOPE_DESC)
+@mcp.tool(
+    description=MOVE_ENTITY_CROSS_SCOPE_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Move entity across scopes",
+)
 @_track
 def move_entity_cross_scope(source_project: str, target_project: str, name: str) -> dict[str, object]:
     """Move an entity to another scope, dropping and returning its now-cross-scope relations."""
@@ -967,7 +1054,11 @@ def move_entity_cross_scope(source_project: str, target_project: str, name: str)
         return {"error": str(e)}
 
 
-@mcp.tool(description=SET_ENTITY_STATUS_DESC)
+@mcp.tool(
+    description=SET_ENTITY_STATUS_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    title="Set entity status",
+)
 @_track
 def set_entity_status(
     project: str,
@@ -994,7 +1085,11 @@ def set_entity_status(
         return {"error": str(e)}
 
 
-@mcp.tool(description=VOTE_DESC)
+@mcp.tool(
+    description=VOTE_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+    title="Vote on usefulness",
+)
 @_track
 def vote(
     project: str,
