@@ -298,3 +298,42 @@ class TestCmdRestart:
         with pytest.raises(SystemExit) as exc_info:
             cli._cmd_restart()
         assert exc_info.value.code == 1
+
+
+class TestInstallAntigravity:
+    def test_adds_server_when_not_registered(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+            calls.append(cmd)
+            if "list" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "other-server"})()
+            return type("R", (), {"returncode": 0, "stdout": ""})()
+
+        monkeypatch.setattr(cli.shutil, "which", lambda cmd: "/usr/bin/agy" if cmd == "agy" else None)
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        monkeypatch.setattr(cli, "_detect_service_port", lambda: "8000")
+
+        cli._cmd_install_antigravity()
+
+        assert any("add" in cmd and "memory" in cmd for cmd in calls)
+        assert "Added memory MCP server to Antigravity" in capsys.readouterr().out
+
+    def test_skips_when_already_configured(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], *args: object, **kwargs: object) -> object:
+            calls.append(cmd)
+            return type("R", (), {"returncode": 0, "stdout": "memory  http  enabled"})()
+
+        monkeypatch.setattr(cli.shutil, "which", lambda cmd: "/usr/bin/agy" if cmd == "agy" else None)
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+        cli._cmd_install_antigravity()
+
+        assert not any("add" in cmd for cmd in calls)
+        assert "already configured in Antigravity" in capsys.readouterr().out
