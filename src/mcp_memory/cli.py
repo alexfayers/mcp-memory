@@ -542,6 +542,43 @@ def _cmd_install_codex() -> None:
     _register_codex_server(codex_bin, "memory-agent", f"http://127.0.0.1:{get_agent_port()}/mcp")
 
 
+def _register_antigravity_server(agy_bin: str, name: str, url: str) -> None:
+    """Add one HTTP MCP server to Antigravity if it is not already registered."""
+    result = subprocess.run(
+        [agy_bin, "mcp", "list"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and name in result.stdout:
+        print(f"{name} MCP server already configured in Antigravity.")
+    else:
+        subprocess.run([agy_bin, "mcp", "add", name, url], check=False)
+        print(f"Added {name} MCP server to Antigravity (url: {url}).")
+
+
+def _cmd_install_antigravity() -> None:
+    """Register the memory data server in Antigravity."""
+    agy_bin = shutil.which("agy")
+    url = f"http://localhost:{_detect_service_port()}/mcp"
+    if agy_bin:
+        _register_antigravity_server(agy_bin, "memory", url)
+    else:
+        mcp_path = Path.home() / ".gemini" / "config" / "mcp_config.json"
+        mcp_path.parent.mkdir(parents=True, exist_ok=True)
+        config: dict[str, object] = {}
+        if mcp_path.exists() and mcp_path.stat().st_size > 0:
+            try:
+                config = json.loads(mcp_path.read_text(encoding="utf-8"))
+            except Exception:
+                config = {}
+        servers_obj = config.setdefault("mcpServers", {})
+        if isinstance(servers_obj, dict):
+            servers_obj["memory"] = {"serverUrl": url, "disabled": False}
+        mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        print(f"Added memory MCP server to Antigravity config {mcp_path}")
+
+
 def _default_copilot_mcp_config_path() -> Path:
     """Return the default VS Code MCP config path for this environment."""
     home = Path.home()
@@ -702,7 +739,11 @@ def _build_parser() -> argparse.ArgumentParser:
     import_cmd.add_argument("--dry-run", action="store_true")
 
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
-    install.add_argument("target", choices=["kiro", "claude-code", "codex", "copilot"], help="Agent to install for.")
+    install.add_argument(
+        "target",
+        choices=["kiro", "claude-code", "codex", "copilot", "antigravity"],
+        help="Agent to install for.",
+    )
     install.add_argument(
         "agent_config",
         nargs="?",
@@ -734,6 +775,8 @@ def _cmd_install(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
         _cmd_install_codex()
     elif args.target == "copilot":
         _cmd_install_copilot(args)
+    elif args.target == "antigravity":
+        _cmd_install_antigravity()
     else:
         if not args.agent_config:
             parser.error("agent_config is required for kiro")
