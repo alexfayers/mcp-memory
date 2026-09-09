@@ -104,8 +104,8 @@ class Maintenance:
             )
         return cursor.rowcount
 
-    def run_startup_sweeps(self) -> None:
-        """Run best-effort startup maintenance in a fixed order, tolerating lock contention.
+    def run_sweeps(self) -> None:
+        """Run best-effort maintenance in a fixed order, tolerating lock contention.
 
         Order: prune tool-call telemetry, prune surfaced-entity telemetry, then - each gated
         by its own config flag - orphan GC, soft-delete purge, and stale-entity archival. A
@@ -124,7 +124,7 @@ class Maintenance:
             pass
 
     def _run_gated_sweeps(self) -> None:
-        """Run the config-gated startup sweeps: orphan GC, soft-delete purge, and stale archival."""
+        """Run the config-gated sweeps: orphan GC, soft-delete purge, and stale archival."""
         if get_gc_enabled():
             self._gc_downvoted_orphans()
         if get_purge_enabled():

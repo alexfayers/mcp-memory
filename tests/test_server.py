@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1035,3 +1036,63 @@ class TestImplicitUsefulnessAutoVote:
         server.add_observations("proj", "task/a", ["follow-up"])
 
         assert server_db.reads.get_entity("proj", "task/a").vote_score == 0
+
+
+class TestSweepLoop:
+    def test_cancels_cleanly_and_runs_repeatedly(self, server_db: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "get_sweep_interval_seconds", lambda: 0.0)
+        calls: list[bool] = []
+        monkeypatch.setattr(server_db.maintenance, "run_sweeps", lambda: calls.append(True))
+
+        async def drive() -> None:
+            task = asyncio.create_task(server._sweep_loop())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(drive())
+        assert len(calls) >= 2
+
+    def test_exception_from_one_iteration_does_not_kill_the_loop(
+        self, server_db: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(server, "get_sweep_interval_seconds", lambda: 0.0)
+        calls: list[bool] = []
+
+        def _run_sweeps() -> None:
+            calls.append(True)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(server_db.maintenance, "run_sweeps", _run_sweeps)
+
+        async def drive() -> None:
+            task = asyncio.create_task(server._sweep_loop())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(drive())
+        assert len(calls) >= 2
+
+
+class TestServe:
+    @staticmethod
+    def _wire_serve(monkeypatch: pytest.MonkeyPatch, started: list[str]) -> None:
+        async def fake_sweep_loop() -> None:
+            started.append("sweeping")
+            await asyncio.sleep(3600)
+
+        async def fake_serve_http() -> None:
+            await asyncio.sleep(0.02)
+
+        monkeypatch.setattr(server, "_sweep_loop", fake_sweep_loop)
+        monkeypatch.setattr(server.mcp, "run_streamable_http_async", fake_serve_http)
+
+    def test_starts_and_cancels_sweep_loop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        started: list[str] = []
+        self._wire_serve(monkeypatch, started)
+        asyncio.run(server._serve())
+        assert started == ["sweeping"]

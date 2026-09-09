@@ -504,7 +504,21 @@ class TestResolvedProjectSet:
         def _boom(_path: object) -> Storage:
             raise OSError("db unavailable")
 
+        monkeypatch.setattr("mcp_memory.hooks.plugin.open_readonly", _boom)
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        assert _resolved_project_set([str(repo)]) == ["global", "acme"]
+
+    def test_never_opens_a_writable_connection(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _boom(_path: object) -> Storage:
+            raise AssertionError("_resolved_project_set must not open a writable connection")
+
         monkeypatch.setattr("mcp_memory.hooks.plugin.open_writable", _boom)
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        assert _resolved_project_set([str(repo)]) == ["global", "acme"]
+
+    def test_missing_db_file_degrades_to_global_and_repo(self, tmp_path: Path) -> None:
         repo = tmp_path / "acme"
         repo.mkdir()
         assert _resolved_project_set([str(repo)]) == ["global", "acme"]

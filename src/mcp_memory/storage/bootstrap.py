@@ -40,10 +40,12 @@ def open_writable(path: str | Path) -> Storage:
     """Open (or create) a writable database and bring it fully up to date.
 
     On return: the parent directory exists, the connection's six pragmas are set, every
-    pending migration has run, every observation has a content_hash (required for correctness,
-    so this runs unconditionally), and the config-gated startup sweeps - telemetry pruning,
-    orphan GC, soft-delete purge, stale-entity archival - have been attempted best-effort under
-    a single OperationalError swallow, since they may lose a lock race with another process.
+    pending migration has run, and every observation has a content_hash (required for
+    correctness, so this runs unconditionally). Does NOT run the maintenance sweeps -
+    telemetry pruning, orphan GC, soft-delete purge, stale-entity archival - since those
+    are best-effort periodic work that belongs to the long-lived server process, not to
+    every connection open; the caller (server.py's background loop) is responsible for
+    invoking Storage.maintenance.run_sweeps() on its own cadence.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,11 +53,10 @@ def open_writable(path: str | Path) -> Storage:
     run_migrations(connection.raw)
     storage = Storage(connection)
     storage.maintenance.backfill_observation_hashes()
-    storage.maintenance.run_startup_sweeps()
     return storage
 
 
 def open_readonly(path: str | Path) -> Storage:
-    """Open an existing database read-only, skipping migrations and startup maintenance."""
+    """Open an existing database read-only, skipping migrations and maintenance sweeps."""
     connection = Connection.open_readonly(path)
     return Storage(connection)

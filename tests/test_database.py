@@ -572,6 +572,7 @@ class TestPruneSurfaced:
         first.connection.close()
 
         reopened = open_writable(db_path)
+        reopened.maintenance.run_sweeps()
         count = reopened.connection.query_one("SELECT COUNT(*) AS n FROM surfaced_entities")["n"]
         assert count == 0
         reopened.connection.close()
@@ -674,6 +675,7 @@ class TestArchiveStale:
         first.connection.close()
 
         reopened = open_writable(db_path)
+        reopened.maintenance.run_sweeps()
         assert reopened.reads.get_entity("proj", "e1").status == "archived"
         reopened.connection.close()
 
@@ -690,6 +692,7 @@ class TestArchiveStale:
         first.connection.close()
 
         reopened = open_writable(db_path)
+        reopened.maintenance.run_sweeps()
         assert reopened.reads.get_entity("proj", "e1").status == "resolved"
         reopened.connection.close()
 
@@ -1815,6 +1818,7 @@ class TestGcDownvotedOrphans:
         seed.connection.close()
         monkeypatch.setenv("MCP_MEMORY_GC_ENABLED", "true")
         reopened = open_writable(db_path)
+        reopened.maintenance.run_sweeps()
         assert self._is_reaped(reopened, "proj", "e1")
 
 

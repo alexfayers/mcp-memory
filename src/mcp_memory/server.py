@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
+import contextlib
 import functools
 import inspect
+import logging
 import os
 from typing import TYPE_CHECKING
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from . import metrics, usefulness
 from .activity import record_tool
-from .config import get_db_path
+from .config import get_db_path, get_sweep_interval_seconds
 from .models import (
     VALID_RELATION_TYPES,
     Entity,
@@ -29,6 +33,7 @@ if TYPE_CHECKING:
     from .storage import Storage
 
 _READ_ONLY_ANNOTATIONS = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+logger = logging.getLogger(__name__)
 
 
 def _track[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
@@ -1119,9 +1124,42 @@ def vote(
         return {"error": str(e)}
 
 
+async def _sweep_loop() -> None:
+    """Run the maintenance sweeps once on start, then periodically forever.
+
+    A stray exception from one iteration (anything beyond run_sweeps' own
+    sqlite3.OperationalError swallow) must not permanently kill maintenance for the rest
+    of the process's life, so each call is individually guarded and logged rather than
+    left to propagate out of the loop.
+    """
+    while True:
+        try:
+            _get_db().maintenance.run_sweeps()
+        except Exception:
+            logger.exception("Maintenance sweep failed")
+        await asyncio.sleep(get_sweep_interval_seconds())
+
+
+async def _serve() -> None:
+    """Serve over streamable HTTP, running the maintenance sweep loop alongside.
+
+    The sweep loop is an explicit background task rather than a FastMCP ``lifespan``:
+    this server runs with ``stateless_http=True``, where a lifespan-attached task is
+    spawned and cancelled per client session rather than once globally, which is wrong
+    for a singleton periodic job. Cancelled cleanly on shutdown.
+    """
+    sweeper = asyncio.create_task(_sweep_loop())
+    try:
+        await mcp.run_streamable_http_async()
+    finally:
+        sweeper.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweeper
+
+
 def main() -> None:
     """Run the MCP server with streamable HTTP transport."""
-    mcp.run(transport="streamable-http")
+    anyio.run(_serve)
 
 
 if __name__ == "__main__":

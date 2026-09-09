@@ -31,7 +31,7 @@ from mcp_memory.hooks.tracker import (
     should_block,
 )
 from mcp_memory.path_resolver import normalize_path, resolve_project_for_path
-from mcp_memory.storage import open_writable
+from mcp_memory.storage import open_readonly, open_writable
 from mcp_memory.storage.pure.rows import strip_today_date_prefix
 
 if TYPE_CHECKING:
@@ -404,7 +404,7 @@ def _resolved_project_set(workspace_roots: list[str]) -> list[str]:
     repo_name = _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
     projects.append(repo_name)
     try:
-        db = open_writable(get_db_path())
+        db = open_readonly(get_db_path())
         projects.extend(db.projects.group_members(repo_name))
     except (sqlite3.Error, OSError):
         pass

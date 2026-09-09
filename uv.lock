@@ -137,6 +137,7 @@ dependencies = [
     { name = "bashlex" },
     { name = "gitpython" },
     { name = "platformdirs" },
+    { name = "pydantic" },
 ]
 
 [package.metadata]
@@ -144,6 +145,7 @@ requires-dist = [
     { name = "bashlex" },
     { name = "gitpython" },
     { name = "platformdirs" },
+    { name = "pydantic", specifier = ">=2" },
 ]
 
 [package.metadata.requires-dev]

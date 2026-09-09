@@ -24,6 +24,7 @@ _DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
 _DEFAULT_PURGE_GRACE_DAYS = "30"
 _DEFAULT_SURFACED_RETENTION_DAYS = "-1"
 _DEFAULT_CALL_METRICS_RETENTION_DAYS = "90"
+_DEFAULT_SWEEP_INTERVAL_SECONDS = "43200"
 _DEFAULT_EVAL_CACHE_TTL_SECONDS = "300"
 _DEFAULT_MAX_OBSERVATION_CHARS = "2000"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -252,6 +253,11 @@ def get_call_metrics_enabled() -> bool:
 def get_call_metrics_retention_days() -> int:
     """Return how long tool_calls usage telemetry is retained before pruning."""
     return int(os.environ.get("MCP_MEMORY_CALL_METRICS_RETENTION_DAYS", _DEFAULT_CALL_METRICS_RETENTION_DAYS))
+
+
+def get_sweep_interval_seconds() -> float:
+    """Return how often the server's background loop runs the maintenance sweeps."""
+    return float(os.environ.get("MCP_MEMORY_SWEEP_INTERVAL_SECONDS", _DEFAULT_SWEEP_INTERVAL_SECONDS))
 
 
 def get_eval_cache_ttl_seconds() -> int:

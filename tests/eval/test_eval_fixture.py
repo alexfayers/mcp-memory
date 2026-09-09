@@ -241,6 +241,7 @@ class TestFullFixture:
 
         monkeypatch.setenv("MCP_MEMORY_ARCHIVE_ENABLED", "true")
         swept = open_writable(copy_path)
+        swept.maintenance.run_sweeps()
         try:
             for name in unprotected_resolved:
                 row = swept.connection.query_one("SELECT status FROM entities WHERE name = ?", (name,))
