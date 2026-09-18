@@ -17,12 +17,12 @@ description: Guide {{agent}} on using mcp-memory for persistent memory.
 - `<repo-name>`: everything project-specific - the `project/` entity, features, tasks, architecture, API contracts, invariants, gotchas, TODOs.
 - MUST NOT put project-summary entities or workspace-specific facts (repo names, paths, workspace rules, tool configs) in `global`.
 - MUST verify a found entity's scope matches its subject before appending - a wrong scope usually comes from a fallback/basename scope, not a new entity.
-- MUST call `list_metadata(kind="paths", ...)` before needing a project's location, and MUST search memory for any "what/where is X" - both BEFORE any `find`/`grep`/`ls`. Fall back to a live search only once the lookup comes back empty or stale.
-- Where `memory` is unavailable, MUST run `mcp-memory restart`, then ask the user to reload the MCP connection and wait. MUST NOT run the `mcp-memory` binary bare, nor `launchctl kickstart`/`systemctl restart` it - it is a managed service, and running the binary leaves a stray process holding its port that dies with the session.
+- MUST call `list_metadata(kind="paths", ...)` and search memory for any "what/where is X" before any `find`/`grep`/`ls`. Fall back to a live search only once empty or stale.
+- Where `memory` is unavailable, MUST run `mcp-memory restart`, then ask the user to reload the MCP connection and wait. MUST NOT run the `mcp-memory` binary bare, nor `launchctl kickstart`/`systemctl restart` it - it is a managed service; running the binary bare leaves a stray process holding its port.
 
 ## Before starting a task
 
-MUST follow every step, every task, before responding. `read_graph` alone returns recent entities only.
+MUST follow every step before responding - `read_graph` alone only returns recent entities.
 
 1. `read_graph` on `global`, then on `<repo-name>`.
 2. `search_nodes` on both: message keywords, `user-preferences` (always), the project name, relevant `pattern/` entities, current files, feature and ticket IDs. Prefer a `status="in-progress"` filter over text search.
@@ -39,6 +39,7 @@ MUST follow every step, every task, before responding. `read_graph` alone return
 - A confirmed external state change (PR merged, deployed, ticket closed) MUST update the entity in the same response.
 - Hook reminders arrive as `<hook_context>` blocks - MUST write on the NEXT tool call, never a placeholder shell command.
 - SHOULD vote as you retrieve - up for helpful, down for stale or misleading.
+- When presenting an entity's vote_score to the user, render it as star symbols (e.g. ★3) rather than the raw number.
 
 ## After completing a task or milestone
 
@@ -46,7 +47,7 @@ Before you {{TOOL_COMPLETE}}, MUST record the outcome for each significant unit 
 
 ## Before recommending from memory
 
-- A memory's "full list of X" or recorded measurement is a synthesis from when it was written, not a live fact - MUST re-derive it against the live source before quoting, especially on pushback.
+- A memory's "full list of X" or measurement is a synthesis from when written, not a live fact - MUST re-derive against the live source before quoting, especially on pushback.
 - Weight staleness by type: `user-preferences` rarely changes; a `pattern` or `knowledge` entity pointing at a source reflects only what was true when written.
 - MUST verify a costly-to-be-wrong fact against the live source first - a cheap Haiku delegate can confirm it.
 - MUST surface any conflict with live observations rather than silently picking a side.
