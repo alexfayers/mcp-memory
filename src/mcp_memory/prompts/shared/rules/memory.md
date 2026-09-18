@@ -18,6 +18,7 @@ description: Guide {{agent}} on using mcp-memory for persistent memory.
 - Each piece of work and user follow-up MUST be its own related `task/` entity, created before code.
 - MUST record a confirmed external change (merge, deploy, close) in the same response; plans MUST include memory updates.
 - Subagents MUST NOT write; main writes after a fresh read.
+- MUST render a presented `vote_score` as stars (e.g. ★3), not the raw number.
 - Before you {{TOOL_COMPLETE}}: record what changed, why, caveats, follow-ups; reusable lessons to `global`; set task `resolved`.
 
 ## Recommending
