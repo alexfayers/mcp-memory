@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+defaults:
+  run:
+    working-directory: mcp-memory
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mcp-memory
+      - uses: actions/checkout@v4
+        with:
+          repository: alexfayers/cline-hooks
+          path: cline-hooks
+      - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: just lint-check
+
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mcp-memory
+      - uses: actions/checkout@v4
+        with:
+          repository: alexfayers/cline-hooks
+          path: cline-hooks
+      - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: just type-check
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mcp-memory
+      - uses: actions/checkout@v4
+        with:
+          repository: alexfayers/cline-hooks
+          path: cline-hooks
+      - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: just test -vv --cov=.
+      - uses: py-cov-action/python-coverage-comment-action@v4.3
+        with:
+          COVERAGE_PATH: mcp-memory
+          ANNOTATE_MISSING_LINES: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
