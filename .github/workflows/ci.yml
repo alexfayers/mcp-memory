@@ -70,3 +70,20 @@ jobs:
           ANNOTATE_MISSING_LINES: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+  pr-template-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --test .github/scripts/check-pr-template.test.js
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const { check } = require('./.github/scripts/check-pr-template.js')
+            await check({ github, context, core })
