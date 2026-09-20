@@ -161,10 +161,11 @@ The 17 memory tools to deny - every mutating one, plus `vote`: `create_entities`
 `delete_project`, `create_relations`, `delete_entity`, `delete_relation`,
 `add_observations`, `delete_observations`, `set_entity_status`,
 `restore_entity`, `trim_observations_to_outcome`, `rename_entity`,
-`move_entity_cross_scope`, `vote`. Of these, `delete_entity`, `delete_relation`,
-`delete_project` and the overwriting `create_entities` are hard-destructive;
-`merge_entities` removes its source only by *soft-delete*, so that removal is
-reversible via `restore_entity` until a grace-window purge.
+`move_entity_cross_scope`, `vote`. Of these, `delete_entity`, `delete_relation`
+and `delete_project` are hard-destructive; `merge_entities` removes its source
+only by *soft-delete*, so that removal is reversible via `restore_entity`
+until a grace-window purge. `create_entities` never overwrites - it raises if
+the entity already exists, so it carries no destructive risk of its own.
 `_MUTATING_MEMORY_TOOLS` in `agent.py` is the authoritative list, and a test
 asserts it partitions the registered tool names with `_READ_ONLY_MEMORY_TOOLS`,
 so a newly added mutating tool cannot silently reach the agent.

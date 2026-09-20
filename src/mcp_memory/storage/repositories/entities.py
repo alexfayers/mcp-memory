@@ -49,7 +49,7 @@ class EntityRepository:
             )
 
     def create(self, project: str, entities: list[dict[str, object]]) -> None:
-        """Upsert entities with observations, overwriting existing observations."""
+        """Create new entities with observations. Raises if any name already exists."""
         project_id = get_or_create_project_id(self._conn, project)
 
         with self._conn.transaction():
@@ -61,25 +61,21 @@ class EntityRepository:
                 observations = [strip_today_date_prefix(obs) for obs in observations]
                 status = entity_data.get("status")
 
+                if get_entity_id(self._conn, str(name), project_id) is not None:
+                    raise ValueError(
+                        f"Entity '{name}' already exists in project '{project}'. "
+                        "create_entities only creates new entities - use add_observations to "
+                        "append, or another update method to modify it."
+                    )
+
                 entity_type_id = get_or_create_entity_type_id(self._conn, str(entity_type))
-                existing_id = get_entity_id(self._conn, str(name), project_id)
+                self.purge_tombstone(str(name), project, project_id)
 
-                if existing_id is None:
-                    self.purge_tombstone(str(name), project, project_id)
-
-                if existing_id is not None:
-                    self._conn.write(
-                        "UPDATE entities SET entity_type_id = ?, status = ? WHERE id = ?",
-                        (entity_type_id, status, existing_id),
-                    )
-                    self._conn.write("DELETE FROM observations WHERE entity_id = ?", (existing_id,))
-                    entity_id = existing_id
-                else:
-                    cursor = self._conn.write(
-                        "INSERT INTO entities (name, entity_type_id, project_id, status) VALUES (?, ?, ?, ?)",
-                        (name, entity_type_id, project_id, status),
-                    )
-                    entity_id = cast("int", cursor.lastrowid)
+                cursor = self._conn.write(
+                    "INSERT INTO entities (name, entity_type_id, project_id, status) VALUES (?, ?, ?, ?)",
+                    (name, entity_type_id, project_id, status),
+                )
+                entity_id = cast("int", cursor.lastrowid)
 
                 self._conn.write_many(
                     "INSERT INTO observations (entity_id, content, content_hash) VALUES (?, ?, ?)",

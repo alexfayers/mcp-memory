@@ -176,7 +176,7 @@ All tools require a `project` parameter to scope data.
 
 ### create_entities
 
-Create or update entities with observations. Overwrites all existing observations for an entity - use `add_observations` to append instead. Non-exempt entity types (everything except `project`) must include at least one relation. Entity names must start with their type prefix (e.g. `task/`, `feature/`), and a `project` entity must be named exactly `project/<project>` (one root per scope).
+Create new entities with observations. Raises if any entity name already exists - use `add_observations` to append instead. Non-exempt entity types (everything except `project`) must include at least one relation. Entity names must start with their type prefix (e.g. `task/`, `feature/`), and a `project` entity must be named exactly `project/<project>` (one root per scope).
 
 ### add_observations
 
