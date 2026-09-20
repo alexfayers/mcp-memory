@@ -42,10 +42,11 @@ class TestCreateEntities:
         )
         assert store.reads.get_entity("proj", "e1").status == "planned"
 
-    def test_upsert_overwrites_observations(self, store: Storage) -> None:
+    def test_create_existing_entity_raises(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["old"]}])
-        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["new"]}])
-        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["new"]
+        with pytest.raises(ValueError, match="already exists"):
+            store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["new"]}])
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["old"]
 
     def test_project_isolation(self, store: Storage) -> None:
         store.entities.create("p1", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
@@ -178,8 +179,9 @@ class TestProjectCaseInsensitivity:
 
     def test_case_insensitive_project_does_not_duplicate(self, store: Storage) -> None:
         store.entities.create("Proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
-        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["b"]}])
-        assert obs_contents(store.reads.get_entity("PROJ", "e1")) == ["b"]
+        store.entities.create("proj", [{"name": "e2", "entityType": "task", "observations": ["b"]}])
+        assert obs_contents(store.reads.get_entity("PROJ", "e1")) == ["a"]
+        assert obs_contents(store.reads.get_entity("PROJ", "e2")) == ["b"]
 
 
 class TestMigrations:

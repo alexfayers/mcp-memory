@@ -85,9 +85,10 @@ _MAX_OBSERVATION_CHARS_DOC = (
 )
 _RELATIONS_WIRE_DOC = ' Relations are returned as "source relation-type target" strings.'
 CREATE_ENTITIES_DESC = (
-    "Create or update entities with observations in the knowledge graph. "
+    "Create new entities with observations in the knowledge graph. "
     "All data is scoped to the given project. "
-    "create_entities OVERWRITES all observations; use add_observations to append safely. "
+    "Raises if any entity name already exists in that project - use add_observations to "
+    "append to an existing entity instead. "
     "Valid entity types: project, feature, task, user-preferences, pattern, knowledge. "
     "Each entity name MUST start with its type prefix (e.g. task/<id>, feature/<area>); "
     "a 'project' entity MUST be named exactly 'project/<project>' (one root per scope). "
@@ -95,9 +96,7 @@ CREATE_ENTITIES_DESC = (
     "least one relation. "
     "Each entity dict must have keys: name (str), entityType (str), observations (list[str]). "
     "Optional keys: status (str), relations (list of {target, type} dicts). "
-    "Set `status` via the `status` argument, never as a `STATUS:` observation. Because this "
-    "overwrites, read the entity with `get_entity_with_relations` first and pass back ALL "
-    "existing observations. "
+    "Set `status` via the `status` argument, never as a `STATUS:` observation. "
     "The server automatically records each observation's timestamp; do NOT prefix or embed "
     "a date/timestamp in the observation text yourself."
 )
