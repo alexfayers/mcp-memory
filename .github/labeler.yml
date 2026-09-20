@@ -1,0 +1,19 @@
+rules:
+  - changed-files:
+      - any-glob-to-any-file: 'src/mcp_memory/prompts/*/rules/**'
+
+skills:
+  - changed-files:
+      - any-glob-to-any-file: 'src/mcp_memory/prompts/*/skills/**'
+
+tooling:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/**/*.py'
+          - 'pyproject.toml'
+          - 'justfile'
+          - '.github/**'
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: 'tests/**'
