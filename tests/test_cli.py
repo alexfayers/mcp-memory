@@ -118,6 +118,36 @@ class TestRegisterCopilotServer:
         assert data["servers"]["memory"]["url"] == "http://localhost:8000/mcp"
 
 
+class TestRegisterPiServer:
+    def test_adds_direct_mcp_prefixed_servers(self, tmp_path: cli.Path) -> None:
+        mcp_path = tmp_path / "agent" / "mcp.json"
+        cli._register_pi_server(mcp_path, "memory", "http://localhost:8000/mcp")
+
+        data = json.loads(mcp_path.read_text(encoding="utf-8"))
+        assert data["mcpServers"]["memory"] == {
+            "url": "http://localhost:8000/mcp",
+            "directTools": True,
+            "toolPrefix": "mcp",
+        }
+
+    def test_keeps_existing_servers_and_settings(self, tmp_path: cli.Path) -> None:
+        mcp_path = tmp_path / "mcp.json"
+        existing = {"settings": {"toolPrefix": "server"}, "mcpServers": {"memory": {"url": "http://custom/mcp"}}}
+        mcp_path.write_text(json.dumps(existing), encoding="utf-8")
+
+        cli._register_pi_server(mcp_path, "memory", "http://localhost:8000/mcp")
+        cli._register_pi_server(mcp_path, "memory-agent", "http://localhost:8100/mcp")
+        data = json.loads(mcp_path.read_text(encoding="utf-8"))
+
+        assert data["settings"] == existing["settings"]
+        assert data["mcpServers"]["memory"] == {"url": "http://custom/mcp"}
+        assert data["mcpServers"]["memory-agent"]["url"] == "http://localhost:8100/mcp"
+
+    def test_config_path_honours_agent_dir_override(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi"))
+        assert cli._pi_mcp_config_path() == tmp_path / "pi" / "mcp.json"
+
+
 class TestCopilotPathSelection:
     def test_prefers_local_vscode_path_before_wsl_fallback(
         self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch

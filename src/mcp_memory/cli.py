@@ -644,6 +644,46 @@ def _cmd_install_copilot(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _pi_mcp_config_path() -> Path:
+    """Return pi-mcp-adapter's global config, under `$PI_CODING_AGENT_DIR` or ~/.pi/agent."""
+    agent_dir = os.environ.get("PI_CODING_AGENT_DIR")
+    return (Path(agent_dir).expanduser() if agent_dir else Path.home() / ".pi" / "agent") / "mcp.json"
+
+
+def _register_pi_server(mcp_path: Path, name: str, url: str) -> None:
+    """Add one HTTP MCP server entry to pi-mcp-adapter's mcp.json if missing.
+
+    Tools are registered directly under the `mcp__` prefix so hooks see each
+    memory call by name rather than through the adapter's proxy tool.
+    """
+    config: dict[str, object] = load_jsonc_object(mcp_path) if mcp_path.exists() and mcp_path.stat().st_size > 0 else {}
+    servers_obj = config.setdefault("mcpServers", {})
+    if not isinstance(servers_obj, dict):
+        msg = f"error: {mcp_path} has non-object 'mcpServers'"
+        raise TypeError(msg)
+
+    servers: dict[str, object] = servers_obj
+    if name in servers:
+        print(f"{name} MCP server already configured in Pi.")
+        return
+
+    servers[name] = {"url": url, "directTools": True, "toolPrefix": "mcp"}
+    mcp_path.parent.mkdir(parents=True, exist_ok=True)
+    mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(f"Added {name} MCP server to Pi (url: {url}).")
+
+
+def _cmd_install_pi() -> None:
+    """Register memory servers in pi-mcp-adapter's global MCP config."""
+    mcp_path = _pi_mcp_config_path()
+    try:
+        _register_pi_server(mcp_path, "memory", f"http://localhost:{_detect_service_port()}/mcp")
+        _register_pi_server(mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
@@ -741,7 +781,7 @@ def _build_parser() -> argparse.ArgumentParser:
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument(
         "target",
-        choices=["kiro", "claude-code", "codex", "copilot", "antigravity"],
+        choices=["kiro", "claude-code", "codex", "copilot", "antigravity", "pi"],
         help="Agent to install for.",
     )
     install.add_argument(
@@ -777,6 +817,8 @@ def _cmd_install(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
         _cmd_install_copilot(args)
     elif args.target == "antigravity":
         _cmd_install_antigravity()
+    elif args.target == "pi":
+        _cmd_install_pi()
     else:
         if not args.agent_config:
             parser.error("agent_config is required for kiro")
