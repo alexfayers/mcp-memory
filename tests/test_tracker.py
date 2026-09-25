@@ -58,3 +58,15 @@ class TestReset:
             tracker.increment("t1")
         tracker.reset("t1")
         assert tracker.should_block("t1") is False
+
+
+class TestClear:
+    def test_clear_removes_scope_blocked_entry(self) -> None:
+        tracker.mark_scope_blocked("t1", "some-project")
+        tracker.clear("t1")
+        assert tracker.has_scope_blocked("t1", "some-project") is False
+
+    def test_clear_removes_agent_scoped_entries(self) -> None:
+        tracker.mark_scope_blocked("t1:agent-a", "some-project")
+        tracker.clear("t1")
+        assert tracker.has_scope_blocked("t1:agent-a", "some-project") is False
