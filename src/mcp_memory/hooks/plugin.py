@@ -14,7 +14,7 @@ import sqlite3
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from cline_hooks.core.plugin import HookResult, HooksPlugin
+from cline_hooks.core.plugin import HookResult, HooksPlugin, is_subagent
 
 from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
 from mcp_memory.hooks.review_tracker import (
@@ -151,17 +151,6 @@ def _file_edit_tool_names() -> frozenset[str]:
 def _is_file_edit(tool_name: str) -> bool:
     """Return True if a tool call is a reduced-weight file-edit operation."""
     return _extract_mcp_suffix(tool_name) in _file_edit_tool_names()
-
-
-def _is_subagent(agent_type: str) -> bool:
-    """Return True if running inside a spawned subagent (any non-empty agent type).
-
-    Memory-persistence discipline is a main-thread concern: a subagent's findings
-    return to its parent, which persists them. Hard-blocking a subagent only
-    deadlocks it (or drives junk gate-satisfying writes), so the block is never
-    applied to subagents - only the main agent loop, which has no agent type.
-    """
-    return bool(agent_type)
 
 
 class _ReminderChance:
@@ -668,7 +657,7 @@ class MemoryPlugin(HooksPlugin):
             return self._check_memory_write(task_id, tool_name, parameters)
         if _is_memory_read(tool_name, parameters):
             return None
-        if _is_subagent(agent_type):
+        if is_subagent(kwargs):
             return None
         return _check_block(task_id, self._project_scope)
 
@@ -687,7 +676,7 @@ class MemoryPlugin(HooksPlugin):
             return self._check_memory_write(task_id, "use_mcp_tool", params)
         if mcp_tool_name in _MEMORY_READ_TOOL_NAMES:
             return None
-        if _is_subagent(agent_type):
+        if is_subagent(kwargs):
             return None
         return _check_block(task_id, self._project_scope)
 
@@ -728,7 +717,7 @@ class MemoryPlugin(HooksPlugin):
 
     def _on_post_tool_use(self, **kwargs: object) -> HookResult | None:
         agent_type = str(kwargs.get("agent_type", ""))
-        if _is_exempt_agent(agent_type) or _is_subagent(agent_type):
+        if _is_exempt_agent(agent_type) or is_subagent(kwargs):
             return None
         task_id = str(kwargs.get("task_id", ""))
         tool_name = str(kwargs.get("tool_name", ""))
