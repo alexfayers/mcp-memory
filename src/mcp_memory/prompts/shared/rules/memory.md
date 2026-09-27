@@ -2,59 +2,24 @@
 description: Guide {{agent}} on using mcp-memory for persistent memory.
 ---
 
-# Memory Usage with mcp-memory
+# mcp-memory
 
-- `memory` MCP server is available. Each tool's schema documents its mechanics; this file is policy only.
-- Tools MAY be deferred - `ToolSearch` for `mcp__memory__*` before the first call if unavailable.
-- All tools take `project`: `global` (cross-project) or `<repo-name>`. Use in both PLAN and ACT mode; no need to announce it.
-- MUST update memory as you progress and before completing, never batched at the end.
-- Entity naming, task discipline, relation types and observation hygiene live in the `memory-usage` skill - MUST load it before creating or restructuring entities.
-- The optional `memory-agent` server's `recall(query)` absorbs heavy multi-step recall. MUST use it rather than a second broad search on one question, or for a result too large to fit; use `search_nodes` for a targeted lookup. Ignore if absent.
+- `global`: preferences, patterns, cross-project knowledge - never project summaries, repos, paths, configs. `<repo-name>`: the rest. MUST match an entity's scope to its subject before appending.
+- Locating a repo or file: MUST check `list_metadata(kind="paths")` and memory before `find`/`grep`/`ls`; MUST register an unmapped repo or worktree via `set_metadata(kind="paths")`.
+- Server down: MUST run `mcp-memory restart`, ask the user to reload MCP; never run the binary bare or via `launchctl`/`systemctl`.
 
-## Project scopes
+## Start
 
-- `global`: user preferences, reusable patterns, cross-project knowledge. Update after any change (note failures), new user info, or insight gained.
-- `<repo-name>`: everything project-specific - the `project/` entity, features, tasks, architecture, API contracts, invariants, gotchas, TODOs.
-- MUST NOT put project-summary entities or workspace-specific facts (repo names, paths, workspace rules, tool configs) in `global`.
-- MUST verify a found entity's scope matches its subject before appending - a wrong scope usually comes from a fallback/basename scope, not a new entity.
-- MUST call `list_metadata(kind="paths", ...)` and search memory for any "what/where is X" before any `find`/`grep`/`ls`. Fall back to a live search only once empty or stale.
-- Where `memory` is unavailable, MUST run `mcp-memory restart`, then ask the user to reload the MCP connection and wait. MUST NOT run the `mcp-memory` binary bare, nor `launchctl kickstart`/`systemctl restart` it - it is a managed service; running the binary bare leaves a stray process holding its port.
+`read_graph` then `search_nodes` on `global` and `<repo-name>` (keywords, `user-preferences`, project, `pattern/`s, files, ticket IDs, `status="in-progress"`); `get_entity_with_relations` on hits and `project/<repo-name>` (`entityType="task"`); summarize decisions, constraints, pitfalls before planning.
 
-## Before starting a task
+## Working
 
-MUST follow every step before responding - `read_graph` alone only returns recent entities.
+- MUST write silently as you go, never batched: edits, discoveries, decisions, feedback, facts; failures and insights to `global`.
+- Each piece of work and user follow-up MUST be its own related `task/` entity, created before code.
+- MUST record a confirmed external change (merge, deploy, close) in the same response; plans MUST include memory updates.
+- Subagents MUST NOT write; main writes after a fresh read.
+- Before you {{TOOL_COMPLETE}}: record what changed, why, caveats, follow-ups; reusable lessons to `global`; set task `resolved`.
 
-1. `read_graph` on `global`, then on `<repo-name>`.
-2. `search_nodes` on both: message keywords, `user-preferences` (always), the project name, relevant `pattern/` entities, current files, feature and ticket IDs. Prefer a `status="in-progress"` filter over text search.
-3. `get_entity_with_relations` on every entity found, and always on `project/<current-project>` with `entityType="task"`.
-4. Summarize what is known and highlight prior decisions, constraints and pitfalls before planning.
+## Recommending
 
-- A hyphenated term (`auth-service`) is one token, won't match `authservice` - use bare keywords, retry different ones before concluding nothing exists.
-
-## While working
-
-- MUST update after each meaningful step: an edit or group of edits; an unexpected discovery; a decision or trade-off; user feedback; new factual information.
-- MUST persist facts as discovered (architecture, API contracts, bugs, performance) as small atomic observations, one fact each, grouped under one entity where possible.
-- Explicit user follow-up work MUST get its own `task/` entity immediately, never bundled or deferred.
-- A confirmed external state change (PR merged, deployed, ticket closed) MUST update the entity in the same response.
-- Hook reminders arrive as `<hook_context>` blocks - MUST write on the NEXT tool call, never a placeholder shell command.
-- SHOULD vote as you retrieve - up for helpful, down for stale or misleading.
-- When presenting an entity's vote_score to the user, render it as star symbols (e.g. ★3) rather than the raw number.
-
-## After completing a task or milestone
-
-Before you {{TOOL_COMPLETE}}, MUST record the outcome for each significant unit of work and set the `task/` entity `resolved`. The `memory-usage` skill carries the full checklist.
-
-## Before recommending from memory
-
-- A memory's "full list of X" or measurement is a synthesis from when written, not a live fact - MUST re-derive against the live source before quoting, especially on pushback.
-- Weight staleness by type: `user-preferences` rarely changes; a `pattern` or `knowledge` entity pointing at a source reflects only what was true when written.
-- MUST verify a costly-to-be-wrong fact against the live source first - a cheap Haiku delegate can confirm it.
-- MUST surface any conflict with live observations rather than silently picking a side.
-
-## Memory rules
-
-- MUST NOT hand-write a date/timestamp into observation text - mcp-memory records each observation's time automatically.
-- MUST include memory updates in implementation plans.
-- Subagents are read-only for memory: they MAY read but MUST NOT mutate. They return facts to their caller; the main thread performs every write after a fresh read.
-- Knowledge not in memory or prompt files is lost at session end - MUST persist it to `global` immediately.
+Memory is a snapshot: except `user-preferences`, MUST re-check lists, measurements and source-pointing facts live before quoting, on pushback, or before costly action; surface conflicts rather than pick a side.
