@@ -275,7 +275,8 @@ RECALL_DESC = (
     "own context, keeping yours clean. Each call spawns a billed model invocation "
     "(~15-30s), so reserve it for broad questions that need several searches and "
     "graph traversals - a single lookup you could do with one search_nodes call "
-    "must NOT go through recall."
+    "must NOT go through recall. Use it instead of a second broad search on one question, "
+    "or when a result is too large to fit."
 )
 
 mcp = FastMCP(

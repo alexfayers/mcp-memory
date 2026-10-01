@@ -15,4 +15,4 @@ This package's cline-hooks plugin is `MemoryPlugin`. Its lifecycle-hook context 
 - `UserPromptSubmit` - occasionally "MEMORY REVIEW DUE: many memory writes have accumulated..." suggesting you let the user run `/memory-review`.
 - A "FRUSTRATION [severity]: ..." `UserPromptSubmit` note exists in the plugin but is currently disabled, so it never fires.
 
-For the rules on how to respond to these, see `memory.md` in this same directory.
+Respond to each with a real memory write on the NEXT tool call, never a placeholder shell command; `memory.md` in this same directory has the policy.

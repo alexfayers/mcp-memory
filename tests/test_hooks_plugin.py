@@ -1233,6 +1233,7 @@ class TestReadOnlyAgentExemption:
                 tool_name="read_file",
                 parameters={},
                 agent_type="general-purpose",
+                agent_id="sub1",
             )
         assert result is None
 
@@ -1259,6 +1260,7 @@ class TestReadOnlyAgentExemption:
                 task_id="t1",
                 mcp_tool_name="read_file",
                 agent_type="general-purpose",
+                agent_id="sub1",
             )
         assert result is None
 
@@ -1276,6 +1278,7 @@ class TestReadOnlyAgentExemption:
                 parameters={},
                 is_state_write=False,
                 agent_type="general-purpose",
+                agent_id="sub1",
             )
         mock_increment.assert_not_called()
         assert result is None
@@ -1319,6 +1322,34 @@ class TestReadOnlyAgentExemption:
                 agent_type="security-reviewer",
             )
         assert result is None
+
+
+class TestSubagentIdentification:
+    def test_agent_id_without_agent_type_is_subagent(self, plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="execute_command",
+                parameters={},
+                agent_id="abc123",
+            )
+        assert result is None
+
+    def test_agent_type_without_agent_id_is_not_subagent(self, plugin: MemoryPlugin) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="execute_command",
+                parameters={},
+                agent_type="main",
+            )
+        assert result is not None
+        assert result.block is not None
 
 
 class TestMemoryReviewNudge:

@@ -81,11 +81,14 @@ def should_block(task_id: str, threshold: int = _MEMORY_BLOCK_THRESHOLD) -> bool
 
 
 def clear(task_id: str) -> None:
-    """Remove the counter entry for a completed task."""
+    """Remove the counter and any scoped entries for a completed task."""
     with _locked():
         data = _read()
-        if task_id in data:
-            del data[task_id]
+        prefix = f"{task_id}:"
+        keys_to_remove = [key for key in data if key == task_id or key.startswith(prefix)]
+        if keys_to_remove:
+            for key in keys_to_remove:
+                del data[key]
             _write(data)
 
 

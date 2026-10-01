@@ -91,11 +91,17 @@ CREATE_ENTITIES_DESC = (
     "append to an existing entity instead. "
     "Valid entity types: project, feature, task, user-preferences, pattern, knowledge. "
     "Each entity name MUST start with its type prefix (e.g. task/<id>, feature/<area>); "
-    "a 'project' entity MUST be named exactly 'project/<project>' (one root per scope). "
+    "a 'project' entity MUST be named exactly 'project/<project>' (one root per scope, "
+    "auto-created on first write; if its name does not match the repo, rename_entity it, "
+    "never add a second root). "
+    "Name forms: feature/<project>/<area>, task/<TICKET-ID>-<slug> (name an investigation "
+    "for its ticket, not its symptom), user-preferences/<alias>-<topic>, pattern/<short-noun>. "
     "Non-exempt entity types (everything except project) MUST include at "
     "least one relation. "
     "Each entity dict must have keys: name (str), entityType (str), observations (list[str]). "
-    "Optional keys: status (str), relations (list of {target, type} dicts). "
+    "Optional keys: status (str), relations (list of {target, type} dicts; see "
+    "create_relations for which type to pick). "
+    "Observation wording and what not to store: see add_observations. "
     "Set `status` via the `status` argument, never as a `STATUS:` observation. "
     "The server automatically records each observation's timestamp; do NOT prefix or embed "
     "a date/timestamp in the observation text yourself."
@@ -115,9 +121,9 @@ SEARCH_NODES_DESC = (
     "Within each returned entity, observations are ordered best-first by their own votes "
     "(see vote). Each observation carries a content_hash usable with "
     "vote, delete_observations, and merge_observations to address it without "
-    "pasting its full content. Use compact=true to omit observations for a lightweight summary."
-    + _MAX_OBSERVATION_CHARS_DOC
-    + _RELATIONS_WIRE_DOC
+    "pasting its full content. Use compact=true to omit observations for a lightweight summary. "
+    "A hyphenated term (auth-service) is one token and will not match authservice - use bare "
+    "keywords and retry variants before concluding nothing exists." + _MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
 READ_GRAPH_DESC = (
     "Get the most recent entities and their relations for a project. "
@@ -128,10 +134,20 @@ READ_GRAPH_DESC = (
 )
 CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
-    "Relations are the core of the graph model. Each relation has source, target, and type."
+    "Relations are the core of the graph model. Each relation has source, target, and type. "
+    "Prefer a specific type over relates-to: task implements feature (link a task straight "
+    "to project/ only where no feature exists), task depends-on task, feature belongs-to "
+    "project, pattern used-in project."
 )
-DELETE_ENTITY_DESC = "Delete an entity and all its associated observations and relations from a project."
-DELETE_RELATION_DESC = "Delete a specific relation between two entities in a project."
+DELETE_ENTITY_DESC = (
+    "Delete an entity and all its associated observations and relations from a project. "
+    "Use sparingly for stale, incorrect or misleading memory - prefer marking it deprecated "
+    "or a downvote unless it would mislead."
+)
+DELETE_RELATION_DESC = (
+    "Delete a specific relation between two entities in a project. "
+    "Use sparingly, for a relation that is wrong or misleading."
+)
 RESTORE_ENTITY_DESC = (
     "Restore a soft-deleted entity, making it visible to reads again. Soft-deleted "
     "entities (e.g. the loser of a merge_entities call) are hidden but kept intact until "
@@ -148,6 +164,13 @@ ADD_OBSERVATIONS_DESC = (
     "newly-added observations, usable with vote/delete_observations/"
     "merge_observations. "
     "To reorder existing observations by usefulness rather than add one, see vote. "
+    "One atomic fact per observation, on the entity it concerns - create one rather than "
+    "dump onto an unrelated entity. Tense: present for project/feature, past for task; "
+    "rationale goes in its own observation. Past ~30 observations, extract focused pattern/ "
+    "entities. Do NOT store: content duplicating rules or skills, session logs or "
+    "changelogs, file paths in global, ephemeral status, commit SHAs, workarounds for "
+    "retired tools, or implementation steps of a resolved task (keep 1-3 outcome "
+    "observations - see trim_observations_to_outcome). "
     "The server automatically records each observation's timestamp; do NOT prefix or embed "
     "a date/timestamp in the observation text yourself."
 )
@@ -185,7 +208,10 @@ SET_ENTITY_STATUS_DESC = (
     "Valid statuses: planned, in-progress, blocked, resolved, archived. Use null to clear. "
     "archived entities are hidden from search_nodes/search_all_projects by default; pass "
     "status='archived' or include_archived=true to see them. "
-    "This is the only correct way to record status; a `STATUS:` observation is wrong."
+    "This is the only correct way to record status; a `STATUS:` observation is wrong. "
+    "Set resolved when the task completes. archived hides, never deletes - "
+    "get_entity_with_relations still fetches it. A resolved entity untouched for 56 days "
+    "auto-archives unless it was ever surfaced and used in a search."
 )
 VOTE_DESC = (
     "Record a usefulness vote as you retrieve a memory: a positive vote for one that proved "
@@ -199,7 +225,8 @@ VOTE_DESC = (
     "a light alternative to delete_observations - neither is wrong enough to remove outright. vote "
     "must be a nonzero integer from -3 to 3; returns the new net vote_score. "
     "Vote as you retrieve - up for a helpful observation, down for a stale or misleading one. "
-    "Prefer a downvote over deleting an entity."
+    "Prefer a downvote over deleting an entity. "
+    "Show vote_score to the user as stars (e.g. \u26053), not the raw number."
 )
 GET_PROJECT_FOR_PATH_DESC = (
     "Return the project whose registered path contains the given filesystem path, "
