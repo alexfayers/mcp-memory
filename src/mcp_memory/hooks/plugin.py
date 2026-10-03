@@ -411,14 +411,13 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     parts.append(
         "Session-start guidance (see the session-start skill for the full ritual):\n"
         "1. `read_graph` on BOTH `global` and `<repo-name>` projects - always do this\n"
-        "2. Only if the user's opening message is generic (no specific task/file/feature "
-        f"named), scan for open tasks across {project_list}: "
+        "2. Only if the opening message asks about outstanding work, "
+        f"scan for open tasks across {project_list}: "
         "`search_all_projects(query='task', entityType='task', "
         "status=['in-progress','planned'], ...)` "
         "(use unrestricted `search_all_projects`, no `projects` filter, only on explicit "
-        "request for the full picture). If the opening message already names a specific "
-        "ask, skip this scan - targeted searches for that ask still surface anything "
-        "relevant\n"
+        "request for the full picture). Otherwise skip this scan - targeted searches for "
+        "the ask still surface anything relevant\n"
         "3. `search_nodes` for task keywords in `<repo-name>` project\n"
         "4. `get_entity_with_relations` on any relevant result"
     )
