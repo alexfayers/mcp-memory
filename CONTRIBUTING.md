@@ -38,3 +38,4 @@ Single-line, conventional-commit style: `feat:`, `fix:`, `docs:`, `refactor:`, `
 - Description as bullet points, not paragraphs.
 - State WHAT changed and WHY, not HOW.
 - No restating the diff, no process commentary, no filler.
+- List a PR that must merge first as a `Depends on <PR URL>` line; the `check-dependencies` check fails until it merges and re-checks when that PR closes.
