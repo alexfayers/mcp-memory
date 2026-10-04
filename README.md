@@ -278,7 +278,7 @@ Delete an empty project and its registered paths. Refuses to delete the `global`
 
 ### search_all_projects
 
-Search entities across all projects in a single call. Returns results grouped by project name. Same FTS5 search and filters as `search_nodes` (including `match_all`) but without the `project` parameter. Pass `projects` to narrow the scan to specific project names instead of every project; add `expand_groups=true` to also union each named project with its group siblings (resolved server-side via `get_group_members`), so callers no longer have to chain `get_group_members` + a per-project search themselves. `expand_groups=true` requires `projects` to be set.
+Search entities across all projects in a single call. Returns results grouped by project name. Same FTS5 search and filters as `search_nodes` (including `match_all`) but without the `project` parameter. Pass `projects` to narrow the scan to specific project names instead of every project; add `expand_groups=true` to also union each named project with its group siblings (resolved server-side via `get_group_members`), so callers no longer have to chain `get_group_members` + a per-project search themselves. `expand_groups=true` requires `projects` to be set. Pass `names_only=true` to return just `"name status"` strings per project (bare name when the entity has no status), with no relations or other fields.
 
 ## Command-line
 

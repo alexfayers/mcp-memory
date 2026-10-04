@@ -5,15 +5,16 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 import contextlib
+import dataclasses
 import functools
 import inspect
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import anyio
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from mcp.types import Tool, ToolAnnotations
 
 from . import metrics, usefulness
 from .activity import record_tool
@@ -55,7 +56,42 @@ def _track[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
-mcp = FastMCP(
+_NULL_SCHEMA: dict[str, str] = {"type": "null"}
+
+
+def _prune_schema(node: Any) -> Any:
+    """Drop string titles, null-valued defaults and null union branches from a JSON schema."""
+    if isinstance(node, list):
+        return [_prune_schema(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    pruned = {
+        key: _prune_schema(value)
+        for key, value in node.items()
+        if not (key == "title" and isinstance(value, str)) and not (key == "default" and value is None)
+    }
+    branches = pruned.get("anyOf")
+    if isinstance(branches, list) and _NULL_SCHEMA in branches:
+        remaining = [branch for branch in branches if branch != _NULL_SCHEMA]
+        del pruned["anyOf"]
+        if len(remaining) == 1:
+            pruned.update(remaining[0])
+        else:
+            pruned["anyOf"] = remaining
+    return pruned
+
+
+class _PrunedSchemaFastMCP(FastMCP):
+    """FastMCP whose advertised tool input schemas omit tokens the client does not need."""
+
+    async def list_tools(self) -> list[Tool]:
+        return [
+            tool.model_copy(update={"inputSchema": _prune_schema(tool.inputSchema)})
+            for tool in await super().list_tools()
+        ]
+
+
+mcp = _PrunedSchemaFastMCP(
     "mcp-memory",
     stateless_http=True,
     json_response=True,
@@ -78,10 +114,13 @@ _RESOLVED_OBS_CEILING = 3
 
 # Tool descriptions
 _MAX_OBSERVATION_CHARS_DOC = (
-    " By default each entity's observations are trimmed to a character budget "
-    "(highest-voted kept first, with a note counting any omitted); pass a negative value "
-    "(e.g. -1) for full detail, 0 for just the single highest-voted observation, or a "
-    "positive integer for a custom budget."
+    " Observations are trimmed per entity to a character budget (highest-voted first, omitted count noted); "
+    "max_observation_chars: negative for full detail, 0 for the top observation only, positive for a custom budget."
+)
+_TARGET_MAX_OBSERVATION_CHARS_DOC = (
+    " Observations are trimmed per entity to a character budget (highest-voted first, omitted count noted); "
+    "max_observation_chars: negative for full detail for the named entity only (related entities keep the "
+    "default budget), 0 for the top observation only, positive for a custom budget."
 )
 _RELATIONS_WIRE_DOC = ' Relations are returned as "source relation-type target" strings.'
 CREATE_ENTITIES_DESC = (
@@ -156,7 +195,7 @@ RESTORE_ENTITY_DESC = (
 GET_ENTITY_WITH_RELATIONS_DESC = (
     "Get an entity along with all its relations and related entities within a project. "
     "Traverses the graph to discover linked context. "
-    "Optionally filter by entityType and/or relationType." + _MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
+    "Optionally filter by entityType and/or relationType." + _TARGET_MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
 ADD_OBSERVATIONS_DESC = (
     "Append observations to an existing entity without overwriting. "
@@ -292,25 +331,13 @@ MERGE_OBSERVATIONS_DESC = (
 )
 
 SEARCH_ALL_PROJECTS_DESC = (
-    "Search entities and relations across ALL projects in a single call. "
+    "Search entities and relations across ALL projects in a single call, with the same query, ranking, "
+    "filter, compact and archived semantics as search_nodes. "
     "Returns results grouped by project name. "
-    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by type-aware recency "
-    "and usefulness votes (see vote). "
-    "A multi-word query matches entities containing ANY of the terms by default, with "
-    "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
-    "Optionally filter by entityType, status (a single value or a list, OR'd together), "
-    "and/or date range (start/end support relative formats like '30m', '1h', '7d', '2w', "
-    "'3mo' and ISO dates). "
     "Pass projects to narrow the scan to specific project names instead of every project. "
     "Add expand_groups=true to also union each named project with its group siblings "
-    "(resolved server-side via get_group_members) - this replaces having to call "
-    "get_group_members yourself and pass the resolved list. expand_groups=true requires "
-    "projects to be set. "
-    "Archived entities are hidden unless status explicitly asks for them or "
-    "include_archived=true is passed. "
-    "Use compact=true to omit observations for a lightweight summary."
-    + _MAX_OBSERVATION_CHARS_DOC
-    + _RELATIONS_WIRE_DOC
+    "(resolved server-side via get_group_members); it requires projects to be set. "
+    'names_only=true returns just "name status" strings per project.' + _MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
 
 _db: Storage | None = None
@@ -365,20 +392,25 @@ def _wire_entity(entity: Entity) -> dict[str, object]:
     every read without telling the reader anything, so they are omitted rather than sent.
     """
     entity_date = entity.created_at[:10] if entity.created_at else None
-    wired: dict[str, object] = {"name": entity.name, "entity_type": entity.entity_type}
-    wired["observations"] = [
-        {"content": obs.content}
-        | ({"content_hash": obs.content_hash} if obs.content_hash else {})
-        | ({"vote_score": obs.vote_score} if obs.vote_score else {})
-        | ({"at": obs.created_at[:10]} if obs.created_at and obs.created_at[:10] != entity_date else {})
-        for obs in entity.observations
-    ]
+    wired: dict[str, object] = {"name": entity.name}
+    if entity.observations:
+        wired["observations"] = [
+            {"content": obs.content}
+            | ({"content_hash": obs.content_hash} if obs.content_hash else {})
+            | ({"vote_score": obs.vote_score} if obs.vote_score else {})
+            | ({"at": obs.created_at[:10]} if obs.created_at and obs.created_at[:10] != entity_date else {})
+            for obs in entity.observations
+        ]
     if entity.observations_omitted:
         wired["omitted"] = entity.observations_omitted
-    for field in ("status", "created_at", "updated_at", "project_name"):
+    for field in ("status", "project_name"):
         value = getattr(entity, field)
         if value is not None:
             wired[field] = value
+    if entity_date:
+        wired["created_at"] = entity_date
+    if entity.updated_at and entity.updated_at[:10] != entity_date:
+        wired["updated_at"] = entity.updated_at[:10]
     if entity.vote_score:
         wired["vote_score"] = entity.vote_score
     return wired
@@ -820,6 +852,7 @@ def _search_all_projects(
     projects: list[str] | None,
     expand_groups: bool,
     include_archived: bool,
+    names_only: bool,
 ) -> dict[str, object]:
     """Search across projects and group the hits by the project each entity belongs to."""
     if expand_groups and projects is None:
@@ -834,11 +867,20 @@ def _search_all_projects(
         status=status,  # type: ignore[arg-type]
         start=start,
         end=end,
-        compact=compact,
+        compact=compact or names_only,
         match_all=match_all,
         max_observation_chars=max_observation_chars,
         include_archived=include_archived,
+        include_relations=not names_only,
     )
+
+    if names_only:
+        names_by_project: dict[str, list[str]] = {}
+        for entity in result["entities"]:
+            names_by_project.setdefault(entity.project_name or "unknown", []).append(
+                f"{entity.name} {entity.status}" if entity.status else entity.name
+            )
+        return {"results": names_by_project}
 
     by_project = result.get("relations_by_project", {})
     grouped: dict[str, dict[str, list[object]]] = {}
@@ -849,7 +891,7 @@ def _search_all_projects(
                 "entities": [],
                 "relations": list(by_project.get(project_name, [])),
             }
-        grouped[project_name]["entities"].append(entity)
+        grouped[project_name]["entities"].append(dataclasses.replace(entity, project_name=None))
 
     return _prepare_read_result({"results": grouped}, result["relations"])
 
@@ -874,6 +916,7 @@ def search_all_projects(
     projects: list[str] | None = None,
     expand_groups: bool = False,
     include_archived: bool = False,
+    names_only: bool = False,
 ) -> dict[str, object]:
     """Search entities across all projects, returning results grouped by project."""
     try:
@@ -890,6 +933,7 @@ def search_all_projects(
             projects=projects,
             expand_groups=expand_groups,
             include_archived=include_archived,
+            names_only=names_only,
         )
     except Exception as e:
         return {"error": str(e)}

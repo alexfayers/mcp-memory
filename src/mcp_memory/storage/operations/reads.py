@@ -156,9 +156,11 @@ class Reads:
             relation_type: If given, keep only relations of this type (pre-traversal, so
                 related entities are derived only from the surviving relations).
             compact: Omit observations from the returned entities when True.
-            max_observation_chars: Per-entity observation character budget.
+            max_observation_chars: Per-entity observation character budget. A negative value
+                lifts the budget for the named entity only; related entities keep the default.
         """
         entity = self.get_entity(project, name, compact=compact, max_observation_chars=max_observation_chars)
+        related_budget = None if (max_observation_chars or 0) < 0 else max_observation_chars
         project_id = get_project_id(self._conn, project)
         assert project_id is not None
         entity_id = get_entity_id(self._conn, name, project_id)
@@ -176,8 +178,7 @@ class Reads:
                 related_names.add(rel.target)
 
         related_entities = [
-            self.get_entity(project, n, compact=compact, max_observation_chars=max_observation_chars)
-            for n in related_names
+            self.get_entity(project, n, compact=compact, max_observation_chars=related_budget) for n in related_names
         ]
 
         if entity_type is not None:
@@ -204,6 +205,7 @@ class Reads:
         max_observation_chars: int | None = None,
         now: datetime | None = None,
         include_archived: bool = False,
+        include_relations: bool = True,
     ) -> NodeList:
         """Search entities using FTS5 full-text search with recency-weighted BM25 ranking.
 
@@ -257,6 +259,9 @@ class Reads:
             for row in top_rows
         ]
         entity_ids = [row["id"] for row in top_rows]
+
+        if not include_relations:
+            return {"entities": entities, "relations": []}
 
         if isinstance(project, str):
             project_id = get_project_id(self._conn, project)
