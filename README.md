@@ -56,19 +56,23 @@
 | tests/\_\_init\_\_.py                                |       43 |        1 |     98% |        85 |
 | tests/conftest.py                                    |       10 |        0 |    100% |           |
 | tests/eval/\_\_init\_\_.py                           |        0 |        0 |    100% |           |
-| tests/eval/eval\_baseline.py                         |       58 |        0 |    100% |           |
-| tests/eval/eval\_fixture.py                          |      229 |        3 |     99% |542-543, 561 |
-| tests/eval/eval\_harness.py                          |       92 |        0 |    100% |           |
-| tests/eval/regen\_baseline.py                        |       60 |        1 |     98% |       124 |
-| tests/eval/size\_baseline.py                         |       63 |        1 |     98% |       119 |
+| tests/eval/badge\_endpoints.py                       |       27 |        1 |     96% |        48 |
+| tests/eval/compare\_baseline.py                      |      123 |        1 |     99% |       206 |
+| tests/eval/eval\_baseline.py                         |       17 |        0 |    100% |           |
+| tests/eval/eval\_fixture.py                          |      233 |        3 |     99% |545-546, 564 |
+| tests/eval/eval\_harness.py                          |       78 |        0 |    100% |           |
+| tests/eval/regen\_baseline.py                        |       26 |        1 |     96% |        60 |
+| tests/eval/size\_baseline.py                         |       45 |        0 |    100% |           |
+| tests/eval/test\_badge\_endpoints.py                 |       23 |        0 |    100% |           |
 | tests/eval/test\_benchmark\_scenarios.py             |       75 |        0 |    100% |           |
-| tests/eval/test\_eval\_baseline.py                   |       83 |        0 |    100% |           |
-| tests/eval/test\_eval\_fixture.py                    |      161 |        1 |     99% |       142 |
-| tests/eval/test\_eval\_harness.py                    |      118 |        0 |    100% |           |
+| tests/eval/test\_compare\_baseline.py                |      134 |        0 |    100% |           |
+| tests/eval/test\_eval\_baseline.py                   |       18 |        0 |    100% |           |
+| tests/eval/test\_eval\_fixture.py                    |      162 |        1 |     99% |       150 |
+| tests/eval/test\_eval\_harness.py                    |       91 |        0 |    100% |           |
 | tests/eval/test\_ranking\_eval.py                    |      403 |        0 |    100% |           |
 | tests/eval/test\_recall\_efficiency.py               |       39 |        0 |    100% |           |
-| tests/eval/test\_regen\_baseline.py                  |      101 |        0 |    100% |           |
-| tests/eval/test\_size\_baseline.py                   |       81 |        0 |    100% |           |
+| tests/eval/test\_regen\_baseline.py                  |       45 |        0 |    100% |           |
+| tests/eval/test\_size\_baseline.py                   |       39 |        0 |    100% |           |
 | tests/naming\_check.py                               |      105 |      105 |      0% |    12-162 |
 | tests/test\_activity.py                              |      148 |        0 |    100% |           |
 | tests/test\_agent.py                                 |      749 |        9 |     99% |560-561, 688, 929-930, 976-977, 1041-1042 |
@@ -91,7 +95,7 @@
 | tests/test\_tracker.py                               |       51 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       74 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      620 |        0 |    100% |           |
-| **TOTAL**                                            | **12642** |  **518** | **96%** |           |
+| **TOTAL**                                            | **12657** |  **519** | **96%** |           |
 
 
 ## Setup coverage badge
