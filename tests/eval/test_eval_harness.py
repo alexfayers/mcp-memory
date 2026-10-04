@@ -9,13 +9,11 @@ import pytest
 from mcp_memory.eval import EvalReport
 from tests.eval.eval_harness import (
     _FIXTURE_NOW,
-    FLOOR,
     MeasuredChange,
     _build_eval_fixture,
     _pinned,
     assert_improves,
     assert_no_regression,
-    assert_within_floor,
     attach_eval_report,
     mark_used,
     measure_change,
@@ -38,11 +36,6 @@ def _report(**overrides: float) -> EvalReport:
     }
     fields.update(overrides)
     return EvalReport(**fields)  # type: ignore[arg-type]
-
-
-def _floor_midpoints() -> dict[str, float]:
-    """Return the midpoint of every `FLOOR` band, keyed by metric name."""
-    return {metric: (low + high) / 2 for metric, (low, high) in FLOOR.items()}
 
 
 def _touch_every_entity(db: Storage) -> None:
@@ -171,44 +164,6 @@ class TestAssertImproves:
 
         with pytest.raises(AssertionError, match="regression"):
             assert_improves(result, request, "mrr")
-
-
-class TestAssertWithinFloor:
-    def test_passes_when_all_metrics_are_in_bounds(self, request: pytest.FixtureRequest) -> None:
-        report = _report(mean_recall_at_k=0.8, mean_success_at_k=0.9)
-        floor = {"mean_recall_at_k": (0.5, 1.0), "mean_success_at_k": (0.5, 1.0)}
-
-        assert_within_floor(report, request, floor=floor)
-
-    def test_fails_below_the_floor(self, request: pytest.FixtureRequest) -> None:
-        report = _report(mean_recall_at_k=0.2)
-        floor = {"mean_recall_at_k": (0.5, 1.0)}
-
-        with pytest.raises(AssertionError, match="out of floor/ceiling bounds"):
-            assert_within_floor(report, request, floor=floor)
-
-    def test_fails_above_the_ceiling(self, request: pytest.FixtureRequest) -> None:
-        report = _report(mean_recall_at_k=0.99)
-        floor = {"mean_recall_at_k": (0.5, 0.9)}
-
-        with pytest.raises(AssertionError, match="out of floor/ceiling bounds"):
-            assert_within_floor(report, request, floor=floor)
-
-    def test_defaults_to_the_module_level_floor(self, request: pytest.FixtureRequest) -> None:
-        report = _report(**_floor_midpoints())
-
-        assert_within_floor(report, request)
-
-    def test_defaults_to_the_module_level_floor_and_rejects_an_out_of_bounds_metric(
-        self, request: pytest.FixtureRequest
-    ) -> None:
-        metric, (low, _high) = next(iter(FLOOR.items()))
-        fields = _floor_midpoints()
-        fields[metric] = low - 1.0
-        report = _report(**fields)
-
-        with pytest.raises(AssertionError, match="out of floor/ceiling bounds"):
-            assert_within_floor(report, request)
 
 
 class TestMarkUsed:

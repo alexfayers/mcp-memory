@@ -1,5 +1,8 @@
 # mcp-memory
 
+![tool output](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/alexfayers/mcp-memory/benchmark-badge/size.json)
+![recall@10](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/alexfayers/mcp-memory/benchmark-badge/ranking.json)
+
 SQLite-backed persistent memory MCP server with FTS5 search and project scoping.
 
 ## Features

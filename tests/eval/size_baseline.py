@@ -1,71 +1,105 @@
-"""The committed measured baseline for MCP read-tool output size, in bytes.
+"""The measured baseline for MCP read-tool output size, in bytes.
 
-Owns the size section's shape, its (de)serialisation and the probe table, within the shared
+Owns the size section's shape, its serialisation and the probe table, within the shared
 `tests/eval/baseline.json` artefact - see `eval_baseline` for the ranking section and
-`regen_baseline` for the single entry point that regenerates both. Regenerating it is a
-separate, explicit act (`just baseline --rebaseline`) - never something a test run does,
-since a reference value recomputed from the code under test can never fail.
+`regen_baseline` for the single entry point that measures and writes both. The artefact is a
+measurement of the current code, written by `just baseline`; `compare_baseline` diffs two of them.
 """
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import contextmanager
 from dataclasses import dataclass
-import json
+import functools
 from typing import TYPE_CHECKING
 
 from mcp_memory import server
 from mcp_memory.payload import payload_size
-from tests.eval.eval_baseline import BASELINE_PATH
 from tests.eval.eval_fixture import _PROJECTS, _TOPICS
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
+    from collections.abc import Callable, Iterator
 
     from tests.eval.eval_fixture import EvalFixture
 
-TOOLS = ("search_nodes", "read_graph", "get_entity_with_relations")
 
-# Not a real tokenizer - no tiktoken dependency, and it would be the wrong tokenizer family
-# for a Claude-facing tool anyway. A rough estimate purely to make byte deltas legible as an
-# approximate token count.
-_BYTES_PER_TOKEN = 4
-
-_REBASELINE_HINT = "run `just baseline --rebaseline` to regenerate it"
-
-
-def _search_nodes_probes(fixture: EvalFixture) -> list[int]:
+def _search_nodes_probes(fixture: EvalFixture, *, compact: bool = False) -> list[int]:
     """Return one search_nodes payload size per `_TOPICS` entry, pinned to `fixture.now`."""
     return [
-        payload_size(server._prepare_read_result(fixture.db.reads.search(project, term, now=fixture.now)))
+        payload_size(
+            server._prepare_read_result(fixture.db.reads.search(project, term, now=fixture.now, compact=compact))
+        )
         for _, project, term in _TOPICS
     ]
 
 
-def _read_graph_probes(fixture: EvalFixture) -> list[int]:
+def _read_graph_probes(fixture: EvalFixture, *, compact: bool = False) -> list[int]:
     """Return one read_graph payload size per `_PROJECTS` entry."""
-    return [payload_size(server._prepare_read_result(fixture.db.reads.recent(project))) for project, _, _ in _PROJECTS]
+    return [
+        payload_size(server._prepare_read_result(fixture.db.reads.recent(project, compact=compact)))
+        for project, _, _ in _PROJECTS
+    ]
 
 
-def _get_entity_with_relations_probes(fixture: EvalFixture) -> list[int]:
+def _get_entity_with_relations_probes(
+    fixture: EvalFixture, *, compact: bool = False, max_observation_chars: int | None = None
+) -> list[int]:
     """Return one get_entity_with_relations payload size per topic's durable-hit entity."""
     return [
         payload_size(
             server._prepare_read_result(
-                fixture.db.reads.get_entity_with_relations(project, fixture.name_for(topic_index, "durable-hit"))
+                fixture.db.reads.get_entity_with_relations(
+                    project,
+                    fixture.name_for(topic_index, "durable-hit"),
+                    compact=compact,
+                    max_observation_chars=max_observation_chars,
+                )
             )
         )
         for topic_index, project, _ in _TOPICS
     ]
 
 
-# tool name -> a probe function returning one payload byte-size per item it measures. Each
+@contextmanager
+def _serving(fixture: EvalFixture) -> Iterator[None]:
+    """Point the server's module-level database handle at `fixture.db` for the duration."""
+    original = server._db
+    server._db = fixture.db
+    try:
+        yield
+    finally:
+        server._db = original
+
+
+def _search_all_projects_probes(fixture: EvalFixture, *, compact: bool = False) -> list[int]:
+    """Return one search_all_projects payload size per `_TOPICS` term, via the real tool body."""
+    with _serving(fixture):
+        return [payload_size(server.search_all_projects.__wrapped__(term, compact=compact)) for _, _, term in _TOPICS]
+
+
+def _tool_list_probes(_fixture: EvalFixture) -> list[int]:
+    """Return the size of the advertised tool list."""
+    tools = asyncio.run(server.mcp.list_tools())
+    return [payload_size([tool.model_dump(by_alias=True, mode="json", exclude_none=True) for tool in tools])]
+
+
+# probe name -> a probe function returning one payload byte-size per item it measures. Each
 # probe resolves its own project/query/entity-name arguments from `fixture` at call time.
 _PROBES: dict[str, Callable[[EvalFixture], list[int]]] = {
     "search_nodes": _search_nodes_probes,
+    "search_nodes[compact]": functools.partial(_search_nodes_probes, compact=True),
     "read_graph": _read_graph_probes,
+    "read_graph[compact]": functools.partial(_read_graph_probes, compact=True),
     "get_entity_with_relations": _get_entity_with_relations_probes,
+    "get_entity_with_relations[compact]": functools.partial(_get_entity_with_relations_probes, compact=True),
+    "get_entity_with_relations[full]": functools.partial(_get_entity_with_relations_probes, max_observation_chars=-1),
+    "search_all_projects": _search_all_projects_probes,
+    "search_all_projects[compact]": functools.partial(_search_all_projects_probes, compact=True),
+    "tools/list": _tool_list_probes,
 }
+
+TOOLS = tuple(_PROBES)
 
 
 @dataclass(frozen=True)
@@ -94,34 +128,6 @@ def measure(fixture: EvalFixture) -> SizeBaseline:
     )
 
 
-def load_baseline(path: Path = BASELINE_PATH) -> SizeBaseline:
-    """Read and validate the size section of the committed baseline artefact at `path`."""
-    if not path.exists():
-        raise TypeError(f"no size baseline at {path} - {_REBASELINE_HINT}")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise TypeError(f"size baseline at {path} is not valid JSON - {_REBASELINE_HINT}") from exc
-    if "size" not in payload:
-        raise TypeError(f"size baseline at {path} has no 'size' section - {_REBASELINE_HINT}")
-    section_payload = payload["size"]
-    if not isinstance(section_payload, dict):
-        raise TypeError(f"size baseline at {path} has a non-dict 'size' section - {_REBASELINE_HINT}")
-    entity_count = section_payload["entity_count"]
-    tools = section_payload["tools"]
-    if set(tools) != set(TOOLS):
-        raise TypeError(f"size baseline at {path} does not cover exactly {TOOLS} - {_REBASELINE_HINT}")
-    if entity_count <= 0:
-        raise TypeError(f"size baseline at {path} was measured at entity_count={entity_count} - {_REBASELINE_HINT}")
-    probe_counts = {tool: tools[tool]["probes"] for tool in TOOLS}
-    total_bytes = {tool: tools[tool]["total_bytes"] for tool in TOOLS}
-    if any(count <= 0 for count in probe_counts.values()):
-        raise TypeError(f"size baseline at {path} has a non-positive probe count - {_REBASELINE_HINT}")
-    if any(size <= 0 for size in total_bytes.values()):
-        raise TypeError(f"size baseline at {path} has a non-positive total_bytes - {_REBASELINE_HINT}")
-    return SizeBaseline(entity_count=entity_count, probe_counts=probe_counts, total_bytes=total_bytes)
-
-
 def section(baseline: SizeBaseline) -> dict[str, object]:
     """Return the size section's payload: fixed key order."""
     return {
@@ -132,22 +138,7 @@ def section(baseline: SizeBaseline) -> dict[str, object]:
     }
 
 
-def moved(committed: SizeBaseline, measured: SizeBaseline) -> dict[str, tuple[int, int]]:
-    """Return {tool: (old, new)} for every tool whose total_bytes differs."""
-    return {
-        tool: (committed.total_bytes[tool], measured.total_bytes[tool])
-        for tool in TOOLS
-        if committed.total_bytes[tool] != measured.total_bytes[tool]
-    }
-
-
-def format_moves(committed: SizeBaseline, measured: SizeBaseline) -> str:
-    """Render the tool-name list and byte/token delta for every tool whose size moved."""
-    drift = moved(committed, measured)
-    delta = sum(new - old for old, new in drift.values())
-    tokens = delta // _BYTES_PER_TOKEN
-    sign = "+" if delta >= 0 else ""
-    return (
-        f"output size moved for {sorted(drift)}\n"
-        f"({sign}{delta} bytes, ~{sign}{tokens} tokens estimated at {_BYTES_PER_TOKEN} bytes/token)"
-    )
+def move_row(old: int, new: int) -> tuple[int, float]:
+    """Return a probe's (delta bytes, delta percent) from `old` to `new`."""
+    delta = new - old
+    return delta, delta / old * 100

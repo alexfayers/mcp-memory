@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches:
       - main
@@ -51,6 +52,73 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+  benchmark:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
+      - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Measure base and head
+        id: benchmark
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          ALLOW_GROWTH: ${{ contains(github.event.pull_request.labels.*.name, 'size-increase-accepted') }}
+          ALLOW_RANKING_DROP: ${{ contains(github.event.pull_request.labels.*.name, 'ranking-drop-accepted') }}
+        run: |
+          git fetch --depth 1 origin "$BASE_SHA"
+          flags=""
+          if [ "$ALLOW_GROWTH" = "true" ]; then flags="$flags --allow-growth"; fi
+          if [ "$ALLOW_RANKING_DROP" = "true" ]; then flags="$flags --allow-ranking-drop"; fi
+          status=0
+          just bench-diff "$BASE_SHA" $flags > benchmark.md || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Report benchmark changes
+        if: steps.benchmark.outputs.status != '2'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { report } = require('./.github/scripts/benchmark-comment.js')
+            await report({ github, context, core, path: 'benchmark.md' })
+      - name: Fail on a benchmark regression
+        if: steps.benchmark.outputs.status != '0'
+        run: exit 1
+
+  benchmark-badge:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: benchmark-badge
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
+      - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: just baseline
+      - run: uv run python -m tests.eval.badge_endpoints tests/eval/baseline.json "$RUNNER_TEMP/badge"
+      - name: Publish badge endpoints
+        working-directory: ${{ runner.temp }}/badge
+        run: |
+          git init --initial-branch benchmark-badge
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add size.json ranking.json
+          git commit --message "chore: update benchmark badges for $GITHUB_SHA"
+          git push --force "https://x-access-token:${{ github.token }}@github.com/$GITHUB_REPOSITORY" HEAD:benchmark-badge
+
   pr-template-check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -58,7 +126,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - run: node --test .github/scripts/check-pr-template.test.js
+      - run: node --test .github/scripts/*.test.js
       - uses: actions/github-script@v9
         with:
           script: |

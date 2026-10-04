@@ -8,3 +8,5 @@ coverage.xml
 htmlcov/
 dist/
 *.egg-info/
+tests/eval/baseline.json
+.bench-base.json

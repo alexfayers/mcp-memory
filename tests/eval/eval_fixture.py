@@ -13,6 +13,7 @@ import itertools
 from typing import TYPE_CHECKING
 
 from mcp_memory.eval import evaluate
+from mcp_memory.models import Relation
 
 from .eval_harness import _FIXTURE_NOW, _pinned, mark_used
 
@@ -124,6 +125,8 @@ _TOPICS: tuple[tuple[int, str, str], ...] = (
     (4, "batch-loader", "ingest"),
     (5, "report-builder", "export"),
 )
+
+_DURABLE_HIT_RELATED = ("decayed-hit", "upvoted-hit", "tie-a", "tie-b")
 
 # spine role, in fixed order, -> the archetype supplying its type/age/vote/obs shape.
 # Every topic emits this spine; "tie-a"/"tie-b" are exempt from jitter.
@@ -667,6 +670,19 @@ def _build_populated_fixture(
         manifest += _manifest_rows(project, entities, ages, votes)
 
     _apply_votes(db, votes)
+
+    for topic_index, project, _ in topics:
+        db.relations.create(
+            project,
+            [
+                Relation(
+                    source=spine_names[topic_index, "durable-hit"],
+                    target=spine_names[topic_index, slot],
+                    relation_type="relates-to",
+                )
+                for slot in _DURABLE_HIT_RELATED
+            ],
+        )
 
     entities_by_project: dict[str, list[str]] = {}
     for project, name, *_rest in manifest:

@@ -25,6 +25,8 @@ just test         # pytest
 
 Run `just` before opening a PR - all four must pass.
 
+CI measures tool output size and ranking on the base and on the PR, posts the change as a PR comment, and fails on size growth unless the PR carries the `size-increase-accepted` label, or on a recall/success drop unless it carries the `ranking-drop-accepted` label. `just bench-diff [ref]` runs the same comparison locally (default `origin/main`); `just baseline` writes the current measurement to `tests/eval/baseline.json` (untracked).
+
 ## Commit messages
 
 Single-line, conventional-commit style: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`. No body.
