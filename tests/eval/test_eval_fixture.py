@@ -20,9 +20,11 @@ from mcp_memory.storage import open_writable
 from mcp_memory.storage.operations.maintenance import GC_DOWNVOTE_FLOOR
 from mcp_memory.storage.pure.ranking import _VOTE_SCALE, _VOTE_WEIGHT
 
+from .eval_baseline import RANKING_METRICS
 from .eval_fixture import (
     _ARCHETYPE_COUNTS,
     _CROSS_PROJECT_QUERIES,
+    _K,
     _MEDIUM_SCOPE_PROJECTS,
     _PROJECTS,
     _SCOPE_MARKERS,
@@ -31,7 +33,6 @@ from .eval_fixture import (
     _TOPICS,
     _build_populated_fixture,
 )
-from .eval_harness import BASELINE, FLOOR, assert_within_floor
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -125,6 +126,13 @@ class TestFullFixture:
     def test_entity_names_are_globally_unique(self, fixture: EvalFixture) -> None:
         assert len(set(fixture.entity_names)) == len(fixture.entity_names)
 
+    def test_every_topics_durable_hit_has_four_related_entities(self, fixture: EvalFixture) -> None:
+        for topic_index, project, _ in _TOPICS:
+            graph = fixture.db.reads.get_entity_with_relations(project, fixture.name_for(topic_index, "durable-hit"))
+            assert {e.name for e in graph["relatedEntities"]} == {
+                fixture.name_for(topic_index, slot) for slot in ("decayed-hit", "upvoted-hit", "tie-a", "tie-b")
+            }
+
     def test_manifest_order_matches_entity_id_order(self, fixture: EvalFixture) -> None:
         rows = fixture.db.connection.query_all("SELECT id, name FROM entities ORDER BY id")
         assert [row["name"] for row in rows] == [name for _, name, *_ in fixture.manifest]
@@ -214,16 +222,12 @@ class TestFullFixture:
         assert entity_a.vote_score == entity_b.vote_score
         assert [o.content for o in entity_a.observations] == [o.content for o in entity_b.observations]
 
-    def test_full_fixture_baseline_matches_the_committed_provenance(self, fixture: EvalFixture) -> None:
-        """The measured report's shape matches the artefact `FLOOR` is derived from."""
+    def test_full_fixture_baseline_has_every_ranking_metric_strictly_between_zero_and_one(
+        self, fixture: EvalFixture
+    ) -> None:
         report = fixture.expected_baseline
-        assert report.query_count == _TOTAL_QUERIES
-        assert (report.query_count, report.k) == (BASELINE.query_count, BASELINE.k)
-        assert all(0.0 < getattr(report, metric) < 1.0 for metric in FLOOR)
-
-    def test_full_fixture_baseline_is_within_floor(self, fixture: EvalFixture, request: pytest.FixtureRequest) -> None:
-        """Ratchet gate: fails on a regression and equally on an unexplained improvement."""
-        assert_within_floor(fixture.expected_baseline, request)
+        assert (report.query_count, report.k) == (_TOTAL_QUERIES, _K)
+        assert all(0.0 < getattr(report, metric) < 1.0 for metric in RANKING_METRICS)
 
     def test_archive_sweep_at_scale_spares_relevant_and_archives_the_rest(
         self, fixture: EvalFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

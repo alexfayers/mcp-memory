@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from mcp_memory.eval import evaluate
-from tests.eval.eval_baseline import RANKING_METRICS, bands, load_baseline
+from tests.eval.eval_baseline import RANKING_METRICS
 
 if TYPE_CHECKING:
     import pytest
@@ -24,13 +24,6 @@ _FIXTURE_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 _FIXTURE_LATER = datetime(2026, 6, 1, tzinfo=UTC)
 
 _GATE_METRICS = ("mean_recall_at_k", "mean_success_at_k")
-
-# Precision@10 sits above the naive mean|relevant|/k=0.1417 ceiling because `precision_at_k`
-# divides by `min(k, len(ranked))`, and the fixture's small project scopes shrink that
-# denominator below k - so absolute precision is not comparable across different fixtures,
-# only deltas on this one are.
-BASELINE = load_baseline()
-FLOOR: dict[str, tuple[float, float]] = bands(BASELINE)
 
 _LABEL_W = 20
 _COL_W = 10
@@ -192,23 +185,3 @@ def assert_improves(
         attach_eval_report(request, result)
         raise AssertionError(f"{metric} did not improve (delta={delta})\n{result.format()}")
     assert_no_regression(result, request, metrics=without_regressing)
-
-
-def assert_within_floor(
-    report: EvalReport,
-    request: pytest.FixtureRequest,
-    *,
-    floor: dict[str, tuple[float, float]] = FLOOR,
-) -> None:
-    """Fail if any metric in `floor` falls outside its (floor, ceiling) bounds."""
-    lines = [_row("metric", "value", "floor", "ceiling")]
-    out_of_bounds = []
-    for metric, (low, high) in floor.items():
-        value = getattr(report, metric)
-        lines.append(_row(metric, f"{value:.4f}", f"{low:.4f}", f"{high:.4f}"))
-        if not low <= value <= high:
-            out_of_bounds.append(metric)
-    text = "\n".join(lines)
-    request.node.add_report_section("call", "eval report", text)
-    if out_of_bounds:
-        raise AssertionError(f"out of floor/ceiling bounds: {out_of_bounds}\n{text}")

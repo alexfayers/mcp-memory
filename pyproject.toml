@@ -73,6 +73,7 @@ extend-ignore = [
     "non-empty-init-module",
 ]
 "tests/eval/regen_baseline.py" = ["print"]
+"tests/eval/compare_baseline.py" = ["print"]
 "tests/eval/regen_eval_baseline.py" = ["print"]
 "tests/eval/regen_size_baseline.py" = ["print"]
 "src/mcp_memory/migrations/schema.py" = ["line-too-long"]
