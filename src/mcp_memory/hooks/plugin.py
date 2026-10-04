@@ -14,7 +14,9 @@ import sqlite3
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from cline_hooks.core.parameters import FileEditParameters, ReadParameters
 from cline_hooks.core.plugin import HookResult, HooksPlugin, is_subagent
+from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS, FILE_READ_TOOLS, SHELL_TOOLS, CanonicalTool
 
 from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
 from mcp_memory.hooks.review_tracker import (
@@ -24,10 +26,14 @@ from mcp_memory.hooks.review_tracker import (
 )
 from mcp_memory.hooks.tracker import (
     clear,
+    get_reminder_chance,
+    get_scope,
     has_scope_blocked,
     increment,
     mark_scope_blocked,
     reset,
+    set_reminder_chance,
+    set_scope,
     should_block,
 )
 from mcp_memory.path_resolver import normalize_path, resolve_project_for_path
@@ -56,12 +62,7 @@ _MEMORY_READ_TOOL_NAMES = frozenset({
     "get_entity_with_relations",
 })
 
-_MEMORY_REMINDER_TOOLS = frozenset({
-    "replace_in_file",
-    "write_to_file",
-    "execute_command",
-    "plan_mode_respond",
-})
+_MEMORY_REMINDER_TOOLS = FILE_EDIT_TOOLS | SHELL_TOOLS | {CanonicalTool.PLAN_MODE_RESPOND}
 
 # Update prompts/shared/rules/hooks-mcp-memory.md if any of these messages change.
 _MEMORY_REMINDER_TEMPLATE = (
@@ -118,14 +119,6 @@ _AUTO_REGISTER_UNKNOWN_NOTE = (
 _DEFAULT_READ_ONLY_AGENT_TYPES = frozenset({"Explore", "Plan"})
 _READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
 
-_DEFAULT_FILE_EDIT_TOOL_NAMES = frozenset({
-    "Edit",
-    "Write",
-    "MultiEdit",
-    "NotebookEdit",
-    "replace_in_file",
-    "write_to_file",
-})
 _FILE_EDIT_TOOLS_ENV = "MCP_MEMORY_EDIT_TOOLS"
 _EDIT_TOOL_WEIGHT = 0.25
 
@@ -146,7 +139,7 @@ def _file_edit_tool_names() -> frozenset[str]:
     """Return file-edit tool names, including MCP_MEMORY_EDIT_TOOLS extras."""
     raw = os.environ.get(_FILE_EDIT_TOOLS_ENV, "")
     extra = {name.strip() for name in raw.split(",") if name.strip()}
-    return _DEFAULT_FILE_EDIT_TOOL_NAMES | extra
+    return FILE_EDIT_TOOLS | extra
 
 
 def _is_file_edit(tool_name: str) -> bool:
@@ -154,20 +147,15 @@ def _is_file_edit(tool_name: str) -> bool:
     return _extract_mcp_suffix(tool_name) in _file_edit_tool_names()
 
 
-class _ReminderChance:
-    """Tracks the probability of triggering a memory reminder."""
-
-    def __init__(self) -> None:
-        self.chance: float = _MEMORY_REMINDER_CHANCE
-
-    def step(self) -> None:
-        """Increment the reminder chance by one cooldown step."""
-        increment_amount = _MEMORY_REMINDER_CHANCE / _MEMORY_COOLDOWN_STEPS
-        self.chance = min(_MEMORY_REMINDER_CHANCE, self.chance + increment_amount)
-
-    def reset(self) -> None:
-        """Reset the reminder chance to zero."""
-        self.chance = 0.0
+def _reminder_due(task_id: str) -> bool:
+    """Step the task's reminder chance, roll it, and reset the chance when a reminder is due."""
+    chance = min(
+        _MEMORY_REMINDER_CHANCE,
+        get_reminder_chance(task_id, _MEMORY_REMINDER_CHANCE) + _MEMORY_REMINDER_CHANCE / _MEMORY_COOLDOWN_STEPS,
+    )
+    due = random.random() < chance
+    set_reminder_chance(task_id, 0.0 if due else chance)
+    return due
 
 
 def _extract_mcp_suffix(tool_name: str) -> str:
@@ -451,6 +439,72 @@ def _check_block(task_id: str, project_scope: str) -> HookResult | None:
     return HookResult(block=_MEMORY_BLOCK_TEMPLATE.format(project=project_scope))
 
 
+def _task_scope(task_id: str, workspace_roots: list[str]) -> str:
+    """Return the task's project scope, deriving and persisting it from workspace roots when unset."""
+    scope = get_scope(task_id)
+    if scope is not None:
+        return scope
+    for root in workspace_roots:
+        detected = _resolve_project(root)
+        if detected:
+            set_scope(task_id, detected)
+            return detected
+    return "unknown"
+
+
+def _record_scope_from_parameters(task_id: str, tool_name: str, parameters: dict[str, object]) -> None:
+    """Persist the task's project scope from file paths in tool parameters."""
+    path_str = ""
+    if tool_name in FILE_EDIT_TOOLS:
+        path_str = FileEditParameters.build(parameters).path
+    elif tool_name in FILE_READ_TOOLS:
+        path_str = ReadParameters.build(parameters).path
+    elif tool_name in SHELL_TOOLS:
+        path_str = str(parameters.get("working_dir", "") or parameters.get("cwd", ""))
+
+    if path_str:
+        detected = _resolve_project(path_str)
+        if detected:
+            set_scope(task_id, detected)
+
+
+def _check_memory_scope(
+    task_id: str,
+    project_scope: str,
+    tool_name: str,
+    parameters: dict[str, object],
+) -> HookResult | None:
+    """Block or warn if a memory write targets the wrong project scope."""
+    target = _extract_memory_project(tool_name, parameters)
+    if target and target != "global" and project_scope not in {"unknown", target}:
+        message = _SCOPE_MISMATCH_WARNING.format(
+            target=target,
+            detected=project_scope,
+        )
+        if has_scope_blocked(task_id, target):
+            return HookResult(notes=[message])
+        mark_scope_blocked(task_id, target)
+        return HookResult(block=message)
+    return None
+
+
+def _check_memory_write(
+    task_id: str,
+    project_scope: str,
+    tool_name: str,
+    parameters: dict[str, object],
+) -> HookResult | None:
+    """Combine the wrong-scope check with the redundant-date-prefix nudge."""
+    result = _check_memory_scope(task_id, project_scope, tool_name, parameters)
+    note = _date_prefix_note(tool_name, parameters)
+    if note is None:
+        return result
+    if result is None:
+        return HookResult(notes=[note])
+    result.notes.append(note)
+    return result
+
+
 def _str_list(value: object) -> list[str]:
     """Coerce an object to a list of strings."""
     if isinstance(value, list):
@@ -554,8 +608,6 @@ class MemoryPlugin(HooksPlugin):
     """Plugin that provides memory tracking for the hook system."""
 
     def __init__(self) -> None:
-        self._reminder = _ReminderChance()
-        self._project_scope = "unknown"
         # Update prompts/shared/rules/hooks-mcp-memory.md if hook-event wiring changes.
         self._handlers: dict[str, Callable[..., HookResult | None]] = {
             "TaskStart": self._on_task_start,
@@ -585,10 +637,10 @@ class MemoryPlugin(HooksPlugin):
         task_id = str(kwargs.get("task_id", ""))
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
         clear(task_id)
-        self._reminder.reset()
+        set_reminder_chance(task_id, 0.0)
         auto_note = self._maybe_auto_register(workspace_roots)
         if workspace_roots:
-            self._project_scope = _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
+            set_scope(task_id, _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name)
         notes = _build_task_start_context(workspace_roots)
         if auto_note:
             notes.append(auto_note)
@@ -655,14 +707,14 @@ class MemoryPlugin(HooksPlugin):
         task_id = str(kwargs.get("task_id", ""))
         tool_name = str(kwargs.get("tool_name", ""))
         parameters = _str_dict(kwargs.get("parameters", {}))
-        self._derive_scope_from_workspace_roots(kwargs)
+        project_scope = _task_scope(task_id, _str_list(kwargs.get("workspace_roots", [])))
         if _is_memory_write(tool_name, parameters):
-            return self._check_memory_write(task_id, tool_name, parameters)
+            return _check_memory_write(task_id, project_scope, tool_name, parameters)
         if _is_memory_read(tool_name, parameters):
             return None
         if is_subagent(kwargs):
             return None
-        return _check_block(task_id, self._project_scope)
+        return _check_block(task_id, project_scope)
 
     def _on_pre_mcp_tool_use(self, **kwargs: object) -> HookResult | None:
         agent_type = str(kwargs.get("agent_type", ""))
@@ -670,53 +722,19 @@ class MemoryPlugin(HooksPlugin):
             return None
         task_id = str(kwargs.get("task_id", ""))
         mcp_tool_name = str(kwargs.get("mcp_tool_name", ""))
+        project_scope = _task_scope(task_id, _str_list(kwargs.get("workspace_roots", [])))
         if mcp_tool_name in _MEMORY_WRITE_TOOL_NAMES:
             mcp_arguments = kwargs.get("mcp_arguments", "{}")
             params: dict[str, object] = {
                 "tool_name": mcp_tool_name,
                 "arguments": mcp_arguments,
             }
-            return self._check_memory_write(task_id, "use_mcp_tool", params)
+            return _check_memory_write(task_id, project_scope, "use_mcp_tool", params)
         if mcp_tool_name in _MEMORY_READ_TOOL_NAMES:
             return None
         if is_subagent(kwargs):
             return None
-        return _check_block(task_id, self._project_scope)
-
-    def _check_memory_scope(
-        self,
-        task_id: str,
-        tool_name: str,
-        parameters: dict[str, object],
-    ) -> HookResult | None:
-        """Block or warn if a memory write targets the wrong project scope."""
-        target = _extract_memory_project(tool_name, parameters)
-        if target and target != "global" and self._project_scope not in {"unknown", target}:
-            message = _SCOPE_MISMATCH_WARNING.format(
-                target=target,
-                detected=self._project_scope,
-            )
-            if has_scope_blocked(task_id, target):
-                return HookResult(notes=[message])
-            mark_scope_blocked(task_id, target)
-            return HookResult(block=message)
-        return None
-
-    def _check_memory_write(
-        self,
-        task_id: str,
-        tool_name: str,
-        parameters: dict[str, object],
-    ) -> HookResult | None:
-        """Combine the wrong-scope check with the redundant-date-prefix nudge."""
-        result = self._check_memory_scope(task_id, tool_name, parameters)
-        note = _date_prefix_note(tool_name, parameters)
-        if note is None:
-            return result
-        if result is None:
-            return HookResult(notes=[note])
-        result.notes.append(note)
-        return result
+        return _check_block(task_id, project_scope)
 
     def _on_post_tool_use(self, **kwargs: object) -> HookResult | None:
         agent_type = str(kwargs.get("agent_type", ""))
@@ -727,11 +745,12 @@ class MemoryPlugin(HooksPlugin):
         parameters = _str_dict(kwargs.get("parameters", {}))
         is_state_write = bool(kwargs.get("is_state_write"))
         is_memory_write = _is_memory_write(tool_name, parameters)
-        self._derive_scope_from_workspace_roots(kwargs)
+        workspace_roots = _str_list(kwargs.get("workspace_roots", []))
+        _task_scope(task_id, workspace_roots)
 
         if is_state_write or is_memory_write:
             reset(task_id)
-            self._reminder.reset()
+            set_reminder_chance(task_id, 0.0)
             record_write()
             return None
 
@@ -742,40 +761,13 @@ class MemoryPlugin(HooksPlugin):
             increment(task_id, _EDIT_TOOL_WEIGHT)
         else:
             increment(task_id)
-        self._update_scope_from_parameters(tool_name, parameters)
+        _record_scope_from_parameters(task_id, tool_name, parameters)
 
         if tool_name in _MEMORY_REMINDER_TOOLS:
-            self._reminder.step()
-            if random.random() < self._reminder.chance:
-                self._reminder.reset()
+            if _reminder_due(task_id):
                 reminder = _MEMORY_REMINDER_TEMPLATE.format(
-                    project=self._project_scope,
+                    project=_task_scope(task_id, workspace_roots),
                 )
                 return HookResult(notes=[reminder])
 
         return None
-
-    def _derive_scope_from_workspace_roots(self, kwargs: dict[str, object]) -> None:
-        """Derive project scope from workspace_roots when scope is unknown."""
-        if self._project_scope != "unknown":
-            return
-        for root in _str_list(kwargs.get("workspace_roots", [])):
-            detected = _resolve_project(root)
-            if detected:
-                self._project_scope = detected
-                return
-
-    def _update_scope_from_parameters(self, tool_name: str, parameters: dict[str, object]) -> None:
-        """Update the cached project scope from file paths in tool parameters."""
-        path_str = ""
-        if tool_name in {"replace_in_file", "write_to_file", "read_file"}:
-            path_str = str(parameters.get("path", ""))
-        elif tool_name in {"Edit", "Write", "MultiEdit", "Read", "NotebookEdit"}:
-            path_str = str(parameters.get("file_path", "") or parameters.get("notebook_path", ""))
-        elif tool_name in {"execute_command", "execute_bash"}:
-            path_str = str(parameters.get("working_dir", "") or parameters.get("cwd", ""))
-
-        if path_str:
-            detected = _resolve_project(path_str)
-            if detected:
-                self._project_scope = detected
