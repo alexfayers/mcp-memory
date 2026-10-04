@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import TYPE_CHECKING
 
 from mcp_memory.path_resolver import match_project_for_path, normalize_path
@@ -26,43 +25,30 @@ class ProjectRepository:
 
     def set_paths(self, project: str, paths: list[str]) -> None:
         """Replace the filesystem paths registered to a project with the given list."""
-        if not project or not isinstance(project, str):
-            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
         if not isinstance(paths, list):
             raise TypeError(f"Paths must be a list, got: {paths!r}")
+        self._change_members(
+            project, "project_paths", "path", [normalize_path(path) for path in paths], [], clear=True, exclusive=True
+        )
 
-        with self._conn.transaction():
-            project_id = get_or_create_project_id(self._conn, project)
-            self._conn.write("DELETE FROM project_paths WHERE project_id = ?", (project_id,))
-            for path in paths:
-                normalized = normalize_path(path)
-                try:
-                    self._conn.write(
-                        "INSERT INTO project_paths (project_id, path) VALUES (?, ?)",
-                        (project_id, normalized),
-                    )
-                except sqlite3.IntegrityError as exc:
-                    raise ValueError(f"Path '{normalized}' is already registered to another project") from exc
+    def update_paths(self, project: str, add: list[str], remove: list[str]) -> None:
+        """Remove then add filesystem paths for a project, leaving its other paths untouched."""
+        self._change_members(
+            project,
+            "project_paths",
+            "path",
+            [normalize_path(path) for path in add],
+            [normalize_path(path) for path in remove],
+            exclusive=True,
+        )
 
     def add_path(self, project: str, path: str) -> None:
         """Register one filesystem path for a project without replacing its existing paths.
 
-        Idempotent and additive: unlike set_paths (which replaces all of a project's
-        paths), this inserts a single path via INSERT OR IGNORE. Because
-        project_paths.path is globally UNIQUE, a path already registered to another
-        project is silently left untouched rather than raising - the intended
-        no-clobber behaviour for automatic registration, where a path another project
-        already owns means "already handled, do not steal it".
+        A path already registered to another project is silently left untouched rather
+        than raising - the no-clobber behaviour wanted for automatic registration.
         """
-        if not project or not isinstance(project, str):
-            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
-
-        with self._conn.transaction():
-            project_id = get_or_create_project_id(self._conn, project)
-            self._conn.write(
-                "INSERT OR IGNORE INTO project_paths (project_id, path) VALUES (?, ?)",
-                (project_id, normalize_path(path)),
-            )
+        self._change_members(project, "project_paths", "path", [normalize_path(path)], [])
 
     def paths(self, project: str | None = None) -> list[tuple[str, str]]:
         """Return (project_name, registered_path) mappings, optionally for one project."""
@@ -84,19 +70,48 @@ class ProjectRepository:
 
     def set_groups(self, project: str, groups: list[str]) -> None:
         """Replace the groups a project belongs to with the given list."""
-        if not project or not isinstance(project, str):
-            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
         if not isinstance(groups, list):
             raise TypeError(f"Groups must be a list, got: {groups!r}")
+        self._change_members(project, "project_groups", "group_name", groups, [], clear=True)
+
+    def update_groups(self, project: str, add: list[str], remove: list[str]) -> None:
+        """Remove then add groups for a project, leaving its other groups untouched."""
+        self._change_members(project, "project_groups", "group_name", add, remove)
+
+    def _change_members(
+        self,
+        project: str,
+        table: str,
+        column: str,
+        add: list[str],
+        remove: list[str],
+        *,
+        clear: bool = False,
+        exclusive: bool = False,
+    ) -> None:
+        """Clear (optionally), remove then add rows of a project membership table in one transaction.
+
+        With exclusive, a value already owned by another project raises; otherwise it is ignored.
+        """
+        if not project or not isinstance(project, str):
+            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
 
         with self._conn.transaction():
             project_id = get_or_create_project_id(self._conn, project)
-            self._conn.write("DELETE FROM project_groups WHERE project_id = ?", (project_id,))
-            for group_name in groups:
-                self._conn.write(
-                    "INSERT INTO project_groups (project_id, group_name) VALUES (?, ?)",
-                    (project_id, group_name),
+            if clear:
+                self._conn.write(f"DELETE FROM {table} WHERE project_id = ?", (project_id,))
+            for value in remove:
+                self._conn.write(f"DELETE FROM {table} WHERE project_id = ? AND {column} = ?", (project_id, value))
+            for value in add:
+                inserted = self._conn.write(
+                    f"INSERT OR IGNORE INTO {table} (project_id, {column}) VALUES (?, ?)", (project_id, value)
                 )
+                if exclusive and not inserted.rowcount and self._owner_id(table, column, value) != project_id:
+                    raise ValueError(f"Path '{value}' is already registered to another project")
+
+    def _owner_id(self, table: str, column: str, value: str) -> int | None:
+        row = self._conn.query_one(f"SELECT project_id FROM {table} WHERE {column} = ?", (value,))
+        return row["project_id"] if row else None
 
     def groups(self, project: str | None = None) -> list[tuple[str, str]]:
         """Return (project_name, group_name) mappings, optionally for one project."""

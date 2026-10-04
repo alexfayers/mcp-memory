@@ -1214,6 +1214,24 @@ class TestRenameEntity:
             store.entities.rename("proj", "missing", "new")
 
 
+class TestRenameEntityType:
+    def test_rename_with_entity_type_updates_type_and_search(self, memory_store: Storage) -> None:
+        memory_store.entities.create(
+            "proj", [{"name": "project/x", "entityType": "project", "observations": ["needle"]}]
+        )
+        memory_store.entities.rename("proj", "project/x", "task/x", entity_type="task")
+        assert memory_store.reads.get_entity("proj", "task/x").entity_type == "task"
+        assert [e.name for e in memory_store.reads.search("proj", "needle", entity_type="task")["entities"]] == [
+            "task/x"
+        ]
+        assert memory_store.reads.search("proj", "needle", entity_type="project")["entities"] == []
+
+    def test_rename_without_entity_type_keeps_type(self, memory_store: Storage) -> None:
+        memory_store.entities.create("proj", [{"name": "a", "entityType": "task", "observations": ["x"]}])
+        memory_store.entities.rename("proj", "a", "a2")
+        assert memory_store.reads.get_entity("proj", "a2").entity_type == "task"
+
+
 class TestMoveEntityCrossScope:
     def test_move_relocates_entity(self, store: Storage) -> None:
         store.entities.create("src", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
@@ -2875,3 +2893,136 @@ class TestConnection:
                 readonly.write("INSERT INTO t VALUES (2)")
         finally:
             readonly.close()
+
+
+@pytest.fixture
+def memory_store(monkeypatch: pytest.MonkeyPatch) -> Storage:
+    monkeypatch.setattr("mcp_memory.storage.repositories.projects.normalize_path", lambda path: path.rstrip("/"))
+    return open_writable(":memory:")
+
+
+class TestUpdateProjectPaths:
+    def test_add_appends_to_existing_paths(self, memory_store: Storage) -> None:
+        memory_store.projects.set_paths("platform", ["/a"])
+        memory_store.projects.update_paths("platform", add=["/b/"], remove=[])
+        assert memory_store.projects.paths_for("platform") == ["/a", "/b"]
+
+    def test_remove_drops_only_named_path(self, memory_store: Storage) -> None:
+        memory_store.projects.set_paths("platform", ["/a", "/b"])
+        memory_store.projects.update_paths("platform", add=[], remove=["/a/"])
+        assert memory_store.projects.paths_for("platform") == ["/b"]
+
+    def test_remove_unknown_path_is_noop(self, memory_store: Storage) -> None:
+        memory_store.projects.set_paths("platform", ["/a"])
+        memory_store.projects.update_paths("platform", add=[], remove=["/nowhere"])
+        assert memory_store.projects.paths_for("platform") == ["/a"]
+
+    def test_remove_path_owned_by_another_project_is_noop(self, memory_store: Storage) -> None:
+        memory_store.projects.set_paths("platform", ["/a"])
+        memory_store.projects.set_paths("other", ["/b"])
+        memory_store.projects.update_paths("other", add=[], remove=["/a"])
+        assert memory_store.projects.paths_for("platform") == ["/a"]
+
+    def test_add_already_owned_path_is_noop(self, memory_store: Storage) -> None:
+        memory_store.projects.set_paths("platform", ["/a"])
+        memory_store.projects.update_paths("platform", add=["/a"], remove=[])
+        assert memory_store.projects.paths_for("platform") == ["/a"]
+
+    def test_add_path_owned_by_another_project_raises_and_rolls_back(self, memory_store: Storage) -> None:
+        memory_store.projects.set_paths("platform", ["/a"])
+        memory_store.projects.set_paths("other", ["/b"])
+        with pytest.raises(ValueError, match="already registered"):
+            memory_store.projects.update_paths("other", add=["/c", "/a"], remove=["/b"])
+        assert memory_store.projects.paths_for("platform") == ["/a"]
+        assert memory_store.projects.paths_for("other") == ["/b"]
+
+    def test_add_path_still_ignores_collision(self, memory_store: Storage) -> None:
+        memory_store.projects.set_paths("platform", ["/a"])
+        memory_store.projects.add_path("other", "/a")
+        assert memory_store.projects.paths_for("platform") == ["/a"]
+        assert memory_store.projects.paths_for("other") == []
+
+
+class TestUpdateProjectGroups:
+    def test_add_appends_to_existing_groups(self, memory_store: Storage) -> None:
+        memory_store.projects.set_groups("a", ["g1"])
+        memory_store.projects.update_groups("a", add=["g2", "g1"], remove=[])
+        assert memory_store.projects.groups("a") == [("a", "g1"), ("a", "g2")]
+
+    def test_remove_drops_only_named_group(self, memory_store: Storage) -> None:
+        memory_store.projects.set_groups("a", ["g1", "g2"])
+        memory_store.projects.update_groups("a", add=[], remove=["g1", "unknown"])
+        assert memory_store.projects.groups("a") == [("a", "g2")]
+
+
+class TestEditObservation:
+    @staticmethod
+    def _entity(store: Storage, observations: list[str]) -> dict[str, str]:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": observations}])
+        return {o.content: o.content_hash for o in store.reads.get_entity("proj", "e1").observations}
+
+    def test_whole_replace_keeps_vote_score_and_position(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["first", "second"])
+        memory_store.observations.vote("proj", "e1", 1, content="first")
+        new_hash = memory_store.observations.edit("proj", "e1", hashes["first"], "changed")
+        entity = memory_store.reads.get_entity("proj", "e1")
+        assert obs_contents(entity) == ["changed", "second"]
+        assert obs_votes(entity) == [1, 0]
+        assert entity.observations[0].content_hash == new_hash == hash_observation("changed")
+
+    def test_old_text_replaces_single_occurrence(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["the quick fox"])
+        memory_store.observations.edit("proj", "e1", hashes["the quick fox"], "slow", old_text="quick")
+        assert obs_contents(memory_store.reads.get_entity("proj", "e1")) == ["the slow fox"]
+
+    def test_old_text_not_found_raises(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["abc"])
+        with pytest.raises(ValueError, match="oldText not found"):
+            memory_store.observations.edit("proj", "e1", hashes["abc"], "x", old_text="zzz")
+
+    def test_old_text_ambiguous_raises(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["ab ab"])
+        with pytest.raises(ValueError, match="matches 2 times"):
+            memory_store.observations.edit("proj", "e1", hashes["ab ab"], "x", old_text="ab")
+
+    def test_empty_old_text_raises(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["abc"])
+        with pytest.raises(ValueError, match="oldText"):
+            memory_store.observations.edit("proj", "e1", hashes["abc"], "x", old_text="")
+
+    def test_unknown_hash_raises(self, memory_store: Storage) -> None:
+        self._entity(memory_store, ["abc"])
+        with pytest.raises(ValueError, match="Observation not found in entity 'e1'"):
+            memory_store.observations.edit("proj", "e1", "deadbeef", "x")
+
+    def test_missing_entity_raises(self, memory_store: Storage) -> None:
+        with pytest.raises(ValueError, match="Entity 'ghost' not found"):
+            memory_store.observations.edit("proj", "ghost", "aaaa", "x")
+
+    def test_empty_result_raises(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["abc"])
+        with pytest.raises(ValueError, match="empty"):
+            memory_store.observations.edit("proj", "e1", hashes["abc"], "  ")
+
+    def test_duplicate_result_raises(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["one", "two"])
+        with pytest.raises(ValueError, match="duplicates an existing observation"):
+            memory_store.observations.edit("proj", "e1", hashes["one"], "two")
+
+    def test_unchanged_result_returns_same_hash(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["one"])
+        assert memory_store.observations.edit("proj", "e1", hashes["one"], "one") == hashes["one"]
+
+    def test_search_finds_new_text_not_old(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["oldneedle"])
+        memory_store.observations.edit("proj", "e1", hashes["oldneedle"], "newneedle")
+        assert memory_store.reads.search("proj", "newneedle")["entities"]
+        assert memory_store.reads.search("proj", "oldneedle")["entities"] == []
+
+    def test_bumps_updated_at(self, memory_store: Storage) -> None:
+        hashes = self._entity(memory_store, ["one"])
+        with memory_store.connection.transaction():
+            memory_store.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days')")
+        before = memory_store.reads.get_entity("proj", "e1").updated_at
+        memory_store.observations.edit("proj", "e1", hashes["one"], "two")
+        assert memory_store.reads.get_entity("proj", "e1").updated_at > before

@@ -44,6 +44,7 @@ _MEMORY_WRITE_TOOL_NAMES = frozenset({
     "delete_entity",
     "delete_relation",
     "delete_observations",
+    "edit_observation",
     "set_entity_status",
 })
 
@@ -111,7 +112,7 @@ _AUTO_REGISTERED_NOTE = (
 _AUTO_REGISTER_UNKNOWN_NOTE = (
     "This workspace (`{anchor}`) maps to no known memory project and its name could not"
     " be matched to an existing one, so no scope was created. If it belongs to a project,"
-    " register it with `set_metadata(project=..., kind='paths', values=['{anchor}'])`."
+    " register it with `set_metadata(project=..., kind='paths', add=['{anchor}'])`."
 )
 
 _DEFAULT_READ_ONLY_AGENT_TYPES = frozenset({"Explore", "Plan"})
@@ -328,7 +329,7 @@ def _parse_mcp_arguments(
     return parameters
 
 
-_OBSERVATION_TEXT_TOOLS = frozenset({"create_entities", "add_observations"})
+_OBSERVATION_TEXT_TOOLS = frozenset({"create_entities", "add_observations", "edit_observation"})
 
 
 def _observation_texts(tool_name: str, parameters: dict[str, object]) -> list[str]:
@@ -339,6 +340,9 @@ def _observation_texts(tool_name: str, parameters: dict[str, object]) -> list[st
     args = _parse_mcp_arguments(tool_name, parameters)
     if name == "add_observations":
         return _str_list(args.get("observations"))
+    if name == "edit_observation":
+        new_text = args.get("newText")
+        return [new_text] if isinstance(new_text, str) else []
     texts: list[str] = []
     entities_raw = args.get("entities", [])
     entities: list[object] = entities_raw if isinstance(entities_raw, list) else []

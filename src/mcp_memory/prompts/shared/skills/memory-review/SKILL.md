@@ -38,13 +38,13 @@ The "MEMORY UPDATE REQUIRED" gate (in mcp-memory's own hook plugin, `hooks/plugi
 
 The audit's `orphans`, `misused_project_type`, `unprefixed`, and `ghost_scopes` keys enumerate these deterministically:
 - **Orphan entities** (`orphans`) - nodes with zero relations (these float disconnected in the graph)
-- **Misused `project` type** (`misused_project_type`) - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` is the only type exempt from the relation requirement, so a legacy work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. This is usually a modeling mistake: MUST migrate the content to a `task/`, `feature/`, or `pattern/` entity (with a relation), or delete it if superseded.
+- **Misused `project` type** (`misused_project_type`) - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` is the only type exempt from the relation requirement, so a legacy work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. This is usually a modeling mistake: MUST rename_entity it to a `task/`, `feature/`, or `pattern/` name (add a relation first), or delete it if superseded.
 - **Unprefixed entities** (`unprefixed`) - names not starting with a standard prefix (`project/`, `feature/`, `task/`, `user-preferences/`, `pattern/`, `knowledge/`)
 - **Ghost project scopes** (`ghost_scopes`) - scopes that exist but contain zero entities (from auto-generated sessions, old renames)
 
 **Duplicate entities** - same concept stored with and without prefix (e.g. `MyProject` and `project/MyProject`) - are a judgement call the audit does not make: MUST cross-reference the `unprefixed` list against prefixed names in the same scope.
 
-Fix (your judgement): MUST rename with proper prefix using `rename_entity` (preserves observations and relations - no delete+recreate needed), link orphans, or delete if stale. For a misused `project` entity, MUST migrate its content to the correct entity type with a relation (a same-scope rename is `rename_entity`, while a cross-scope move is `move_entity_cross_scope`, which drops and returns the entity's relations for you to recreate in the target scope), or delete if a `task/`/`feature/` already covers it, then delete the rogue `project` entity.
+Fix (your judgement): MUST rename with proper prefix using `rename_entity` (preserves observations and relations - no delete+recreate needed), link orphans, or delete if stale. For a misused `project` entity, MUST rename_entity it to the correct type prefix (the type follows; add a relation first), or delete it if a task/feature already covers it.
 
 ## 2. Consolidate duplicates
 

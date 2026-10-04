@@ -5,7 +5,7 @@ description: Guide {{agent}} on using mcp-memory for persistent memory.
 # mcp-memory
 
 - `global`: preferences, patterns, cross-project knowledge - never project summaries, repos, paths, configs. `<repo-name>`: the rest. MUST match an entity's scope to its subject before appending.
-- Locating a repo or file: MUST check `list_metadata(kind="paths")` and memory before `find`/`grep`/`ls`; MUST register an unmapped repo or worktree via `set_metadata(kind="paths")`.
+- Locating a repo or file: MUST check `list_metadata(kind="paths")` and memory before `find`/`grep`/`ls`; MUST register an unmapped repo or worktree via `set_metadata(kind="paths", add=[...])`.
 - Server down: MUST run `mcp-memory restart`, ask the user to reload MCP; never run the binary bare or via `launchctl`/`systemctl`.
 
 ## Start

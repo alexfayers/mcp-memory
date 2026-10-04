@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -585,6 +587,53 @@ class TestBulkRenameEntityTool:
         assert "error" in server.rename_entity("proj", "missing", "new")
 
 
+class TestRenameEntityTypeChange:
+    @staticmethod
+    def _current(mock_db: MagicMock, entity_type: str, relations: list[str]) -> None:
+        mock_db.reads.get_entity_with_relations.return_value = {
+            "entity": SimpleNamespace(entity_type=entity_type),
+            "relations": relations,
+        }
+
+    def test_type_prefix_change_passes_new_type(self, mock_db: MagicMock) -> None:
+        self._current(mock_db, "project", ["rel"])
+        result = server.rename_entity("proj", "project/x", "task/x")
+        mock_db.entities.rename.assert_called_once_with("proj", "project/x", "task/x", entity_type="task")
+        assert result == {
+            "message": "Renamed 'project/x' to 'task/x' in project 'proj'. "
+            "Entity type changed from 'project' to 'task'."
+        }
+
+    def test_type_change_without_relation_errors(self, mock_db: MagicMock) -> None:
+        self._current(mock_db, "project", [])
+        result = server.rename_entity("proj", "project/x", "task/x")
+        assert result == {"error": "Changing to 'task' needs at least one relation - create_relations first."}
+        mock_db.entities.rename.assert_not_called()
+
+    def test_change_to_relation_exempt_type_needs_no_relation(self, mock_db: MagicMock) -> None:
+        self._current(mock_db, "task", [])
+        server.rename_entity("proj", "task/x", "project/proj")
+        mock_db.entities.rename.assert_called_once_with("proj", "task/x", "project/proj", entity_type="project")
+
+    def test_rename_to_other_project_root_errors(self, mock_db: MagicMock) -> None:
+        self._current(mock_db, "task", ["rel"])
+        result = server.rename_entity("proj", "task/x", "project/other")
+        assert "must be named 'project/proj'" in str(result["error"])
+        mock_db.entities.rename.assert_not_called()
+
+    def test_same_type_prefix_keeps_type_unchanged_message(self, mock_db: MagicMock) -> None:
+        self._current(mock_db, "task", [])
+        result = server.rename_entity("proj", "task/x", "task/y")
+        mock_db.entities.rename.assert_called_once_with("proj", "task/x", "task/y", entity_type="task")
+        assert result == {"message": "Renamed 'task/x' to 'task/y' in project 'proj'."}
+
+    def test_unprefixed_name_leaves_type_alone(self, mock_db: MagicMock) -> None:
+        self._current(mock_db, "task", [])
+        result = server.rename_entity("proj", "a", "a2")
+        mock_db.entities.rename.assert_called_once_with("proj", "a", "a2", entity_type=None)
+        assert result == {"message": "Renamed 'a' to 'a2' in project 'proj'."}
+
+
 class TestMoveEntityCrossScopeTool:
     def test_move_returns_dropped_relations(self, server_db: Storage) -> None:
         server_db.entities.create(
@@ -768,6 +817,77 @@ class TestProjectGroupTools:
 
     def test_set_project_groups_empty_project_returns_error(self, server_db: Storage) -> None:
         assert "error" in server.set_metadata("", "groups", ["tooling"])
+
+
+@pytest.fixture
+def mock_db() -> Iterator[MagicMock]:
+    original = server._db
+    db = MagicMock()
+    server._db = db
+    yield db
+    server._db = original
+
+
+class TestSetMetadataDelta:
+    def test_add_and_remove_paths_forwarded(self, mock_db: MagicMock) -> None:
+        mock_db.projects.paths_for.return_value = ["/a"]
+        result = server.set_metadata("platform", "paths", add=["/a"], remove=["/b"])
+        mock_db.projects.update_paths.assert_called_once_with("platform", ["/a"], ["/b"])
+        mock_db.projects.set_paths.assert_not_called()
+        assert result == {"project": "platform", "paths": ["/a"]}
+
+    def test_add_and_remove_groups_forwarded(self, mock_db: MagicMock) -> None:
+        mock_db.projects.group_members.return_value = ["sibling"]
+        result = server.set_metadata("platform", "groups", add=["g"])
+        mock_db.projects.update_groups.assert_called_once_with("platform", ["g"], [])
+        mock_db.projects.set_groups.assert_not_called()
+        assert result == {"project": "platform", "members": ["sibling"]}
+
+    def test_values_still_replaces(self, mock_db: MagicMock) -> None:
+        server.set_metadata("platform", "paths", ["/a"])
+        mock_db.projects.set_paths.assert_called_once_with("platform", ["/a"])
+        mock_db.projects.update_paths.assert_not_called()
+
+    def test_empty_values_still_replaces(self, mock_db: MagicMock) -> None:
+        server.set_metadata("platform", "groups", [])
+        mock_db.projects.set_groups.assert_called_once_with("platform", [])
+
+    def test_empty_add_and_remove_is_noop(self, mock_db: MagicMock) -> None:
+        mock_db.projects.paths_for.return_value = ["/a"]
+        result = server.set_metadata("platform", "paths", add=[], remove=[])
+        mock_db.projects.update_paths.assert_not_called()
+        mock_db.projects.set_paths.assert_not_called()
+        assert result == {"project": "platform", "paths": ["/a"]}
+
+    @pytest.mark.parametrize("extra", [{"add": ["/a"]}, {"remove": ["/a"]}])
+    def test_values_with_add_or_remove_errors(self, mock_db: MagicMock, extra: dict[str, list[str]]) -> None:
+        result = server.set_metadata("platform", "paths", ["/b"], **extra)
+        assert result == {"error": "Pass values to replace, or add/remove to change entries - not both."}
+        mock_db.projects.set_paths.assert_not_called()
+
+    def test_no_arguments_errors(self, mock_db: MagicMock) -> None:
+        assert server.set_metadata("platform", "paths") == {"error": "Provide values, add, or remove."}
+
+    def test_invalid_kind_with_add_errors(self, mock_db: MagicMock) -> None:
+        assert "Invalid kind" in str(server.set_metadata("platform", "bogus", add=["x"])["error"])
+
+
+class TestEditObservationTool:
+    def test_forwards_arguments_and_returns_new_hash(self, mock_db: MagicMock) -> None:
+        mock_db.observations.edit.return_value = "newhash"
+        result = server.edit_observation("proj", "e1", "oldhash", "fixed", oldText="broken")
+        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", "broken")
+        assert result == {"message": "Edited observation on 'e1'.", "hash": "newhash"}
+
+    def test_old_text_defaults_to_whole_replace(self, mock_db: MagicMock) -> None:
+        server.edit_observation("proj", "e1", "oldhash", "fixed")
+        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", None)
+
+    def test_value_error_returned_as_error(self, mock_db: MagicMock) -> None:
+        mock_db.observations.edit.side_effect = ValueError("oldText not found in observation")
+        assert server.edit_observation("proj", "e1", "h", "x", oldText="y") == {
+            "error": "oldText not found in observation"
+        }
 
 
 class TestMetadataToolInvalidKind:

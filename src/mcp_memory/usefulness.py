@@ -25,7 +25,13 @@ if TYPE_CHECKING:
 _SURFACE_TOOLS = frozenset({"search_nodes", "search_all_projects"})
 
 # Write tools that count as "using" a surfaced entity. Deletions are deliberately excluded.
-_USE_TOOLS = frozenset({"add_observations", "create_entities", "create_relations", "set_entity_status"})
+_USE_TOOLS = frozenset({
+    "add_observations",
+    "create_entities",
+    "create_relations",
+    "edit_observation",
+    "set_entity_status",
+})
 
 
 def observe(db: Storage, tool_name: str, kwargs: dict[str, Any], result: Any) -> None:
@@ -96,7 +102,7 @@ def _used_targets(tool_name: str, kwargs: dict[str, Any]) -> list[tuple[str, str
         for entity in kwargs.get("entities", []) or []:
             if isinstance(entity, dict) and entity.get("name"):
                 names.append(str(entity["name"]))
-    elif tool_name == "add_observations" and kwargs.get("entityName"):
+    elif tool_name in {"add_observations", "edit_observation"} and kwargs.get("entityName"):
         names.append(str(kwargs["entityName"]))
     elif tool_name == "set_entity_status" and kwargs.get("name"):
         names.append(str(kwargs["name"]))

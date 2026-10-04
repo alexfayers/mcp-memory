@@ -90,6 +90,7 @@ class TestKindMapping:
             "create_relations": "create",
             "add_observations": "update",
             "delete_observations": "update",
+            "edit_observation": "update",
             "set_entity_status": "update",
             "vote": "update",
             "merge_observations": "update",
@@ -120,6 +121,14 @@ class TestWriteExtraction:
         activity.record_tool(
             "add_observations",
             {"project": "p", "entityName": "task/foo", "observations": ["o"]},
+            {"message": "ok"},
+        )
+        assert activity.recent(0)[0]["entities"] == ["task/foo"]
+
+    def test_edit_observation_extracts_entity_name(self) -> None:
+        activity.record_tool(
+            "edit_observation",
+            {"project": "p", "entityName": "task/foo", "observationHash": "h", "newText": "o"},
             {"message": "ok"},
         )
         assert activity.recent(0)[0]["entities"] == ["task/foo"]
