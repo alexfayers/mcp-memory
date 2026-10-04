@@ -15,9 +15,9 @@
 | src/mcp\_memory/eval.py                              |      131 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       69 |        4 |     94% |52-53, 85, 87 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
-| src/mcp\_memory/hooks/plugin.py                      |      417 |       29 |     93% |205, 250, 368, 375, 465, 527-528, 533-541, 575, 581, 621, 624-626, 636, 643-647, 674-679, 684 |
+| src/mcp\_memory/hooks/plugin.py                      |      415 |       26 |     94% |193, 238, 356, 363, 519, 581-582, 587-595, 627, 633, 673, 676-678, 688, 695-699, 737 |
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
-| src/mcp\_memory/hooks/tracker.py                     |       72 |        1 |     99% |       108 |
+| src/mcp\_memory/hooks/tracker.py                     |       90 |        1 |     99% |       108 |
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
 | src/mcp\_memory/metrics.py                           |       86 |        0 |    100% |           |
 | src/mcp\_memory/migrations/\_\_init\_\_.py           |        0 |        0 |    100% |           |
@@ -82,7 +82,7 @@
 | tests/test\_database.py                              |     1850 |        2 |     99% | 589, 1744 |
 | tests/test\_dream\_status.py                         |      200 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      280 |        0 |    100% |           |
-| tests/test\_hooks\_plugin.py                         |      851 |       67 |     92% |514, 1453-1458, 1463-1466, 1471-1479, 1490-1493, 1522-1525, 1567-1570, 1574-1577, 1581-1585, 1589-1591, 1596-1598, 1603-1608, 1612-1613, 1617-1619, 1624-1632 |
+| tests/test\_hooks\_plugin.py                         |      903 |       67 |     93% |614, 1553-1558, 1563-1566, 1571-1579, 1590-1593, 1622-1625, 1667-1670, 1674-1677, 1681-1685, 1689-1691, 1696-1698, 1703-1708, 1712-1713, 1717-1719, 1724-1732 |
 | tests/test\_metrics.py                               |      194 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_path\_resolver.py                        |       70 |        2 |     97% |     59-60 |
@@ -92,10 +92,10 @@
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
 | tests/test\_server.py                                |      680 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       12 |        0 |    100% |           |
-| tests/test\_tracker.py                               |       51 |        0 |    100% |           |
+| tests/test\_tracker.py                               |       66 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       74 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      620 |        0 |    100% |           |
-| **TOTAL**                                            | **12657** |  **519** | **96%** |           |
+| **TOTAL**                                            | **12740** |  **516** | **96%** |           |
 
 
 ## Setup coverage badge

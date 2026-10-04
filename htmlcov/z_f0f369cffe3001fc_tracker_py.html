@@ -54,8 +54,8 @@
             </div>
         </aside>
         <h2>
-            <span class="text">72 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">71<span class="text"> run</span></button>
+            <span class="text">90 statements &nbsp;</span>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">89<span class="text"> run</span></button>
             <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">1<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">0<span class="text"> excluded</span></button>
         </h2>
@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_3352f668749ccb62_jsonc_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-04 19:25 +0000
+            created at 2026-10-04 19:38 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -108,7 +108,7 @@
     <p class="run"><span class="n"><a id="t26" href="#t26">26</a></span><span class="t">    <span class="key">return</span> <span class="nam">_state_path</span><span class="op">(</span><span class="op">)</span><span class="op">.</span><span class="nam">with_suffix</span><span class="op">(</span><span class="str">&quot;.lock&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t27" href="#t27">27</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t28" href="#t28">28</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t29" href="#t29">29</a></span><span class="t"><span class="nam">_StateData</span> <span class="op">=</span> <span class="nam">dict</span><span class="op">[</span><span class="nam">str</span><span class="op">,</span> <span class="nam">float</span> <span class="op">|</span> <span class="nam">list</span><span class="op">[</span><span class="nam">str</span><span class="op">]</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t29" href="#t29">29</a></span><span class="t"><span class="nam">_StateData</span> <span class="op">=</span> <span class="nam">dict</span><span class="op">[</span><span class="nam">str</span><span class="op">,</span> <span class="nam">float</span> <span class="op">|</span> <span class="nam">str</span> <span class="op">|</span> <span class="nam">list</span><span class="op">[</span><span class="nam">str</span><span class="op">]</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t30" href="#t30">30</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t31" href="#t31">31</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t32" href="#t32">32</a></span><span class="t"><span class="op">@</span><span class="nam">contextmanager</span>&nbsp;</span><span class="r"></span></p>
@@ -192,6 +192,36 @@
     <p class="run"><span class="n"><a id="t110" href="#t110">110</a></span><span class="t">            <span class="nam">blocked</span><span class="op">.</span><span class="nam">append</span><span class="op">(</span><span class="nam">project</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t111" href="#t111">111</a></span><span class="t">        <span class="nam">data</span><span class="op">[</span><span class="fst">f&quot;</span><span class="op">{</span><span class="nam">task_id</span><span class="op">}</span><span class="fst">:scope_blocked</span><span class="fst">&quot;</span><span class="op">]</span> <span class="op">=</span> <span class="nam">blocked</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t112" href="#t112">112</a></span><span class="t">        <span class="nam">_write</span><span class="op">(</span><span class="nam">data</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t113" href="#t113">113</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t114" href="#t114">114</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t115" href="#t115">115</a></span><span class="t"><span class="key">def</span> <span class="nam">get_scope</span><span class="op">(</span><span class="nam">task_id</span><span class="op">:</span> <span class="nam">str</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">str</span> <span class="op">|</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t116" href="#t116">116</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Return the project scope recorded for a task, if any.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t117" href="#t117">117</a></span><span class="t">    <span class="key">with</span> <span class="nam">_locked</span><span class="op">(</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t118" href="#t118">118</a></span><span class="t">        <span class="nam">scope</span> <span class="op">=</span> <span class="nam">_read</span><span class="op">(</span><span class="op">)</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="fst">f&quot;</span><span class="op">{</span><span class="nam">task_id</span><span class="op">}</span><span class="fst">:scope</span><span class="fst">&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t119" href="#t119">119</a></span><span class="t">    <span class="key">return</span> <span class="nam">scope</span> <span class="key">if</span> <span class="nam">isinstance</span><span class="op">(</span><span class="nam">scope</span><span class="op">,</span> <span class="nam">str</span><span class="op">)</span> <span class="key">else</span> <span class="key">None</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t120" href="#t120">120</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t121" href="#t121">121</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t122" href="#t122">122</a></span><span class="t"><span class="key">def</span> <span class="nam">set_scope</span><span class="op">(</span><span class="nam">task_id</span><span class="op">:</span> <span class="nam">str</span><span class="op">,</span> <span class="nam">project</span><span class="op">:</span> <span class="nam">str</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t123" href="#t123">123</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Record the project scope for a task.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t124" href="#t124">124</a></span><span class="t">    <span class="key">with</span> <span class="nam">_locked</span><span class="op">(</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t125" href="#t125">125</a></span><span class="t">        <span class="nam">data</span> <span class="op">=</span> <span class="nam">_read</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t126" href="#t126">126</a></span><span class="t">        <span class="nam">data</span><span class="op">[</span><span class="fst">f&quot;</span><span class="op">{</span><span class="nam">task_id</span><span class="op">}</span><span class="fst">:scope</span><span class="fst">&quot;</span><span class="op">]</span> <span class="op">=</span> <span class="nam">project</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t127" href="#t127">127</a></span><span class="t">        <span class="nam">_write</span><span class="op">(</span><span class="nam">data</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t128" href="#t128">128</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t129" href="#t129">129</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t130" href="#t130">130</a></span><span class="t"><span class="key">def</span> <span class="nam">get_reminder_chance</span><span class="op">(</span><span class="nam">task_id</span><span class="op">:</span> <span class="nam">str</span><span class="op">,</span> <span class="nam">default</span><span class="op">:</span> <span class="nam">float</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">float</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t131" href="#t131">131</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Return the memory-reminder probability recorded for a task, or the default.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t132" href="#t132">132</a></span><span class="t">    <span class="key">with</span> <span class="nam">_locked</span><span class="op">(</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t133" href="#t133">133</a></span><span class="t">        <span class="nam">chance</span> <span class="op">=</span> <span class="nam">_read</span><span class="op">(</span><span class="op">)</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="fst">f&quot;</span><span class="op">{</span><span class="nam">task_id</span><span class="op">}</span><span class="fst">:reminder_chance</span><span class="fst">&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t134" href="#t134">134</a></span><span class="t">    <span class="key">return</span> <span class="nam">float</span><span class="op">(</span><span class="nam">chance</span><span class="op">)</span> <span class="key">if</span> <span class="nam">isinstance</span><span class="op">(</span><span class="nam">chance</span><span class="op">,</span> <span class="op">(</span><span class="nam">int</span><span class="op">,</span> <span class="nam">float</span><span class="op">)</span><span class="op">)</span> <span class="key">else</span> <span class="nam">default</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t135" href="#t135">135</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t136" href="#t136">136</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t137" href="#t137">137</a></span><span class="t"><span class="key">def</span> <span class="nam">set_reminder_chance</span><span class="op">(</span><span class="nam">task_id</span><span class="op">:</span> <span class="nam">str</span><span class="op">,</span> <span class="nam">chance</span><span class="op">:</span> <span class="nam">float</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t138" href="#t138">138</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Record the memory-reminder probability for a task.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t139" href="#t139">139</a></span><span class="t">    <span class="key">with</span> <span class="nam">_locked</span><span class="op">(</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t140" href="#t140">140</a></span><span class="t">        <span class="nam">data</span> <span class="op">=</span> <span class="nam">_read</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t141" href="#t141">141</a></span><span class="t">        <span class="nam">data</span><span class="op">[</span><span class="fst">f&quot;</span><span class="op">{</span><span class="nam">task_id</span><span class="op">}</span><span class="fst">:reminder_chance</span><span class="fst">&quot;</span><span class="op">]</span> <span class="op">=</span> <span class="nam">chance</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t142" href="#t142">142</a></span><span class="t">        <span class="nam">_write</span><span class="op">(</span><span class="nam">data</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -201,7 +231,7 @@
             <a class="nav" href="z_3352f668749ccb62_jsonc_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-04 19:25 +0000
+            created at 2026-10-04 19:38 +0000
         </p>
     </div>
 </footer>
