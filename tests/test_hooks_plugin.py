@@ -202,7 +202,7 @@ class TestAutoRegister:
         result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
         assert "weird" not in self._db().projects.names()
         assert result is not None
-        assert any("set_metadata" in note for note in result.notes)
+        assert any("set_metadata" in note and "add=" in note for note in result.notes)
 
     def test_no_clobber_when_already_mapped(self, tmp_path: Path) -> None:
         db = self._db()
@@ -793,6 +793,25 @@ class TestMemoryPluginDatePrefixNudge:
                 "project": "global",
                 "entityName": "foo",
                 "observations": [f"{today}: fact"],
+            },
+        )
+        assert result is not None
+        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+
+    def test_flags_today_prefixed_new_text_in_edit_observation(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="edit_observation",
+            parameters={
+                "project": "global",
+                "entityName": "foo",
+                "observationHash": "abcd1234",
+                "newText": f"{today}: fact",
             },
         )
         assert result is not None

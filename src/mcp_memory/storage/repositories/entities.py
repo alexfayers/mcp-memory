@@ -82,8 +82,8 @@ class EntityRepository:
                     [(entity_id, obs, hash_observation(obs)) for obs in observations],
                 )
 
-    def rename(self, project: str, old_name: str, new_name: str) -> None:
-        """Rename an entity in place, preserving its relations and observations."""
+    def rename(self, project: str, old_name: str, new_name: str, *, entity_type: str | None = None) -> None:
+        """Rename an entity in place, preserving its relations and observations, optionally changing its type."""
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, old_name, project_id)
         if entity_id is None:
@@ -101,7 +101,13 @@ class EntityRepository:
 
         with self._conn.transaction():
             refresh_for_entity(self._conn, entity_id, delete=True)
-            self._conn.write("UPDATE entities SET name = ? WHERE id = ?", (new_name, entity_id))
+            if entity_type is None:
+                self._conn.write("UPDATE entities SET name = ? WHERE id = ?", (new_name, entity_id))
+            else:
+                self._conn.write(
+                    "UPDATE entities SET name = ?, entity_type_id = ? WHERE id = ?",
+                    (new_name, get_or_create_entity_type_id(self._conn, entity_type), entity_id),
+                )
             refresh_for_entity(self._conn, entity_id, delete=False)
 
     def move_cross_scope(self, source_project: str, target_project: str, name: str) -> list[Relation]:

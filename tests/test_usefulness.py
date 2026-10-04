@@ -82,6 +82,24 @@ class TestObserveUse:
 
         assert store.reads.get_entity("proj", "task/a").vote_score == 1
 
+    def test_edit_observation_after_search_casts_upvote(self, store: Storage) -> None:
+        _seed(store, "proj", "task/a", "needle")
+        usefulness.observe(
+            store,
+            "search_nodes",
+            {"project": "proj", "query": "needle"},
+            store.reads.search("proj", "needle"),
+        )
+
+        usefulness.observe(
+            store,
+            "edit_observation",
+            {"project": "proj", "entityName": "task/a", "observationHash": "h", "newText": "more"},
+            {"message": "ok", "hash": "h2"},
+        )
+
+        assert store.reads.get_entity("proj", "task/a").vote_score == 1
+
     def test_create_relations_casts_upvote_for_both_endpoints(self, store: Storage) -> None:
         _seed(store, "proj", "task/a", "alpha")
         store.entities.create("proj", [{"name": "feature/x", "entityType": "feature", "observations": ["beta"]}])

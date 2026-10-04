@@ -181,7 +181,14 @@ DELETE_OBSERVATIONS_DESC = (
     "Returns the count of deleted observations. Throws if the entity does not exist. "
     "For an observation that is stale but not wrong enough to remove, prefer vote "
     "(downvote to sink it) over deletion. "
-    "Use this, not a downvote, for an observation that is outright wrong."
+    "Use this, not a downvote, for an observation that is outright wrong. "
+    "To correct one, use edit_observation."
+)
+EDIT_OBSERVATION_DESC = (
+    "Edit one observation in place by content_hash, keeping its votes and timestamp. "
+    "Prefer oldText: its single exact match is replaced with newText; without oldText, newText "
+    "replaces the whole content. Returns the new content_hash. Raises if nothing matches, "
+    "oldText matches more than once, or the result duplicates another observation."
 )
 TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
     "Delete all observations on an entity except those whose content_hash is in keep_hashes. "
@@ -193,7 +200,8 @@ RENAME_ENTITY_DESC = (
     "Rename a single entity in place within a project scope. "
     "All relations and observations are preserved (relations key on entity id, not name). "
     "Fails if new_name already exists in the scope, or would collide across the global/project "
-    "name-uniqueness boundary."
+    "name-uniqueness boundary. A different valid type prefix also changes the type; a "
+    "non-project type needs a relation first."
 )
 MOVE_ENTITY_CROSS_SCOPE_DESC = (
     "Move one entity from one project scope to another. "
@@ -245,8 +253,9 @@ LIST_METADATA_DESC = (
     "if kind is not one of 'projects', 'paths', 'groups'."
 )
 SET_METADATA_DESC = (
-    "Replace registry metadata for a project - does NOT append, the given values list fully "
-    "replaces whatever was previously set. kind='paths' registers filesystem paths for the "
+    "Change a project's registry metadata. Prefer add/remove (remove applies first); values "
+    "replaces the whole list and cannot be combined with them. "
+    "kind='paths' registers filesystem paths for the "
     "project (when the working directory falls under a registered path, that project becomes "
     "the active memory scope; a path can belong to only one project) and returns the "
     "project's resulting paths. kind='groups' registers the groups the project belongs to "
@@ -640,16 +649,28 @@ def list_metadata(kind: str, project: str | None = None) -> dict[str, object]:
         return {"error": str(e)}
 
 
-def _set_metadata(project: str, kind: str, values: list[str]) -> dict[str, object]:
-    """Replace registry metadata (paths or groups) for a project scope."""
+def _set_metadata(
+    project: str, kind: str, values: list[str] | None, add: list[str] | None, remove: list[str] | None
+) -> dict[str, object]:
+    """Replace or incrementally change registry metadata (paths or groups) for a project scope."""
+    if values is not None and (add is not None or remove is not None):
+        raise ValueError("Pass values to replace, or add/remove to change entries - not both.")
+    if values is None and add is None and remove is None:
+        raise ValueError("Provide values, add, or remove.")
     db = _get_db()
     if kind == "paths":
         _ensure_project_root(db, project)
-        db.projects.set_paths(project, values)
+        if values is not None:
+            db.projects.set_paths(project, values)
+        elif add or remove:
+            db.projects.update_paths(project, add or [], remove or [])
         return {"project": project, "paths": db.projects.paths_for(project)}
     if kind == "groups":
         _ensure_project_root(db, project)
-        db.projects.set_groups(project, values)
+        if values is not None:
+            db.projects.set_groups(project, values)
+        elif add or remove:
+            db.projects.update_groups(project, add or [], remove or [])
         return {"project": project, "members": db.projects.group_members(project)}
     return {"error": f"Invalid kind '{kind}'. Must be one of: paths, groups."}
 
@@ -660,10 +681,16 @@ def _set_metadata(project: str, kind: str, values: list[str]) -> dict[str, objec
     title="Set project metadata",
 )
 @_track
-def set_metadata(project: str, kind: str, values: list[str]) -> dict[str, object]:
-    """Replace registry metadata (paths or groups) for a project."""
+def set_metadata(
+    project: str,
+    kind: str,
+    values: list[str] | None = None,
+    add: list[str] | None = None,
+    remove: list[str] | None = None,
+) -> dict[str, object]:
+    """Replace or incrementally change registry metadata (paths or groups) for a project."""
     try:
-        return _set_metadata(project, kind, values)
+        return _set_metadata(project, kind, values, add, remove)
     except Exception as e:
         return {"error": str(e)}
 
@@ -1033,6 +1060,28 @@ def delete_observations(
 
 
 @mcp.tool(
+    description=EDIT_OBSERVATION_DESC,
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    title="Edit observation",
+)
+@_track
+def edit_observation(
+    project: str,
+    entityName: str,
+    observationHash: str,
+    newText: str,
+    oldText: str | None = None,
+) -> dict[str, object]:
+    """Edit one observation in place, addressed by content_hash."""
+    try:
+        db = _get_db()
+        new_hash = db.observations.edit(project, entityName, observationHash, newText, oldText)
+        return {"message": f"Edited observation on '{entityName}'.", "hash": new_hash}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(
     description=TRIM_OBSERVATIONS_TO_OUTCOME_DESC,
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
     title="Trim observations to outcome",
@@ -1048,6 +1097,25 @@ def trim_observations_to_outcome(project: str, name: str, keep_hashes: list[str]
         return {"error": str(e)}
 
 
+def _rename_entity(project: str, old_name: str, new_name: str) -> str:
+    """Rename an entity, following a valid type prefix on the new name, and describe the result."""
+    db = _get_db()
+    prefix = new_name.split("/", 1)[0] if "/" in new_name else None
+    entity_type = prefix if prefix in VALID_ENTITY_TYPES else None
+    if entity_type is not None:
+        _validate_entity_type_and_name(project, entity_type, new_name)
+    current = db.reads.get_entity_with_relations(project, old_name, compact=True)
+    old_type = current["entity"].entity_type
+    type_changes = entity_type is not None and entity_type != old_type
+    if type_changes and entity_type not in _RELATION_EXEMPT_ENTITY_TYPES and not current["relations"]:
+        raise ValueError(f"Changing to '{entity_type}' needs at least one relation - create_relations first.")
+    db.entities.rename(project, old_name, new_name, entity_type=entity_type)
+    message = f"Renamed '{old_name}' to '{new_name}' in project '{project}'."
+    if type_changes:
+        message += f" Entity type changed from '{old_type}' to '{entity_type}'."
+    return message
+
+
 @mcp.tool(
     description=RENAME_ENTITY_DESC,
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
@@ -1057,9 +1125,7 @@ def trim_observations_to_outcome(project: str, name: str, keep_hashes: list[str]
 def rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
     """Rename a single entity in place, preserving its relations and observations."""
     try:
-        db = _get_db()
-        db.entities.rename(project, old_name, new_name)
-        return {"message": f"Renamed '{old_name}' to '{new_name}' in project '{project}'."}
+        return {"message": _rename_entity(project, old_name, new_name)}
     except Exception as e:
         return {"error": str(e)}
 

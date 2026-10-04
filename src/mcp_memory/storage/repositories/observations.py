@@ -13,9 +13,12 @@ from mcp_memory.storage.pure.rows import (
     strip_today_date_prefix,
 )
 from mcp_memory.storage.pure.sql import placeholders
+from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
 
 if TYPE_CHECKING:
+    import sqlite3
+
     from mcp_memory.models import Observation
     from mcp_memory.storage.connection import Connection
 
@@ -184,18 +187,8 @@ class ObservationRepository:
         if entity_id is None:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
 
-        source = self._conn.query_one(
-            "SELECT vote_score FROM observations WHERE entity_id = ? AND content_hash = ?",
-            (entity_id, source_hash),
-        )
-        if source is None:
-            raise ValueError(f"Source observation not found in entity '{entity_name}'")
-        target = self._conn.query_one(
-            "SELECT vote_score FROM observations WHERE entity_id = ? AND content_hash = ?",
-            (entity_id, target_hash),
-        )
-        if target is None:
-            raise ValueError(f"Target observation not found in entity '{entity_name}'")
+        source = self._find_by_hash(entity_id, entity_name, source_hash, "Source observation")
+        target = self._find_by_hash(entity_id, entity_name, target_hash, "Target observation")
 
         with self._conn.transaction():
             self._conn.write(
@@ -207,6 +200,59 @@ class ObservationRepository:
                 (entity_id, source_hash),
             )
         return {"merged": deleted.rowcount}
+
+    def edit(
+        self, project: str, entity_name: str, content_hash: str, new_text: str, old_text: str | None = None
+    ) -> str:
+        """Rewrite one observation in place, addressed by content_hash, returning its new content_hash.
+
+        Without old_text, new_text replaces the whole content; with it, new_text replaces the single
+        occurrence of old_text. The observation keeps its id, vote score and timestamp.
+        """
+        if old_text is not None and not old_text:
+            raise ValueError("oldText must not be empty")
+        project_id = get_or_create_project_id(self._conn, project)
+        entity_id = get_entity_id(self._conn, entity_name, project_id)
+        if entity_id is None:
+            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+
+        row = self._find_by_hash(entity_id, entity_name, content_hash, "Observation")
+        content = str(row["content"])
+        if old_text is not None:
+            occurrences = content.count(old_text)
+            if occurrences == 0:
+                raise ValueError("oldText not found in observation")
+            if occurrences > 1:
+                raise ValueError(f"oldText matches {occurrences} times; include more surrounding text")
+            new_text = content.replace(old_text, new_text)
+        new_content = strip_today_date_prefix(new_text)
+        if not new_content.strip():
+            raise ValueError("Edited observation must not be empty")
+        if new_content == content:
+            return content_hash
+
+        new_hash = hash_observation(new_content)
+        if any(obs.content_hash == new_hash for obs in self.for_entity(entity_id)):
+            raise ValueError("Edit duplicates an existing observation; use delete_observations or merge_observations")
+
+        with self._conn.transaction():
+            refresh_for_entity(self._conn, entity_id, delete=True)
+            self._conn.write(
+                "UPDATE observations SET content = ?, content_hash = ? WHERE id = ?",
+                (new_content, new_hash, row["id"]),
+            )
+            self._conn.write("UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (entity_id,))
+            refresh_for_entity(self._conn, entity_id, delete=False)
+        return new_hash
+
+    def _find_by_hash(self, entity_id: int, entity_name: str, content_hash: str, label: str) -> sqlite3.Row:
+        row = self._conn.query_one(
+            "SELECT id, content, vote_score FROM observations WHERE entity_id = ? AND content_hash = ?",
+            (entity_id, content_hash),
+        )
+        if row is None:
+            raise ValueError(f"{label} not found in entity '{entity_name}'")
+        return row
 
     def export_rows(self, entity_id: int) -> list[dict[str, object]]:
         """Return an entity's observations as export dicts, best-first, preserving created_at."""

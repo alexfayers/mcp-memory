@@ -156,10 +156,10 @@ the agent answers from files on disk and cites file paths instead of the
 `[project/entity]` graph slugs the return contract requires (live-observed - it
 read this very design doc off disk on the first run).
 
-The 17 memory tools to deny - every mutating one, plus `vote`: `create_entities`, `set_metadata`,
+The 18 memory tools to deny - every mutating one, plus `vote`: `create_entities`, `set_metadata`,
 `move_project_entities`, `merge_entities`, `merge_observations`,
 `delete_project`, `create_relations`, `delete_entity`, `delete_relation`,
-`add_observations`, `delete_observations`, `set_entity_status`,
+`add_observations`, `delete_observations`, `edit_observation`, `set_entity_status`,
 `restore_entity`, `trim_observations_to_outcome`, `rename_entity`,
 `move_entity_cross_scope`, `vote`. Of these, `delete_entity`, `delete_relation`
 and `delete_project` are hard-destructive; `merge_entities` removes its source

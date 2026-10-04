@@ -88,6 +88,7 @@ _MUTATING_MEMORY_TOOLS = (
     "delete_project",
     "add_observations",
     "delete_observations",
+    "edit_observation",
     "set_entity_status",
     "set_metadata",
     "move_project_entities",

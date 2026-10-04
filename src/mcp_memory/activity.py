@@ -42,6 +42,7 @@ _KIND_BY_TOOL: dict[str, Kind] = {
     "create_relations": "create",
     "add_observations": "update",
     "delete_observations": "update",
+    "edit_observation": "update",
     "set_entity_status": "update",
     "vote": "update",
     "merge_observations": "update",
@@ -172,6 +173,7 @@ def _names_from_write_kwargs(tool_name: str, kwargs: dict[str, Any]) -> list[str
     elif tool_name in {
         "add_observations",
         "delete_observations",
+        "edit_observation",
         "merge_observations",
     } and kwargs.get("entityName"):
         names.append(str(kwargs["entityName"]))

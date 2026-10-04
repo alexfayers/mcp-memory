@@ -185,7 +185,11 @@ Append observations to an existing entity without overwriting. Skips duplicates.
 
 ### delete_observations
 
-Delete specific observations from an existing entity by exact content match. Returns the count deleted. Throws if the entity does not exist. For an observation that is stale but not wrong enough to remove, prefer `vote` (downvote to sink it) over deletion.
+Delete specific observations from an existing entity by exact content match (`observations`) and/or by `content_hash` (`observationHashes`). Returns the count deleted. Throws if the entity does not exist. For an observation that is stale but not wrong enough to remove, prefer `vote` (downvote to sink it) over deletion. To correct one, use `edit_observation`.
+
+### edit_observation
+
+Edit one observation in place by `content_hash` (`observationHash`), keeping its votes and timestamp. Prefer `oldText`: its single exact match is replaced with `newText`; without `oldText`, `newText` replaces the whole content. Returns the new `content_hash`. Raises if nothing matches, `oldText` matches more than once, or the result duplicates another observation.
 
 ### trim_observations_to_outcome
 
@@ -219,7 +223,7 @@ In addition to these explicit votes, the server casts a deterministic `+1` on it
 
 ### rename_entity
 
-Rename a single entity in place within a project scope. All relations and observations are preserved (relations key on entity id, not name). Fails if `new_name` already exists in the scope, or would collide across the global/project name-uniqueness boundary.
+Rename a single entity in place within a project scope. All relations and observations are preserved (relations key on entity id, not name). Fails if `new_name` already exists in the scope, or would collide across the global/project name-uniqueness boundary. A different valid type prefix also changes the type; a non-project type needs a relation first.
 
 ### move_entity_cross_scope
 
@@ -251,7 +255,7 @@ List registered metadata for a `kind` (`projects`, `paths`, or `groups`). `list_
 
 ### set_metadata
 
-Replace registry metadata for a project - does NOT append, the given `values` list fully replaces whatever was previously set. `kind="paths"` registers filesystem paths for the project (when the working directory falls under a registered path, that project becomes the active memory scope; a path can belong to only one project) and returns the project's resulting paths. `kind="groups"` registers the groups the project belongs to (e.g. sibling repos in one tooling system, resolved via `get_group_members`) and returns the project's resulting group members. Auto-creates the project's root entity if needed.
+Change a project's registry metadata. Prefer `add`/`remove` (`remove` applies first); `values` replaces the whole list and cannot be combined with them. `kind="paths"` registers filesystem paths for the project (when the working directory falls under a registered path, that project becomes the active memory scope; a path can belong to only one project) and returns the project's resulting paths. `kind="groups"` registers the groups the project belongs to (e.g. sibling repos in one tooling system, resolved via `get_group_members`) and returns the project's resulting group members. Auto-creates the project's root entity if needed.
 
 ### get_project_for_path
 
