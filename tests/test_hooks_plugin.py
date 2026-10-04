@@ -14,6 +14,8 @@ import pytest
 
 pytest.importorskip("cline_hooks")
 
+from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS
+
 from mcp_memory.config import get_db_path
 from mcp_memory.hooks.plugin import (
     _DATE_PREFIX_WARNING,
@@ -62,14 +64,7 @@ _READ_TOOL_NAMES = [
     "get_entity_with_relations",
 ]
 
-_EDIT_TOOL_NAMES = [
-    "Edit",
-    "Write",
-    "MultiEdit",
-    "NotebookEdit",
-    "replace_in_file",
-    "write_to_file",
-]
+_EDIT_TOOL_NAMES = sorted(FILE_EDIT_TOOLS)
 
 _FRUSTRATION_MARKER = _FRUSTRATION_NUDGE_TEMPLATE.split(" [", 1)[0]
 
@@ -303,7 +298,7 @@ class TestMemoryPluginScopeTracking:
         )
         assert get_scope("t1") == "repo-b"
 
-    def test_post_tool_use_updates_scope_from_claude_code_file_path(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
+    def test_post_tool_use_updates_scope_from_read_path(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-a"
         repo_b = tmp_path / "repo-b"
         (repo_a / ".git").mkdir(parents=True)
@@ -313,8 +308,8 @@ class TestMemoryPluginScopeTracking:
         plugin.on_hook(
             "PostToolUse",
             task_id="t1",
-            tool_name="Edit",
-            parameters={"file_path": str(repo_b / "src" / "file.py")},
+            tool_name="read_file",
+            parameters={"path": str(repo_b / "src" / "file.py")},
             is_state_write=False,
         )
         assert get_scope("t1") == "repo-b"
@@ -380,8 +375,8 @@ class TestSessionScopeIsolation:
         plugin.on_hook(
             "PostToolUse",
             task_id="t1",
-            tool_name="Edit",
-            parameters={"file_path": str(repo_b / "src" / "file.py")},
+            tool_name="replace_in_file",
+            parameters={"path": str(repo_b / "src" / "file.py")},
             is_state_write=False,
         )
 
@@ -1858,7 +1853,7 @@ class TestFileEditsReducedWeight:
             )
         mock_increment.assert_called_once_with("t1", _EDIT_TOOL_WEIGHT)
 
-    def test_post_tool_use_multiedit_updates_scope(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
+    def test_post_tool_use_edit_updates_scope(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-a"
         repo_b = tmp_path / "repo-b"
         (repo_a / ".git").mkdir(parents=True)
@@ -1868,8 +1863,8 @@ class TestFileEditsReducedWeight:
         plugin.on_hook(
             "PostToolUse",
             task_id="t1",
-            tool_name="MultiEdit",
-            parameters={"file_path": str(repo_b / "src" / "file.py")},
+            tool_name="replace_in_file",
+            parameters={"path": str(repo_b / "src" / "file.py")},
             is_state_write=False,
         )
         assert get_scope("t1") == "repo-b"
@@ -1882,7 +1877,7 @@ class TestFileEditsReducedWeight:
             result = plugin.on_hook(
                 "PreToolUse",
                 task_id="t1",
-                tool_name="Edit",
+                tool_name="replace_in_file",
                 parameters={},
             )
         assert result is not None

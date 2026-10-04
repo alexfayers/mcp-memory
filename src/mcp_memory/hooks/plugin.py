@@ -14,7 +14,9 @@ import sqlite3
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from cline_hooks.core.parameters import FileEditParameters, ReadParameters
 from cline_hooks.core.plugin import HookResult, HooksPlugin, is_subagent
+from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS, FILE_READ_TOOLS, SHELL_TOOLS, CanonicalTool
 
 from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
 from mcp_memory.hooks.review_tracker import (
@@ -60,12 +62,7 @@ _MEMORY_READ_TOOL_NAMES = frozenset({
     "get_entity_with_relations",
 })
 
-_MEMORY_REMINDER_TOOLS = frozenset({
-    "replace_in_file",
-    "write_to_file",
-    "execute_command",
-    "plan_mode_respond",
-})
+_MEMORY_REMINDER_TOOLS = FILE_EDIT_TOOLS | SHELL_TOOLS | {CanonicalTool.PLAN_MODE_RESPOND}
 
 # Update prompts/shared/rules/hooks-mcp-memory.md if any of these messages change.
 _MEMORY_REMINDER_TEMPLATE = (
@@ -122,14 +119,6 @@ _AUTO_REGISTER_UNKNOWN_NOTE = (
 _DEFAULT_READ_ONLY_AGENT_TYPES = frozenset({"Explore", "Plan"})
 _READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
 
-_DEFAULT_FILE_EDIT_TOOL_NAMES = frozenset({
-    "Edit",
-    "Write",
-    "MultiEdit",
-    "NotebookEdit",
-    "replace_in_file",
-    "write_to_file",
-})
 _FILE_EDIT_TOOLS_ENV = "MCP_MEMORY_EDIT_TOOLS"
 _EDIT_TOOL_WEIGHT = 0.25
 
@@ -150,7 +139,7 @@ def _file_edit_tool_names() -> frozenset[str]:
     """Return file-edit tool names, including MCP_MEMORY_EDIT_TOOLS extras."""
     raw = os.environ.get(_FILE_EDIT_TOOLS_ENV, "")
     extra = {name.strip() for name in raw.split(",") if name.strip()}
-    return _DEFAULT_FILE_EDIT_TOOL_NAMES | extra
+    return FILE_EDIT_TOOLS | extra
 
 
 def _is_file_edit(tool_name: str) -> bool:
@@ -466,11 +455,11 @@ def _task_scope(task_id: str, workspace_roots: list[str]) -> str:
 def _record_scope_from_parameters(task_id: str, tool_name: str, parameters: dict[str, object]) -> None:
     """Persist the task's project scope from file paths in tool parameters."""
     path_str = ""
-    if tool_name in {"replace_in_file", "write_to_file", "read_file"}:
-        path_str = str(parameters.get("path", ""))
-    elif tool_name in {"Edit", "Write", "MultiEdit", "Read", "NotebookEdit"}:
-        path_str = str(parameters.get("file_path", "") or parameters.get("notebook_path", ""))
-    elif tool_name in {"execute_command", "execute_bash"}:
+    if tool_name in FILE_EDIT_TOOLS:
+        path_str = FileEditParameters.build(parameters).path
+    elif tool_name in FILE_READ_TOOLS:
+        path_str = ReadParameters.build(parameters).path
+    elif tool_name in SHELL_TOOLS:
         path_str = str(parameters.get("working_dir", "") or parameters.get("cwd", ""))
 
     if path_str:
