@@ -19,6 +19,7 @@ from mcp_memory.hooks.plugin import (
     _DATE_PREFIX_WARNING,
     _EDIT_TOOL_WEIGHT,
     _FRUSTRATION_NUDGE_TEMPLATE,
+    _MEMORY_COOLDOWN_STEPS,
     ENABLE_FRUSTRATION_CHECK,
     ENABLE_PROFANITY_CHECK,
     MemoryPlugin,
@@ -36,6 +37,7 @@ from mcp_memory.hooks.plugin import (
     _safe_project,
     _workspace_entity_note,
 )
+from mcp_memory.hooks.tracker import get_scope, set_reminder_chance
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage import open_writable
 
@@ -269,19 +271,19 @@ def plugin() -> Iterator[MemoryPlugin]:
 
 class TestMemoryPluginScopeTracking:
     def test_initial_scope_is_unknown(self, plugin: MemoryPlugin) -> None:
-        assert plugin._project_scope == "unknown"
+        assert get_scope("t1") is None
 
     def test_task_start_sets_scope_from_git_repo(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "test-repo"
         (repo / ".git").mkdir(parents=True)
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert plugin._project_scope == "test-repo"
+        assert get_scope("t1") == "test-repo"
 
     def test_task_start_falls_back_to_dir_name(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         no_repo = tmp_path / "plain-workspace"
         no_repo.mkdir()
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(no_repo)])
-        assert plugin._project_scope == "plain-workspace"
+        assert get_scope("t1") == "plain-workspace"
 
     def test_post_tool_use_updates_scope_from_file_path(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-a"
@@ -290,7 +292,7 @@ class TestMemoryPluginScopeTracking:
         (repo_b / ".git").mkdir(parents=True)
 
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
-        assert plugin._project_scope == "repo-a"
+        assert get_scope("t1") == "repo-a"
 
         plugin.on_hook(
             "PostToolUse",
@@ -299,7 +301,7 @@ class TestMemoryPluginScopeTracking:
             parameters={"path": str(repo_b / "src" / "file.py")},
             is_state_write=False,
         )
-        assert plugin._project_scope == "repo-b"
+        assert get_scope("t1") == "repo-b"
 
     def test_post_tool_use_updates_scope_from_claude_code_file_path(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-a"
@@ -315,7 +317,7 @@ class TestMemoryPluginScopeTracking:
             parameters={"file_path": str(repo_b / "src" / "file.py")},
             is_state_write=False,
         )
-        assert plugin._project_scope == "repo-b"
+        assert get_scope("t1") == "repo-b"
 
     def test_post_tool_use_updates_scope_from_working_dir(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "my-repo"
@@ -329,7 +331,7 @@ class TestMemoryPluginScopeTracking:
             parameters={"working_dir": str(repo)},
             is_state_write=False,
         )
-        assert plugin._project_scope == "my-repo"
+        assert get_scope("t1") == "my-repo"
 
     def test_scope_preserved_when_no_git_found(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "my-repo"
@@ -345,7 +347,87 @@ class TestMemoryPluginScopeTracking:
             parameters={"working_dir": str(no_git)},
             is_state_write=False,
         )
-        assert plugin._project_scope == "my-repo"
+        assert get_scope("t1") == "my-repo"
+
+
+class TestSessionScopeIsolation:
+    def test_scope_isolated_between_sessions(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
+        repo_a = tmp_path / "repo-a"
+        repo_b = tmp_path / "repo-b"
+        (repo_a / ".git").mkdir(parents=True)
+        (repo_b / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
+        plugin.on_hook("TaskStart", task_id="t2", workspace_roots=[str(repo_b)])
+
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="use_mcp_tool",
+            parameters={
+                "tool_name": "create_entities",
+                "arguments": '{"project": "repo-a"}',
+            },
+        )
+        assert result is None
+
+    def test_file_path_scope_does_not_leak_to_other_session(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
+        repo_a = tmp_path / "repo-a"
+        repo_b = tmp_path / "repo-b"
+        (repo_a / ".git").mkdir(parents=True)
+        (repo_b / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
+        plugin.on_hook("TaskStart", task_id="t2", workspace_roots=[str(repo_a)])
+        plugin.on_hook(
+            "PostToolUse",
+            task_id="t1",
+            tool_name="Edit",
+            parameters={"file_path": str(repo_b / "src" / "file.py")},
+            is_state_write=False,
+        )
+
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t2",
+            tool_name="use_mcp_tool",
+            parameters={
+                "tool_name": "create_entities",
+                "arguments": '{"project": "repo-a"}',
+            },
+        )
+        assert result is None
+
+    def test_scope_survives_new_plugin_instance(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
+        repo_a = tmp_path / "repo-a"
+        (repo_a / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
+
+        result = MemoryPlugin().on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="use_mcp_tool",
+            parameters={
+                "tool_name": "create_entities",
+                "arguments": '{"project": "other"}',
+            },
+        )
+        assert result is not None
+        assert result.block is not None
+        assert "`repo-a`" in result.block
+
+    def test_pre_mcp_uses_session_scope_without_workspace_roots(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
+        repo_a = tmp_path / "repo-a"
+        (repo_a / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
+
+        result = plugin.on_hook(
+            "PreMcpToolUse",
+            task_id="t1",
+            mcp_tool_name="create_entities",
+            mcp_arguments='{"project": "other"}',
+        )
+        assert result is not None
+        assert result.block is not None
+        assert "`repo-a`" in result.block
 
 
 class TestMemoryPluginMessages:
@@ -373,7 +455,7 @@ class TestMemoryPluginMessages:
         (repo / ".git").mkdir(parents=True)
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
 
-        plugin._reminder.chance = 1.0
+        set_reminder_chance("t1", 1.0)
         with patch("random.random", return_value=0.0):
             result = plugin.on_hook(
                 "PostToolUse",
@@ -385,6 +467,29 @@ class TestMemoryPluginMessages:
         assert result is not None
         assert len(result.notes) == 1
         assert "`cool-project`" in result.notes[0]
+
+    def test_reminder_cooldown_is_per_session(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
+        repo = tmp_path / "cool-project"
+        (repo / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+        plugin.on_hook("TaskStart", task_id="t2", workspace_roots=[str(repo)])
+
+        def _edit(task_id: str) -> object:
+            return plugin.on_hook(
+                "PostToolUse",
+                task_id=task_id,
+                tool_name="write_to_file",
+                parameters={"path": str(repo / "file.py")},
+                is_state_write=False,
+            )
+
+        with patch("random.random", return_value=1.0):
+            for _ in range(_MEMORY_COOLDOWN_STEPS):
+                _edit("t2")
+        with patch("random.random", return_value=0.0):
+            assert _edit("t1") is not None
+        with patch("random.random", return_value=0.5):
+            assert _edit("t2") is not None
 
 
 class TestMemoryPluginServerDownGating:
@@ -439,7 +544,7 @@ class TestRegisteredPathResolution:
         (repo / ".git").mkdir(parents=True)
         with patch("mcp_memory.hooks.plugin.resolve_project_for_path", return_value="platform"):
             plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert plugin._project_scope == "platform"
+        assert get_scope("t1") == "platform"
 
     def test_update_from_parameters_uses_resolver(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "acme-service-infra"
@@ -452,7 +557,7 @@ class TestRegisteredPathResolution:
                 parameters={"path": str(repo / "lib" / "x.ts")},
                 is_state_write=False,
             )
-        assert plugin._project_scope == "platform"
+        assert get_scope("t1") == "platform"
 
     def test_entity_note_signals_override_when_resolved_differs(self, tmp_path: Path) -> None:
         repo = tmp_path / "acme-service-infra"
@@ -1034,7 +1139,7 @@ class TestDerivesScopeFromWorkspaceRoots:
             parameters={},
             workspace_roots=[str(repo)],
         )
-        assert plugin._project_scope == "my-repo"
+        assert get_scope("t1") == "my-repo"
 
     def test_post_tool_use_derives_scope_from_workspace_roots(
         self,
@@ -1052,7 +1157,7 @@ class TestDerivesScopeFromWorkspaceRoots:
             is_state_write=False,
             workspace_roots=[str(repo)],
         )
-        assert plugin._project_scope == "my-repo"
+        assert get_scope("t1") == "my-repo"
 
     def test_scope_warning_fires_with_workspace_roots(
         self,
@@ -1104,7 +1209,7 @@ class TestDerivesScopeFromWorkspaceRoots:
         (repo_b / ".git").mkdir(parents=True)
 
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
-        assert plugin._project_scope == "repo-a"
+        assert get_scope("t1") == "repo-a"
 
         plugin.on_hook(
             "PreToolUse",
@@ -1113,7 +1218,7 @@ class TestDerivesScopeFromWorkspaceRoots:
             parameters={},
             workspace_roots=[str(repo_b)],
         )
-        assert plugin._project_scope == "repo-a"
+        assert get_scope("t1") == "repo-a"
 
 
 class TestIsMemoryRead:
@@ -1767,7 +1872,7 @@ class TestFileEditsReducedWeight:
             parameters={"file_path": str(repo_b / "src" / "file.py")},
             is_state_write=False,
         )
-        assert plugin._project_scope == "repo-b"
+        assert get_scope("t1") == "repo-b"
 
     def test_pre_tool_use_edit_still_blockable(self, plugin: MemoryPlugin) -> None:
         with (

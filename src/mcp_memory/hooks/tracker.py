@@ -26,7 +26,7 @@ def _lock_path() -> Path:
     return _state_path().with_suffix(".lock")
 
 
-_StateData = dict[str, float | list[str]]
+_StateData = dict[str, float | str | list[str]]
 
 
 @contextmanager
@@ -109,4 +109,34 @@ def mark_scope_blocked(task_id: str, project: str) -> None:
         if project not in blocked:
             blocked.append(project)
         data[f"{task_id}:scope_blocked"] = blocked
+        _write(data)
+
+
+def get_scope(task_id: str) -> str | None:
+    """Return the project scope recorded for a task, if any."""
+    with _locked():
+        scope = _read().get(f"{task_id}:scope")
+    return scope if isinstance(scope, str) else None
+
+
+def set_scope(task_id: str, project: str) -> None:
+    """Record the project scope for a task."""
+    with _locked():
+        data = _read()
+        data[f"{task_id}:scope"] = project
+        _write(data)
+
+
+def get_reminder_chance(task_id: str, default: float) -> float:
+    """Return the memory-reminder probability recorded for a task, or the default."""
+    with _locked():
+        chance = _read().get(f"{task_id}:reminder_chance")
+    return float(chance) if isinstance(chance, (int, float)) else default
+
+
+def set_reminder_chance(task_id: str, chance: float) -> None:
+    """Record the memory-reminder probability for a task."""
+    with _locked():
+        data = _read()
+        data[f"{task_id}:reminder_chance"] = chance
         _write(data)

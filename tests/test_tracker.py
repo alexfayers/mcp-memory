@@ -60,6 +60,21 @@ class TestReset:
         assert tracker.should_block("t1") is False
 
 
+class TestScope:
+    def test_scope_round_trips_per_task(self) -> None:
+        tracker.set_scope("t1", "repo-a")
+        assert tracker.get_scope("t1") == "repo-a"
+        assert tracker.get_scope("t2") is None
+
+
+class TestReminderChance:
+    def test_reminder_chance_round_trips_per_task(self) -> None:
+        assert tracker.get_reminder_chance("t1", 0.6) == 0.6
+        tracker.set_reminder_chance("t1", 0.2)
+        assert tracker.get_reminder_chance("t1", 0.6) == 0.2
+        assert tracker.get_reminder_chance("t2", 0.6) == 0.6
+
+
 class TestClear:
     def test_clear_removes_scope_blocked_entry(self) -> None:
         tracker.mark_scope_blocked("t1", "some-project")
@@ -70,3 +85,8 @@ class TestClear:
         tracker.mark_scope_blocked("t1:agent-a", "some-project")
         tracker.clear("t1")
         assert tracker.has_scope_blocked("t1:agent-a", "some-project") is False
+
+    def test_clear_removes_scope(self) -> None:
+        tracker.set_scope("t1", "repo-a")
+        tracker.clear("t1")
+        assert tracker.get_scope("t1") is None
