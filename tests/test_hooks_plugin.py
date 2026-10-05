@@ -14,6 +14,7 @@ import pytest
 
 pytest.importorskip("cline_hooks")
 
+from cline_hooks.core.plugin import HooksPlugin, hookimpl, plugins_override
 from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS
 
 from mcp_memory.config import get_db_path
@@ -127,6 +128,35 @@ class TestResolveAnchor:
         assert _resolve_anchor(str(plain)) is None
 
 
+def _marker_contributor(markers: frozenset[str]) -> HooksPlugin:
+    class MarkerContributor(HooksPlugin):
+        @hookimpl
+        def memory_workspace_markers(self) -> frozenset[str]:
+            return markers
+
+    return MarkerContributor()
+
+
+def _workspace_with_package(tmp_path: Path, *markers: str) -> tuple[Path, Path]:
+    workspace = tmp_path / "workspace"
+    for marker in markers:
+        (workspace / marker).mkdir(parents=True)
+    pkg = workspace / "src" / "PkgA"
+    (pkg / ".git").mkdir(parents=True)
+    return workspace.resolve(), pkg
+
+
+class TestContributedWorkspaceMarkers:
+    @pytest.mark.parametrize("marker", [".marker", ".workspace-root"])
+    def test_env_var_and_contributed_markers_both_anchor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, marker: str
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_WORKSPACE_MARKERS", ".marker")
+        workspace, pkg = _workspace_with_package(tmp_path, marker)
+        with plugins_override([_real_plugin(), _marker_contributor(frozenset({".workspace-root"}))]):
+            assert _resolve_anchor(str(pkg / "lib" / "x.py")) == (workspace, "PkgA")
+
+
 class TestSafeProject:
     def test_reuses_project_already_mapped_under_anchor(self, tmp_path: Path) -> None:
         db = open_writable(tmp_path / "memory.db")
@@ -154,6 +184,13 @@ class TestSafeProject:
         anchor = tmp_path / "BrandNew"
         anchor.mkdir()
         assert _safe_project(anchor, "BrandNew", db) is None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_plugins() -> Iterator[None]:
+    """Keep every test off real plugin entry-point discovery."""
+    with plugins_override([]):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -294,7 +331,6 @@ class TestMemoryPluginScopeTracking:
             task_id="t1",
             tool_name="write_to_file",
             parameters={"path": str(repo_b / "src" / "file.py")},
-            is_state_write=False,
         )
         assert get_scope("t1") == "repo-b"
 
@@ -310,7 +346,6 @@ class TestMemoryPluginScopeTracking:
             task_id="t1",
             tool_name="read_file",
             parameters={"path": str(repo_b / "src" / "file.py")},
-            is_state_write=False,
         )
         assert get_scope("t1") == "repo-b"
 
@@ -324,7 +359,6 @@ class TestMemoryPluginScopeTracking:
             task_id="t1",
             tool_name="execute_command",
             parameters={"working_dir": str(repo)},
-            is_state_write=False,
         )
         assert get_scope("t1") == "my-repo"
 
@@ -340,7 +374,6 @@ class TestMemoryPluginScopeTracking:
             task_id="t1",
             tool_name="execute_command",
             parameters={"working_dir": str(no_git)},
-            is_state_write=False,
         )
         assert get_scope("t1") == "my-repo"
 
@@ -377,7 +410,6 @@ class TestSessionScopeIsolation:
             task_id="t1",
             tool_name="replace_in_file",
             parameters={"path": str(repo_b / "src" / "file.py")},
-            is_state_write=False,
         )
 
         result = plugin.on_hook(
@@ -457,7 +489,6 @@ class TestMemoryPluginMessages:
                 task_id="t1",
                 tool_name="write_to_file",
                 parameters={"path": str(repo / "file.py")},
-                is_state_write=False,
             )
         assert result is not None
         assert len(result.notes) == 1
@@ -475,7 +506,6 @@ class TestMemoryPluginMessages:
                 task_id=task_id,
                 tool_name="write_to_file",
                 parameters={"path": str(repo / "file.py")},
-                is_state_write=False,
             )
 
         with patch("random.random", return_value=1.0):
@@ -550,7 +580,6 @@ class TestRegisteredPathResolution:
                 task_id="t1",
                 tool_name="write_to_file",
                 parameters={"path": str(repo / "lib" / "x.ts")},
-                is_state_write=False,
             )
         assert get_scope("t1") == "platform"
 
@@ -1149,7 +1178,6 @@ class TestDerivesScopeFromWorkspaceRoots:
             task_id="t1",
             tool_name="read_file",
             parameters={},
-            is_state_write=False,
             workspace_roots=[str(repo)],
         )
         assert get_scope("t1") == "my-repo"
@@ -1395,7 +1423,6 @@ class TestReadOnlyAgentExemption:
                 task_id="t1",
                 tool_name="read_file",
                 parameters={},
-                is_state_write=False,
                 agent_type="general-purpose",
                 agent_id="sub1",
             )
@@ -1424,7 +1451,6 @@ class TestReadOnlyAgentExemption:
                 task_id="t1",
                 tool_name="read_file",
                 parameters={},
-                is_state_write=False,
                 agent_type="Explore",
             )
         mock_increment.assert_not_called()
@@ -1472,23 +1498,7 @@ class TestSubagentIdentification:
 
 
 class TestMemoryReviewNudge:
-    def test_state_write_records_review_write(self) -> None:
-        with (
-            patch("mcp_memory.hooks.plugin.clear"),
-            patch("mcp_memory.hooks.plugin.reset"),
-            patch("mcp_memory.hooks.plugin.record_write") as mock_record,
-        ):
-            plugin = MemoryPlugin()
-            plugin.on_hook(
-                "PostToolUse",
-                task_id="t1",
-                tool_name="mcp__memory__add_observations",
-                parameters={},
-                is_state_write=True,
-            )
-        mock_record.assert_called_once_with()
-
-    def test_memory_write_without_state_flag_resets_counter(self) -> None:
+    def test_memory_write_resets_counter(self) -> None:
         with (
             patch("mcp_memory.hooks.plugin.clear"),
             patch("mcp_memory.hooks.plugin.reset") as mock_reset,
@@ -1500,12 +1510,11 @@ class TestMemoryReviewNudge:
                 task_id="t1",
                 tool_name="mcp__memory__create_entities",
                 parameters={"project": "global", "entities": []},
-                is_state_write=False,
             )
         mock_reset.assert_called_once_with("t1")
         mock_record.assert_called_once_with()
 
-    def test_copilot_memory_write_without_state_flag_resets_counter(self) -> None:
+    def test_copilot_memory_write_resets_counter(self) -> None:
         with (
             patch("mcp_memory.hooks.plugin.clear"),
             patch("mcp_memory.hooks.plugin.reset") as mock_reset,
@@ -1517,10 +1526,35 @@ class TestMemoryReviewNudge:
                 task_id="t1",
                 tool_name="mcp_mcp-memory_create_entities",
                 parameters={"project": "global", "entities": []},
-                is_state_write=False,
             )
         mock_reset.assert_called_once_with("t1")
         mock_record.assert_called_once_with()
+
+    def test_use_mcp_tool_memory_write_resets_counter(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset") as mock_reset,
+            patch("mcp_memory.hooks.plugin.record_write"),
+        ):
+            MemoryPlugin().on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="use_mcp_tool",
+                parameters={"server_name": "memory", "tool_name": "create_entities", "arguments": {}},
+            )
+        mock_reset.assert_called_once_with("t1")
+
+    def test_state_write_flag_on_non_memory_tool_does_not_reset_counter(self) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.clear"),
+            patch("mcp_memory.hooks.plugin.reset") as mock_reset,
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            MemoryPlugin().on_hook(
+                "PostToolUse", task_id="t1", tool_name="read_file", parameters={}, is_state_write=True
+            )
+        mock_reset.assert_not_called()
+        mock_increment.assert_called_once_with("t1")
 
     def test_user_prompt_emits_nudge_and_resets_when_due(self) -> None:
         with (
@@ -1814,7 +1848,6 @@ class TestMemoryReadsDoNotIncrement:
                 task_id="t1",
                 tool_name=f"mcp__memory__{name}",
                 parameters={},
-                is_state_write=False,
             )
         mock_increment.assert_not_called()
 
@@ -1830,7 +1863,6 @@ class TestMemoryReadsDoNotIncrement:
                 task_id="t1",
                 tool_name="read_file",
                 parameters={},
-                is_state_write=False,
             )
         mock_increment.assert_called_once_with("t1")
 
@@ -1849,7 +1881,6 @@ class TestFileEditsReducedWeight:
                 task_id="t1",
                 tool_name=name,
                 parameters={},
-                is_state_write=False,
             )
         mock_increment.assert_called_once_with("t1", _EDIT_TOOL_WEIGHT)
 
@@ -1865,7 +1896,6 @@ class TestFileEditsReducedWeight:
             task_id="t1",
             tool_name="replace_in_file",
             parameters={"path": str(repo_b / "src" / "file.py")},
-            is_state_write=False,
         )
         assert get_scope("t1") == "repo-b"
 
@@ -1895,6 +1925,5 @@ class TestFileEditsReducedWeight:
                 task_id="t1",
                 tool_name="apply_patch",
                 parameters={},
-                is_state_write=False,
             )
         mock_increment.assert_called_once_with("t1", _EDIT_TOOL_WEIGHT)

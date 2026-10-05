@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from cline_hooks.core.parameters import FileEditParameters, ReadParameters
-from cline_hooks.core.plugin import HookResult, HooksPlugin, is_subagent
+from cline_hooks.core.plugin import HookResult, HooksPlugin, collect_contributions, hookspec, is_subagent
 from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS, FILE_READ_TOOLS, SHELL_TOOLS, CanonicalTool
 
 from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
@@ -211,13 +211,14 @@ def _resolve_anchor(path: str) -> tuple[Path, str] | None:
     is the path to register: normally the repository root, but when a configured
     workspace-marker directory (see config.get_workspace_markers) sits above the
     repository root, the anchor is that outer workspace root instead, so every
-    sibling package under it resolves to one project scope.
+    sibling package under it resolves to one project scope. Markers come from the
+    environment and from plugins implementing MemorySpec.memory_workspace_markers.
     """
     git_root = _find_git_root(path)
     if git_root is None:
         return None
     anchor = git_root
-    markers = get_workspace_markers()
+    markers = set(get_workspace_markers()).union(*collect_contributions(MemorySpec.memory_workspace_markers, frozenset))
     if markers:
         current = git_root.parent
         while current != current.parent:
@@ -604,8 +605,23 @@ _FRUSTRATION_SIGNALS: tuple[tuple[Callable[[str], object], str, int], ...] = (
 )
 
 
+class MemorySpec:
+    """Extension points that MemoryPlugin publishes to other plugins."""
+
+    @hookspec
+    def memory_workspace_markers(self) -> frozenset[str]:
+        """Return directory names that mark a multi-package workspace root.
+
+        Returns:
+            Names of directories whose presence above a repository root makes that directory the workspace anchor.
+        """
+        raise NotImplementedError
+
+
 class MemoryPlugin(HooksPlugin):
     """Plugin that provides memory tracking for the hook system."""
+
+    hookspecs = MemorySpec
 
     def __init__(self) -> None:
         # Update prompts/shared/rules/hooks-mcp-memory.md if hook-event wiring changes.
@@ -621,10 +637,6 @@ class MemoryPlugin(HooksPlugin):
             "AttemptCompletion": lambda **_: HookResult(notes=[_MEMORY_COMPLETION_REMINDER]),
             "PreCompact": lambda **_: HookResult(notes=[_MEMORY_COMPACT_WARNING]),
         }
-
-    def get_state_write_tool_names(self) -> frozenset[str]:
-        """Return memory write tool names."""
-        return _MEMORY_WRITE_TOOL_NAMES
 
     def on_hook(self, hook_name: str, **kwargs: object) -> HookResult | None:
         """Handle hook events for memory tracking."""
@@ -743,12 +755,10 @@ class MemoryPlugin(HooksPlugin):
         task_id = str(kwargs.get("task_id", ""))
         tool_name = str(kwargs.get("tool_name", ""))
         parameters = _str_dict(kwargs.get("parameters", {}))
-        is_state_write = bool(kwargs.get("is_state_write"))
-        is_memory_write = _is_memory_write(tool_name, parameters)
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
         _task_scope(task_id, workspace_roots)
 
-        if is_state_write or is_memory_write:
+        if _is_memory_write(tool_name, parameters):
             reset(task_id)
             set_reminder_chance(task_id, 0.0)
             record_write()
