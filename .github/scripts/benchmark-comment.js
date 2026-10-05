@@ -2,7 +2,6 @@ const fs = require('fs');
 const { findStickyComment, upsertStickyComment } = require('./sticky-comment.js');
 
 const MARKER = '<!-- benchmark-size -->';
-const NO_CHANGES_TEXT = 'No benchmark changes.';
 const MAX_COMMENT_LENGTH = 60000;
 const DETAILS_TAG = '<details>';
 const TOTALS_SECTION_COUNT = 2;
@@ -32,10 +31,7 @@ async function report({ github, context, core, path }) {
 
   try {
     const existing = await findStickyComment(github, context, MARKER);
-    const updateOnly = context.payload.pull_request.draft === true || markdown.includes(NO_CHANGES_TEXT);
-    if (existing || !updateOnly) {
-      await upsertStickyComment(github, context, MARKER, buildCommentBody(markdown), existing);
-    }
+    await upsertStickyComment(github, context, MARKER, buildCommentBody(markdown), existing);
   } catch (error) {
     if (error.status !== 403) {
       throw error;
