@@ -57,7 +57,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
@@ -80,13 +79,18 @@ jobs:
           status=0
           just bench-diff "$BASE_SHA" $flags > benchmark.md || status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
-      - name: Report benchmark changes
+      - name: Save the benchmark report
         if: steps.benchmark.outputs.status != '2'
-        uses: actions/github-script@v9
+        run: |
+          cat benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ github.event.pull_request.number }}" > pr-number
+      - uses: actions/upload-artifact@v4
+        if: steps.benchmark.outputs.status != '2'
         with:
-          script: |
-            const { report } = require('./.github/scripts/benchmark-comment.js')
-            await report({ github, context, core, path: 'benchmark.md' })
+          name: benchmark-report
+          path: |
+            benchmark.md
+            pr-number
       - name: Fail on a benchmark regression
         if: steps.benchmark.outputs.status != '0'
         run: exit 1
