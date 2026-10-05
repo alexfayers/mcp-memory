@@ -2,7 +2,6 @@ const fs = require('fs');
 const { findStickyComment, upsertStickyComment } = require('./sticky-comment.js');
 
 const MARKER = '<!-- benchmark-size -->';
-const NO_CHANGES_TEXT = 'No benchmark changes.';
 const MAX_COMMENT_LENGTH = 60000;
 const DETAILS_TAG = '<details>';
 const TOTALS_SECTION_COUNT = 2;
@@ -32,10 +31,7 @@ async function report({ github, context, core, path }) {
 
   try {
     const existing = await findStickyComment(github, context, MARKER);
-    const updateOnly = context.payload.pull_request.draft === true || markdown.includes(NO_CHANGES_TEXT);
-    if (existing || !updateOnly) {
-      await upsertStickyComment(github, context, MARKER, buildCommentBody(markdown), existing);
-    }
+    await upsertStickyComment(github, context, MARKER, buildCommentBody(markdown), existing);
   } catch (error) {
     if (error.status !== 403) {
       throw error;
@@ -44,4 +40,19 @@ async function report({ github, context, core, path }) {
   }
 }
 
-module.exports = { report };
+async function reportForRun({ github, context, core, dir }) {
+  const prNumber = fs.readFileSync(`${dir}/pr-number`, 'utf8').trim();
+  if (!/^\d+$/.test(prNumber)) {
+    core.warning(`Ignoring benchmark report with invalid PR number: ${prNumber}`);
+    return;
+  }
+  const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(prNumber) });
+  if (pr.head.sha !== context.payload.workflow_run.head_sha) {
+    core.warning(`Ignoring benchmark report for PR #${prNumber}: its head is not the reported commit`);
+    return;
+  }
+  const prContext = { repo: context.repo, payload: { pull_request: { number: Number(prNumber) } } };
+  await report({ github, context: prContext, core, path: `${dir}/benchmark.md` });
+}
+
+module.exports = { report, reportForRun };
