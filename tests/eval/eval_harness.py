@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 _FIXTURE_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 _FIXTURE_LATER = datetime(2026, 6, 1, tzinfo=UTC)
 
-_GATE_METRICS = ("mean_recall_at_k", "mean_success_at_k")
+_GATE_METRICS = ("mean_recall_at_k", "mean_success_at_k", "mrr")
 
 _LABEL_W = 20
 _COL_W = 10

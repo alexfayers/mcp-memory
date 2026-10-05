@@ -3,7 +3,8 @@
 Reproduces the live graph's measured shape - type mix, status mix, project sizes, ages,
 votes, observation counts/lengths, and the query/relevance-label distribution - at
 roughly 1/10 scale. Content (entity names, project names, query and observation text) is
-invented; every count, age, vote and length below is a measured live quantile.
+invented; every count, age, vote and length below is a measured live quantile. Used entities
+also carry the votes their labelled uses earn.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
-    from mcp_memory.eval import EvalReport
+    from mcp_memory.eval import EvalReport, LabelledQuery
     from mcp_memory.storage import Storage
 
 _K = 10
@@ -129,11 +130,12 @@ _TOPICS: tuple[tuple[int, str, str], ...] = (
 _DURABLE_HIT_RELATED = ("decayed-hit", "upvoted-hit", "tie-a", "tie-b")
 
 # spine role, in fixed order, -> the archetype supplying its type/age/vote/obs shape.
-# Every topic emits this spine; "tie-a"/"tie-b" are exempt from jitter.
+# Every topic emits this spine; "tie-a"/"tie-b" are exempt from jitter. "decayed-hit" is an
+# old resolved record of a slow-decaying type.
 _SPINE: tuple[tuple[str, str], ...] = (
     ("decoy", "fresh-task"),
     ("durable-hit", "reference"),
-    ("decayed-hit", "floored-task"),
+    ("decayed-hit", "shipped-item"),
     ("upvoted-hit", "old-recipe"),
     ("tie-a", "queued-task"),
     ("tie-b", "queued-task"),
@@ -155,27 +157,29 @@ _SPINE_CONTENT: dict[str, tuple[str, bool, bool]] = {
     "archived": ("legacy", True, True),
 }
 
-# "old-recipe" (4 instances) and "dead-task" (3) cannot each supply one per topic across
-# all 6 topics, so once a role's primary archetype is exhausted its remaining topics draw
-# this same-type-and-status fallback instead - never a fresh archetype outside the budget.
+# "shipped-item" (4 instances), "old-recipe" (4) and "dead-task" (3) cannot each supply one per
+# topic across all 6 topics, so once a role's primary archetype is exhausted its remaining
+# topics draw this same-type-and-status fallback instead - never a fresh archetype outside
+# the budget. The "decayed-hit" fallback keeps the status and a slow-decay type.
 _SPINE_FALLBACK: dict[str, str] = {
+    "decayed-hit": "closed-note",
     "upvoted-hit": "recipe",
     "unreachable": "mid-task",
 }
 
 # topic-hosting project -> total queries, unreachable-labelling singles, other singles
 # (over durable-hit/decayed-hit/upvoted-hit), doubles, triples, single-token queries.
-# Totals sum to 84; unreachable-singles to 15 (the measured 16.4%-beyond-rank-10 share);
-# doubles to 16 and triples to 5 (together with the 4 cross-project queries' 2+2+5+9,
-# this is what reproduces the live {1:71, 2:18, 3:5, 5:1, 9:1} histogram exactly); and
+# Totals sum to 72; unreachable-singles to 15 (the measured 16.4%-beyond-rank-10 share);
+# doubles to 16 and triples to 5 (together with the 16 cross-project queries' twelve singles
+# plus 2+2+5+9, this is what reproduces the live {1:71, 2:18, 3:5, 5:1, 9:1} histogram exactly); and
 # single-token counts to 29 (with the 8 scope-marker queries below, 37 of 96 overall).
 _TOPIC_QUERY_PLAN: dict[int, tuple[int, int, int, int, int, int]] = {
-    0: (22, 4, 12, 4, 2, 8),
-    1: (18, 3, 11, 3, 1, 6),
-    2: (14, 3, 8, 2, 1, 5),
-    3: (12, 2, 7, 2, 1, 4),
-    4: (10, 2, 6, 2, 0, 3),
-    5: (8, 1, 4, 3, 0, 3),
+    0: (20, 4, 10, 4, 2, 8),
+    1: (16, 3, 9, 3, 1, 6),
+    2: (12, 3, 6, 2, 1, 5),
+    3: (10, 2, 5, 2, 1, 4),
+    4: (8, 2, 4, 2, 0, 3),
+    5: (6, 1, 2, 3, 0, 3),
 }
 
 # modifier word lists cycled onto a topic's head term for a non-single-token query, so
@@ -219,7 +223,8 @@ _MEDIUM_SCOPE_PROJECTS: tuple[str, ...] = (
 
 # cross-project retrievals: which topics' terms and roles compete in one project=None
 # search. The 9- and 5-relevant rows and two 2-relevant rows are what closes the
-# {1:71, 2:18, 3:5, 5:1, 9:1} histogram once the per-topic plan above supplies the rest.
+# {1:71, 2:18, 3:5, 5:1, 9:1} histogram once the per-topic plan above supplies the rest. The
+# single-label rows pair topics from two projects, so the grouped-by-project order decides their rank.
 _CROSS_PROJECT_QUERIES: tuple[tuple[tuple[int, ...], tuple[tuple[int, str], ...]], ...] = (
     (
         (0, 2, 4),
@@ -247,6 +252,18 @@ _CROSS_PROJECT_QUERIES: tuple[tuple[tuple[int, ...], tuple[tuple[int, str], ...]
     ),
     ((4, 5), ((4, "durable-hit"), (5, "durable-hit"))),
     ((0, 5), ((0, "upvoted-hit"), (5, "upvoted-hit"))),
+    ((0, 3), ((0, "durable-hit"),)),
+    ((0, 3), ((3, "upvoted-hit"),)),
+    ((1, 2), ((1, "decayed-hit"),)),
+    ((1, 2), ((2, "durable-hit"),)),
+    ((2, 4), ((2, "upvoted-hit"),)),
+    ((2, 4), ((4, "decayed-hit"),)),
+    ((3, 5), ((3, "durable-hit"),)),
+    ((3, 5), ((5, "decayed-hit"),)),
+    ((4, 1), ((4, "upvoted-hit"),)),
+    ((4, 1), ((1, "durable-hit"),)),
+    ((5, 0), ((5, "durable-hit"),)),
+    ((5, 0), ((0, "decayed-hit"),)),
 )
 
 
@@ -269,6 +286,12 @@ def _filler(terms: tuple[str, ...], index: int, target_chars: int) -> str:
     unit = " ".join((*terms, f"note-{index}")) + " "
     repeats = target_chars // len(unit) + 1
     return (unit * repeats)[:target_chars].rstrip()
+
+
+def _mention(terms: tuple[str, ...], observation: str) -> str:
+    """Overwrite the start of `observation` with `terms`, keeping its length."""
+    joined = " ".join(terms)
+    return f"{joined} {observation[len(joined) + 1 :]}"
 
 
 def _observation_set(terms: tuple[str, ...], count: int, chars: int) -> list[str]:
@@ -435,6 +458,10 @@ class EvalFixture:
         """Return the entity name at `slot` ('decoy', 'durable-hit', ...) in `topic`."""
         return self._spine_names[topic, slot]
 
+    def is_unreachable(self, query: LabelledQuery) -> bool:
+        """Return whether every entity `query` labels relevant is a topic's "unreachable" spine entity."""
+        return query.relevant <= {name for (_, role), name in self._spine_names.items() if role == "unreachable"}
+
     def tie_pair(self, topic: int) -> tuple[str, str]:
         """Return `topic`'s (tie-a, tie-b) entity names, an exact-score tie pair."""
         return self.name_for(topic, "tie-a"), self.name_for(topic, "tie-b")
@@ -518,13 +545,15 @@ def _seed_fill_entities(
     ages: dict[str, int],
     votes: dict[str, int],
     marker_names: dict[str, str],
+    topic_terms: tuple[str, ...],
 ) -> list[dict[str, object]]:
     """Draw `fill_needed` filler entities for `project` from the shared archetype pool.
 
     A scope-marker project's first draw is biased to a non-archived-status archetype, so
     its marker entity is never hidden from a default (non-`include_archived`) search. The
     structural archetypes (`_STRUCTURAL_ARCHETYPES`) never compete here - see
-    `_seed_structural_entities`.
+    `_seed_structural_entities`. Fill entities in a topic-hosting project mention that
+    project's `topic_terms` once, so every topic query has more candidates than `_K`.
     """
     entities: list[dict[str, object]] = []
     filled = 0
@@ -568,10 +597,13 @@ def _seed_fill_entities(
             remaining[archetype] -= 1
             filled += 1
             name = f"{entity_type}/{archetype}-{project}-{filled}"
+            observations = _observation_set((_POOL_TERM,), obs_count, obs_chars)
+            if topic_terms:
+                observations[0] = _mention(topic_terms, observations[0])
             entities.append({
                 "name": name,
                 "entityType": entity_type,
-                "observations": _observation_set((_POOL_TERM,), obs_count, obs_chars),
+                "observations": observations,
                 "status": status,
             })
             ages[name] = age
@@ -613,6 +645,15 @@ def _apply_votes(db: Storage, votes: dict[str, int]) -> None:
         )
 
 
+def _earn_use_votes(db: Storage, votes: dict[str, int]) -> None:
+    """Add each entity's labelled-use count to `votes`, as the implicit vote a search-then-edit earns."""
+    uses = db.connection.query_all(
+        "SELECT entity_name, COUNT(*) AS uses FROM surfaced_entities WHERE used_at IS NOT NULL GROUP BY entity_name"
+    )
+    for row in uses:
+        votes[row["entity_name"]] += row["uses"]
+
+
 def _pin_timestamps(db: Storage, ages: dict[str, int]) -> None:
     """Backdate every entity's `created_at`/`updated_at` to its designed age.
 
@@ -640,7 +681,6 @@ def _build_populated_fixture(
     """
     jitter = itertools.cycle(_JITTER)
     remaining = dict(_ARCHETYPE_COUNTS)
-    manifest: list[tuple[str, str, str, int, int, int, str | None]] = []
     ages: dict[str, int] = {}
     votes: dict[str, int] = {}
     spine_names: dict[tuple[int, str], str] = {}
@@ -656,20 +696,18 @@ def _build_populated_fixture(
             _seed_spine_entities(topic_index, term, jitter, remaining, ages, votes, spine_names)
         )
 
+    created: list[tuple[str, list[dict[str, object]]]] = []
     for project, size, _topic_count in projects:
         hosted = [t for t in topics if t[1] == project]
         entities = list(spine_entities.get(project, []))
         entities += _seed_structural_entities(project, jitter, remaining, ages, votes)
 
         fill_needed = size - len(hosted) * len(_SPINE) - len(_STRUCTURAL_SEEDS.get(project, ()))
-        entities += _seed_fill_entities(project, fill_needed, jitter, remaining, ages, votes, marker_names)
+        topic_terms = tuple(term for *_, term in hosted)
+        entities += _seed_fill_entities(project, fill_needed, jitter, remaining, ages, votes, marker_names, topic_terms)
 
         db.entities.create(project, entities)
-        # Built from the entities just passed to `create_entities`, in that exact order,
-        # so manifest row n is entity id n (ascending ids are the exact-score tiebreak).
-        manifest += _manifest_rows(project, entities, ages, votes)
-
-    _apply_votes(db, votes)
+        created.append((project, entities))
 
     for topic_index, project, _ in topics:
         db.relations.create(
@@ -684,9 +722,7 @@ def _build_populated_fixture(
             ],
         )
 
-    entities_by_project: dict[str, list[str]] = {}
-    for project, name, *_rest in manifest:
-        entities_by_project.setdefault(project, []).append(name)
+    entities_by_project = {project: [str(entity["name"]) for entity in entities] for project, entities in created}
 
     relevant_names: set[str] = set()
     query_count = 0
@@ -703,6 +739,13 @@ def _build_populated_fixture(
     scope_added, scope_relevant = _seed_scope_queries(db, marker_names, entities_by_project)
     query_count += scope_added
     relevant_names.update(scope_relevant)
+
+    _earn_use_votes(db, votes)
+    _apply_votes(db, votes)
+
+    # Built from the entities passed to `create`, in that exact order, so manifest row n
+    # is entity id n (ascending ids are the exact-score tiebreak).
+    manifest = [row for project, entities in created for row in _manifest_rows(project, entities, ages, votes)]
 
     _pin_timestamps(db, ages)
 

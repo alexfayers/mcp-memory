@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 _MAX_FIXTURE_AGE_DAYS = 139
 _TOTAL_ENTITIES = 130
 _TOTAL_QUERIES = 96
+_CROSS_PROJECT_QUERY_COUNT = 16
 _RELEVANT_LABEL_HISTOGRAM = {1: 71, 2: 18, 3: 5, 5: 1, 9: 1}
 _VOTE_MULTIPLIER_CEILING = 1.5
 
@@ -96,7 +97,7 @@ class TestTopicZeroSlice:
         assert archived_name not in [e.name for e in results]
 
     def test_query_count_matches_the_seeded_retrievals(self, topic0: EvalFixture) -> None:
-        assert topic0.query_count == 22
+        assert topic0.query_count == 20
 
     def test_no_fill_entity_name_contains_a_query_term(self, topic0: EvalFixture) -> None:
         spine_names = {topic0.name_for(0, role) for role, _ in _SPINE}
@@ -143,7 +144,6 @@ class TestFullFixture:
         assert sum(fixture.archetype_supply.values()) == 0
 
     def test_unsatisfiable_queries_are_exactly_the_intended_unreachable_ones(self, fixture: EvalFixture) -> None:
-        unreachable_names = {fixture.name_for(topic_index, "unreachable") for topic_index, _, _ in _TOPICS}
         zero_hit_queries = []
         for query in ranking_eval.iter_labelled_queries(fixture.db):
             if not query.relevant:
@@ -151,16 +151,28 @@ class TestFullFixture:
             result = fixture.db.reads.search(
                 query.project,
                 query.query,
-                limit=max(fixture.k, len(query.ranked)),
+                limit=len(fixture.entity_names),
                 now=fixture.now,
             )
             found = {entity.name for entity in result["entities"]}
             if found & query.relevant:
                 continue
             zero_hit_queries.append(query)
-            assert query.relevant <= unreachable_names, (query.project, query.query)
+            assert fixture.is_unreachable(query), (query.project, query.query)
 
         assert len(zero_hit_queries) == 15
+
+    def test_every_topic_query_has_more_candidates_than_k(self, fixture: EvalFixture) -> None:
+        for _, project, term in _TOPICS:
+            result = fixture.db.reads.search(project, term, limit=len(fixture.entity_names), now=fixture.now)
+            assert len(result["entities"]) > fixture.k, (project, term)
+
+    def test_every_cross_project_query_has_more_candidates_than_k(self, fixture: EvalFixture) -> None:
+        queries = [query for query in ranking_eval.iter_labelled_queries(fixture.db) if query.project is None]
+        assert len(queries) == _CROSS_PROJECT_QUERY_COUNT
+        for query in queries:
+            result = fixture.db.reads.search(None, query.query, limit=len(fixture.entity_names), now=fixture.now)
+            assert len(result["entities"]) > fixture.k, query.query
 
     def test_no_vote_reaches_the_gc_downvote_floor(self, fixture: EvalFixture) -> None:
         votes = [row[4] for row in fixture.manifest]

@@ -4,6 +4,7 @@ Owns the ranking section's shape, its serialisation and the stored precision, wi
 `tests/eval/baseline.json` artefact - see `size_baseline` for the size section and
 `regen_baseline` for the single entry point that measures and writes both. The artefact is a
 measurement of the current code, written by `just baseline`; `compare_baseline` diffs two of them.
+The queries labelled unreachable are measured apart, as the section's `unreachable` sub-section.
 """
 
 from __future__ import annotations
@@ -37,21 +38,29 @@ class Baseline:
     k: int
     query_count: int
     metrics: dict[str, float]
+    unreachable: Baseline | None = None
 
     @classmethod
-    def from_report(cls, report: EvalReport) -> Baseline:
+    def from_report(cls, report: EvalReport, unreachable: EvalReport | None = None) -> Baseline:
         """Build a canonical baseline from `report`, rounding every metric to `_DP`."""
         return cls(
             k=report.k,
             query_count=report.query_count,
             metrics={metric: round(getattr(report, metric), _DP) for metric in RANKING_METRICS},
+            unreachable=None if unreachable is None else cls.from_report(unreachable),
         )
 
 
 def section(baseline: Baseline) -> dict[str, object]:
     """Return the ranking section's payload: fixed key order, `_DP` places."""
-    return {
+    payload: dict[str, object] = {
         "k": baseline.k,
         "query_count": baseline.query_count,
         "metrics": {metric: baseline.metrics[metric] for metric in RANKING_METRICS},
     }
+    if baseline.unreachable is not None:
+        payload["unreachable"] = {
+            "query_count": baseline.unreachable.query_count,
+            "metrics": {metric: baseline.unreachable.metrics[metric] for metric in RANKING_METRICS},
+        }
+    return payload

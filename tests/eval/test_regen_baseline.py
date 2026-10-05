@@ -7,11 +7,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mcp_memory.storage import open_writable
 from tests.eval import regen_baseline
 from tests.eval.eval_baseline import (
     Baseline,
     section as section_ranking,
 )
+from tests.eval.eval_fixture import _build_populated_fixture
+from tests.eval.ranking_replay import measure as measure_ranking
 from tests.eval.regen_baseline import _measure_both, main
 from tests.eval.size_baseline import (
     TOOLS,
@@ -65,6 +68,12 @@ class TestMeasureBoth:
         assert isinstance(size, SizeBaseline)
         assert size.entity_count > 0
         assert ranking.query_count > 0
+
+    def test_ranking_is_the_real_tool_replay_of_the_fixture(self, tmp_path: Path) -> None:
+        ranking, _ = _measure_both()
+
+        db = open_writable(tmp_path / "replay.db")
+        assert ranking == measure_ranking(_build_populated_fixture(db))
 
 
 class TestWrite:
