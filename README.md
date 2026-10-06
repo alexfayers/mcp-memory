@@ -12,7 +12,7 @@
 | src/mcp\_memory/cli.py                               |      462 |      178 |     61% |59, 111-115, 174-187, 192-205, 210-219, 229-233, 238-249, 277-278, 285-286, 291-293, 297-299, 311-312, 409-411, 424-426, 434-477, 489, 510-516, 536-542, 567-579, 601-610, 622-623, 627-628, 638-644, 662-663, 678-684, 812-825, 834, 836, 838, 840, 845-854 |
 | src/mcp\_memory/config.py                            |      117 |        2 |     98% |  138, 260 |
 | src/mcp\_memory/dream\_status.py                     |      113 |        2 |     98% |  227, 253 |
-| src/mcp\_memory/eval.py                              |      131 |        0 |    100% |           |
+| src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       69 |        4 |     94% |52-53, 85, 87 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
 | src/mcp\_memory/hooks/plugin.py                      |      415 |       26 |     94% |193, 238, 356, 363, 519, 581-582, 587-595, 627, 633, 673, 676-678, 688, 695-699, 737 |
@@ -57,21 +57,23 @@
 | tests/conftest.py                                    |       10 |        0 |    100% |           |
 | tests/eval/\_\_init\_\_.py                           |        0 |        0 |    100% |           |
 | tests/eval/badge\_endpoints.py                       |       27 |        1 |     96% |        48 |
-| tests/eval/compare\_baseline.py                      |      123 |        1 |     99% |       206 |
-| tests/eval/eval\_baseline.py                         |       17 |        0 |    100% |           |
-| tests/eval/eval\_fixture.py                          |      233 |        3 |     99% |545-546, 564 |
+| tests/eval/compare\_baseline.py                      |      178 |        2 |     99% |  115, 305 |
+| tests/eval/eval\_baseline.py                         |       21 |        0 |    100% |           |
+| tests/eval/eval\_fixture.py                          |      246 |        3 |     99% |575-576, 594 |
 | tests/eval/eval\_harness.py                          |       78 |        0 |    100% |           |
-| tests/eval/regen\_baseline.py                        |       26 |        1 |     96% |        60 |
+| tests/eval/ranking\_replay.py                        |       24 |        0 |    100% |           |
+| tests/eval/regen\_baseline.py                        |       27 |        1 |     96% |        61 |
 | tests/eval/size\_baseline.py                         |       45 |        0 |    100% |           |
 | tests/eval/test\_badge\_endpoints.py                 |       23 |        0 |    100% |           |
 | tests/eval/test\_benchmark\_scenarios.py             |       75 |        0 |    100% |           |
-| tests/eval/test\_compare\_baseline.py                |      134 |        0 |    100% |           |
-| tests/eval/test\_eval\_baseline.py                   |       18 |        0 |    100% |           |
-| tests/eval/test\_eval\_fixture.py                    |      162 |        1 |     99% |       150 |
-| tests/eval/test\_eval\_harness.py                    |       91 |        0 |    100% |           |
-| tests/eval/test\_ranking\_eval.py                    |      403 |        0 |    100% |           |
+| tests/eval/test\_compare\_baseline.py                |      241 |        0 |    100% |           |
+| tests/eval/test\_eval\_baseline.py                   |       26 |        0 |    100% |           |
+| tests/eval/test\_eval\_fixture.py                    |      172 |        1 |     99% |       150 |
+| tests/eval/test\_eval\_harness.py                    |       95 |        0 |    100% |           |
+| tests/eval/test\_ranking\_eval.py                    |      418 |        0 |    100% |           |
+| tests/eval/test\_ranking\_replay.py                  |       50 |        0 |    100% |           |
 | tests/eval/test\_recall\_efficiency.py               |       39 |        0 |    100% |           |
-| tests/eval/test\_regen\_baseline.py                  |       45 |        0 |    100% |           |
+| tests/eval/test\_regen\_baseline.py                  |       52 |        0 |    100% |           |
 | tests/eval/test\_size\_baseline.py                   |       39 |        0 |    100% |           |
 | tests/naming\_check.py                               |      105 |      105 |      0% |    12-162 |
 | tests/test\_activity.py                              |      148 |        0 |    100% |           |
@@ -95,7 +97,7 @@
 | tests/test\_tracker.py                               |       66 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       74 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      620 |        0 |    100% |           |
-| **TOTAL**                                            | **12740** |  **516** | **96%** |           |
+| **TOTAL**                                            | **13042** |  **517** | **96%** |           |
 
 
 ## Setup coverage badge
