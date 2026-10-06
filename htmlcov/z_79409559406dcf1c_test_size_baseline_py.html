@@ -54,8 +54,8 @@
             </div>
         </aside>
         <h2>
-            <span class="text">39 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">39<span class="text"> run</span></button>
+            <span class="text">42 statements &nbsp;</span>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">42<span class="text"> run</span></button>
             <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">0<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">0<span class="text"> excluded</span></button>
         </h2>
@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_a44f0ac069e85531_naming_check_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-06 21:19 +0000
+            created at 2026-10-06 22:07 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -143,9 +143,13 @@
     <p class="run"><span class="n"><a id="t61" href="#t61">61</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_compact_output_is_smaller_than_full</span><span class="op">(</span><span class="nam">self</span><span class="op">,</span> <span class="nam">measured</span><span class="op">:</span> <span class="nam">SizeBaseline</span><span class="op">,</span> <span class="nam">tool</span><span class="op">:</span> <span class="nam">str</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t62" href="#t62">62</a></span><span class="t">        <span class="key">assert</span> <span class="nam">measured</span><span class="op">.</span><span class="nam">total_bytes</span><span class="op">[</span><span class="fst">f&quot;</span><span class="op">{</span><span class="nam">tool</span><span class="op">}</span><span class="fst">[compact]</span><span class="fst">&quot;</span><span class="op">]</span> <span class="op">&lt;</span> <span class="nam">measured</span><span class="op">.</span><span class="nam">total_bytes</span><span class="op">[</span><span class="nam">tool</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t63" href="#t63">63</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t64" href="#t64">64</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_unlimited_entity_read_is_larger_than_the_default_budget</span><span class="op">(</span><span class="nam">self</span><span class="op">,</span> <span class="nam">measured</span><span class="op">:</span> <span class="nam">SizeBaseline</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t64" href="#t64">64</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_names_only_search_is_smaller_than_compact</span><span class="op">(</span><span class="nam">self</span><span class="op">,</span> <span class="nam">measured</span><span class="op">:</span> <span class="nam">SizeBaseline</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t65" href="#t65">65</a></span><span class="t">        <span class="nam">totals</span> <span class="op">=</span> <span class="nam">measured</span><span class="op">.</span><span class="nam">total_bytes</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t66" href="#t66">66</a></span><span class="t">        <span class="key">assert</span> <span class="nam">totals</span><span class="op">[</span><span class="str">&quot;get_entity_with_relations[full]&quot;</span><span class="op">]</span> <span class="op">&gt;=</span> <span class="nam">totals</span><span class="op">[</span><span class="str">&quot;get_entity_with_relations&quot;</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t66" href="#t66">66</a></span><span class="t">        <span class="key">assert</span> <span class="nam">totals</span><span class="op">[</span><span class="str">&quot;search_all_projects[names_only]&quot;</span><span class="op">]</span> <span class="op">&lt;</span> <span class="nam">totals</span><span class="op">[</span><span class="str">&quot;search_all_projects[compact]&quot;</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t67" href="#t67">67</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t68" href="#t68">68</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_unlimited_entity_read_is_larger_than_the_default_budget</span><span class="op">(</span><span class="nam">self</span><span class="op">,</span> <span class="nam">measured</span><span class="op">:</span> <span class="nam">SizeBaseline</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t69" href="#t69">69</a></span><span class="t">        <span class="nam">totals</span> <span class="op">=</span> <span class="nam">measured</span><span class="op">.</span><span class="nam">total_bytes</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t70" href="#t70">70</a></span><span class="t">        <span class="key">assert</span> <span class="nam">totals</span><span class="op">[</span><span class="str">&quot;get_entity_with_relations[full]&quot;</span><span class="op">]</span> <span class="op">&gt;=</span> <span class="nam">totals</span><span class="op">[</span><span class="str">&quot;get_entity_with_relations&quot;</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -155,7 +159,7 @@
             <a class="nav" href="z_a44f0ac069e85531_naming_check_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-06 21:19 +0000
+            created at 2026-10-06 22:07 +0000
         </p>
     </div>
 </footer>
