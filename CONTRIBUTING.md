@@ -25,7 +25,7 @@ just test         # pytest
 
 Run `just` before opening a PR - all four must pass.
 
-CI measures tool output size and ranking on the base and on the PR, posts the change as a PR comment, and fails on size growth unless the PR carries the `size-increase-accepted` label, or on a recall/success drop unless it carries the `ranking-drop-accepted` label. `just bench-diff [ref]` runs the same comparison locally (default `origin/main`); `just baseline` writes the current measurement to `tests/eval/baseline.json` (untracked).
+CI measures tool output size and ranking on the base and on the PR, posts the change as a PR comment, and fails on size growth unless the PR carries the `size-increase-accepted` label, or on a recall, success or MRR drop unless it carries the `ranking-drop-accepted` label. `just bench-diff [ref]` runs the same comparison locally (default `origin/main`); `just baseline` writes the current measurement to `tests/eval/baseline.json` (untracked). Queries labelled unreachable are reported apart and never gate. When a PR changes the benchmark, the comment compares the base and PR code on the old benchmark, which gates, and the old and new benchmarks under the PR code.
 
 ## Commit messages
 

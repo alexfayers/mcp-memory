@@ -3,7 +3,7 @@ const { findStickyComment, upsertStickyComment } = require('./sticky-comment.js'
 
 const MARKER = '<!-- benchmark-size -->';
 const MAX_COMMENT_LENGTH = 60000;
-const DETAILS_TAG = '<details>';
+const DETAILS_BLOCK = /\n*<details>[\s\S]*?(?:<\/details>|$)/g;
 const TOTALS_SECTION_COUNT = 2;
 const SUMMARY_POINTER = '\n\nFull table in the job summary.\n';
 
@@ -15,9 +15,7 @@ function buildCommentBody(markdown) {
   if (fits(markdown)) {
     return markdown;
   }
-  const detailsStart = markdown.lastIndexOf(DETAILS_TAG);
-  const summaryOnly = detailsStart === -1 ? markdown : markdown.slice(0, detailsStart);
-  const withoutDetails = `${summaryOnly.trimEnd()}${SUMMARY_POINTER}`;
+  const withoutDetails = `${markdown.replace(DETAILS_BLOCK, '').trimEnd()}${SUMMARY_POINTER}`;
   if (fits(withoutDetails)) {
     return withoutDetails;
   }

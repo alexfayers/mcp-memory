@@ -10,9 +10,10 @@ rather than a guess, and gives phase D a regression gate it must not degrade.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+import functools
 import math
 from pathlib import Path
 import sqlite3
@@ -155,12 +156,21 @@ def iter_labelled_queries(
         )
 
 
+def _replayed_names(db: Storage, k: int, now: datetime | None, labelled: LabelledQuery) -> list[str]:
+    """Re-run ``labelled`` against the current graph and return the entity names in rank order."""
+    result = db.reads.search(labelled.project, labelled.query, limit=max(k, len(labelled.ranked)), now=now)
+    return [entity.name for entity in result["entities"]]
+
+
 def evaluate(
     db: Storage,
     k: int = 10,
     since: str | None = None,
     min_content_tokens: int = 0,
     now: datetime | None = None,
+    *,
+    ranker: Callable[[LabelledQuery], list[str]] | None = None,
+    include: Callable[[LabelledQuery], bool] | None = None,
 ) -> EvalReport:
     """Score current ranking quality by replaying each labelled query against the live graph.
 
@@ -171,18 +181,20 @@ def evaluate(
     surfaced on or after that instant are scored. When ``min_content_tokens`` is given,
     degenerate short queries are excluded from the labelled set (see ``iter_labelled_queries``).
     ``now`` is forwarded to every replayed search as the instant recency decay is measured
-    from, so a fixed graph yields identical metrics on any day.
+    from, so a fixed graph yields identical metrics on any day. ``ranker``, when given, supplies
+    each query's ranked names in place of the built-in replay, and ``now`` then does not apply.
+    ``include``, when given, scores only the labelled queries it returns True for.
     """
     precisions: list[float] = []
     reciprocal_ranks: list[float] = []
     recalls: list[float] = []
     ndcgs: list[float] = []
     successes: list[float] = []
+    rank = ranker or functools.partial(_replayed_names, db, k, now)
     for labelled in iter_labelled_queries(db, since, min_content_tokens):
-        if not labelled.relevant:
+        if not labelled.relevant or (include is not None and not include(labelled)):
             continue
-        result = db.reads.search(labelled.project, labelled.query, limit=max(k, len(labelled.ranked)), now=now)
-        ranked_now = [entity.name for entity in result["entities"]]
+        ranked_now = rank(labelled)
         precisions.append(precision_at_k(ranked_now, labelled.relevant, k))
         reciprocal_ranks.append(reciprocal_rank(ranked_now, labelled.relevant))
         recalls.append(recall_at_k(ranked_now, labelled.relevant, k))

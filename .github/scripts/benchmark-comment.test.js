@@ -102,6 +102,19 @@ test('drops the trailing details block from an oversize comment but keeps it in 
   assert.equal(calls.summary[0], markdown);
 });
 
+test('drops every details block of an oversize multi-section report and keeps each section headline', async () => {
+  const section = (name) => `### ${name}\n\n**Output size** ${name}\n\n<details>\n${'x'.repeat(30000)}\n</details>`;
+  const markdown = `banner\n\n${section('New dataset')}\n\n${section('Old dataset')}\n`;
+  const { args, calls } = setup(markdown);
+  await report(args);
+  const { body } = calls.create[0];
+  assert.ok(body.length <= 60000);
+  assert.ok(!body.includes('<details>'));
+  assert.ok(body.includes('**Output size** New dataset'));
+  assert.ok(body.includes('**Output size** Old dataset'));
+  assert.ok(body.includes('Full table in the job summary.'));
+});
+
 test('falls back to the badges and headline when the content before the details block is still oversize', async () => {
   const top = '![output size](u) ![ranking](u)\n\n**Output size** 1 -> 2 bytes';
   const markdown = `${top}\n\n<details>\n${'x'.repeat(60000)}\n\n</details>\n\n<details>\n</details>\n`;

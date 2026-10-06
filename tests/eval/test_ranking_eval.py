@@ -272,6 +272,29 @@ class TestEvaluate:
         assert report.mean_recall_at_k == 0.0
         assert report.mean_ndcg_at_k == 0.0
 
+    def test_ranker_supplies_the_ranked_names_in_place_of_the_replay(self, store: Storage) -> None:
+        _build_eval_fixture(store)
+
+        default = ranking_eval.evaluate(store, k=5, now=_FIXTURE_NOW)
+        silent = ranking_eval.evaluate(store, k=5, ranker=lambda _: [])
+
+        assert default.query_count == 2
+        assert default.mean_recall_at_k > 0
+        assert silent.query_count == 2
+        assert silent.mean_recall_at_k == 0.0
+        assert silent.mrr == 0.0
+
+    def test_include_scores_only_the_queries_it_accepts(self, store: Storage) -> None:
+        _build_eval_fixture(store)
+
+        none = ranking_eval.evaluate(store, k=5, now=_FIXTURE_NOW, include=lambda _: False)
+        one = ranking_eval.evaluate(
+            store, k=5, now=_FIXTURE_NOW, include=lambda labelled: labelled.query == "cache eviction"
+        )
+
+        assert none.query_count == 0
+        assert one.query_count == 1
+
     def test_since_scopes_the_query_window(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}])
         store.telemetry.record_surfaced("search_nodes", "needle", "rid-old", [("proj", "task/a", 1)])

@@ -21,6 +21,7 @@ from tests.eval.eval_baseline import (
     section as section_ranking,
 )
 from tests.eval.eval_fixture import _build_populated_fixture
+from tests.eval.ranking_replay import measure as measure_ranking
 from tests.eval.size_baseline import (
     SizeBaseline,
     measure as measure_size,
@@ -37,7 +38,7 @@ def _measure_both() -> tuple[Baseline, SizeBaseline]:
         db = open_writable(Path(tmp) / "baseline.db")
         try:
             fixture = _build_populated_fixture(db)
-            return Baseline.from_report(fixture.expected_baseline), measure_size(fixture)
+            return measure_ranking(fixture), measure_size(fixture)
         finally:
             db.connection.close()
 

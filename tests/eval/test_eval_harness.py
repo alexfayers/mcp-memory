@@ -146,6 +146,12 @@ class TestAssertNoRegression:
         with pytest.raises(AssertionError, match="regression"):
             assert_no_regression(result, request)
 
+    def test_fails_when_mrr_drops(self, request: pytest.FixtureRequest) -> None:
+        result = MeasuredChange(before=_report(), after=_report(mrr=0.25))
+
+        with pytest.raises(AssertionError, match="regression"):
+            assert_no_regression(result, request)
+
 
 class TestAssertImproves:
     def test_passes_on_a_strict_gain_without_regressing_gates(self, request: pytest.FixtureRequest) -> None:
