@@ -61,6 +61,10 @@ class TestProbes:
     def test_compact_output_is_smaller_than_full(self, measured: SizeBaseline, tool: str) -> None:
         assert measured.total_bytes[f"{tool}[compact]"] < measured.total_bytes[tool]
 
+    def test_names_only_search_is_smaller_than_compact(self, measured: SizeBaseline) -> None:
+        totals = measured.total_bytes
+        assert totals["search_all_projects[names_only]"] < totals["search_all_projects[compact]"]
+
     def test_unlimited_entity_read_is_larger_than_the_default_budget(self, measured: SizeBaseline) -> None:
         totals = measured.total_bytes
         assert totals["get_entity_with_relations[full]"] >= totals["get_entity_with_relations"]

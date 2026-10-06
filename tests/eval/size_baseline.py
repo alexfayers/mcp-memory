@@ -72,10 +72,13 @@ def _serving(fixture: EvalFixture) -> Iterator[None]:
         server._db = original
 
 
-def _search_all_projects_probes(fixture: EvalFixture, *, compact: bool = False) -> list[int]:
+def _search_all_projects_probes(fixture: EvalFixture, *, compact: bool = False, names_only: bool = False) -> list[int]:
     """Return one search_all_projects payload size per `_TOPICS` term, via the real tool body."""
     with _serving(fixture):
-        return [payload_size(server.search_all_projects.__wrapped__(term, compact=compact)) for _, _, term in _TOPICS]
+        return [
+            payload_size(server.search_all_projects.__wrapped__(term, compact=compact, names_only=names_only))
+            for _, _, term in _TOPICS
+        ]
 
 
 def _tool_list_probes(_fixture: EvalFixture) -> list[int]:
@@ -96,6 +99,7 @@ _PROBES: dict[str, Callable[[EvalFixture], list[int]]] = {
     "get_entity_with_relations[full]": functools.partial(_get_entity_with_relations_probes, max_observation_chars=-1),
     "search_all_projects": _search_all_projects_probes,
     "search_all_projects[compact]": functools.partial(_search_all_projects_probes, compact=True),
+    "search_all_projects[names_only]": functools.partial(_search_all_projects_probes, names_only=True),
     "tools/list": _tool_list_probes,
 }
 

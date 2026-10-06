@@ -47,6 +47,26 @@ class TestObserveSurfacing:
             ("beta", "task/b"),
         }
 
+    def test_search_all_projects_wired_groups_take_project_from_group_key(self, store: Storage) -> None:
+        wired = {"results": {"alpha": {"entities": [{"name": "task/a"}]}, "beta": {"entities": [{"name": "task/b"}]}}}
+
+        usefulness.observe(store, "search_all_projects", {"query": "shared"}, wired)
+
+        rows = store.connection.query_all("SELECT project, entity_name FROM surfaced_entities")
+        assert {(r["project"], r["entity_name"]) for r in rows} == {("alpha", "task/a"), ("beta", "task/b")}
+
+    def test_search_all_projects_names_only_surfaces_the_matched_entities(self, store: Storage) -> None:
+        names_only = {"results": {"alpha": ["task/a planned", "task/b"], "beta": ["feature/c in-progress"]}}
+
+        usefulness.observe(store, "search_all_projects", {"query": "shared"}, names_only)
+
+        rows = store.connection.query_all("SELECT project, entity_name, rank FROM surfaced_entities ORDER BY rank")
+        assert [(r["project"], r["entity_name"]) for r in rows] == [
+            ("alpha", "task/a"),
+            ("alpha", "task/b"),
+            ("beta", "feature/c"),
+        ]
+
     def test_read_graph_is_not_surfaced(self, store: Storage) -> None:
         _seed(store, "proj", "task/a", "needle")
         result = store.reads.recent("proj")

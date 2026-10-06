@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import uuid
 
 from .config import get_auto_vote_max_per_day, get_auto_vote_window_seconds
+from .models import VALID_STATUSES
 
 if TYPE_CHECKING:
     from .storage import Storage
@@ -73,19 +74,21 @@ def _surfaced_hits(result: Any) -> list[tuple[str, str, int]]:
     Handles both the flat ``search_nodes`` shape (``{"entities": [...]}``) and the grouped
     ``search_all_projects`` shape (``{"results": {project: {"entities": [...]}}}``).
     """
-    entities: list[Any] = []
+    entities: list[tuple[Any, Any]] = []
     if isinstance(result, dict):
-        entities.extend(result.get("entities", []) or [])
+        entities.extend((None, entity) for entity in result.get("entities", []) or [])
         grouped = result.get("results")
         if isinstance(grouped, dict):
-            for group in grouped.values():
+            for group_project, group in grouped.items():
                 if isinstance(group, dict):
-                    entities.extend(group.get("entities", []) or [])
+                    entities.extend((group_project, entity) for entity in group.get("entities", []) or [])
+                elif isinstance(group, list):
+                    entities.extend((group_project, {"name": _strip_status(entry)}) for entry in group)
 
     hits: list[tuple[str, str, int]] = []
-    for entity in entities:
+    for group_project, entity in entities:
         name = _attr(entity, "name")
-        project = _attr(entity, "project_name")
+        project = _attr(entity, "project_name") or group_project
         if name and project:
             hits.append((str(project), str(name), len(hits) + 1))
     return hits
@@ -111,6 +114,12 @@ def _used_targets(tool_name: str, kwargs: dict[str, Any]) -> list[tuple[str, str
             if isinstance(relation, dict):
                 names.extend(str(relation[k]) for k in ("source", "target") if relation.get(k))
     return [(project, name) for name in dict.fromkeys(names)]
+
+
+def _strip_status(entry: str) -> str:
+    """Drop the trailing status token of a ``names_only`` ``"name status"`` entry."""
+    name, _, status = entry.rpartition(" ")
+    return name if status in VALID_STATUSES else entry
 
 
 def _attr(obj: Any, field: str) -> Any:

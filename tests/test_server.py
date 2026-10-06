@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mcp_memory import server
+from mcp_memory.config import get_max_observation_chars
 from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _GLOBAL_PROJECT, _ensure_project_root, _validate_and_extract_relations
@@ -667,6 +668,79 @@ class TestSearchNodesObservationShape:
         assert "vote_score" not in observation
 
 
+class TestEntityWireShape:
+    def _seed(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}])
+
+    def test_compact_entity_has_no_observations_key(self, server_db: Storage) -> None:
+        self._seed(server_db)
+        entity = server.search_nodes("proj", "needle", compact=True)["entities"][0]
+        assert "observations" not in entity
+
+    def test_read_output_has_no_entity_type(self, server_db: Storage) -> None:
+        self._seed(server_db)
+        assert "entity_type" not in server.search_nodes("proj", "needle")["entities"][0]
+        assert "entity_type" not in server.read_graph("proj")["entities"][0]
+        assert "entity_type" not in server.get_entity_with_relations("proj", "task/a")["entity"]
+
+    def test_dates_have_no_time_of_day(self, server_db: Storage) -> None:
+        self._seed(server_db)
+        server_db.connection.write("UPDATE entities SET updated_at = datetime('now', '+2 days')")
+        entity = server.search_nodes("proj", "needle")["entities"][0]
+        assert len(entity["created_at"]) == len("YYYY-MM-DD")
+        assert len(entity["updated_at"]) == len("YYYY-MM-DD")
+
+    def test_updated_at_omitted_on_the_creation_date(self, server_db: Storage) -> None:
+        self._seed(server_db)
+        entity = server.search_nodes("proj", "needle")["entities"][0]
+        assert "created_at" in entity
+        assert "updated_at" not in entity
+
+    def test_grouped_entities_have_no_project_name(self, server_db: Storage) -> None:
+        self._seed(server_db)
+        entity = server.search_all_projects("needle")["results"]["proj"]["entities"][0]
+        assert "project_name" not in entity
+
+
+class TestSearchAllProjectsNamesOnly:
+    def _seed(self, server_db: Storage) -> None:
+        server_db.entities.create(
+            "p1",
+            [
+                {"name": "project/p1", "entityType": "project", "observations": ["needle"]},
+                {
+                    "name": "task/a",
+                    "entityType": "task",
+                    "observations": ["needle"],
+                    "status": "planned",
+                    "relations": [{"target": "project/p1", "type": "implements"}],
+                },
+            ],
+        )
+        server_db.entities.create(
+            "p2", [{"name": "feature/b", "entityType": "feature", "observations": ["needle"], "status": "blocked"}]
+        )
+
+    def test_returns_name_and_status_strings_grouped_by_project(self, server_db: Storage) -> None:
+        self._seed(server_db)
+        result = server.search_all_projects("needle", names_only=True)
+        assert set(result) == {"results"}
+        assert sorted(result["results"]["p1"]) == ["project/p1", "task/a planned"]
+        assert result["results"]["p2"] == ["feature/b blocked"]
+
+    def test_limit_is_honoured(self, server_db: Storage) -> None:
+        self._seed(server_db)
+        result = server.search_all_projects("needle", names_only=True, limit=1)
+        assert sum(len(names) for names in result["results"].values()) == 1
+
+    def test_entity_type_and_status_filters_apply(self, server_db: Storage) -> None:
+        self._seed(server_db)
+        by_type = server.search_all_projects("needle", names_only=True, entityType="feature")
+        assert by_type["results"] == {"p2": ["feature/b blocked"]}
+        by_status = server.search_all_projects("needle", names_only=True, status="planned")
+        assert by_status["results"] == {"p1": ["task/a planned"]}
+
+
 class TestRestoreEntityTool:
     def test_restore_makes_soft_deleted_entity_visible(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
@@ -1107,8 +1181,8 @@ class TestGraphToolsObservationBudget:
     def test_get_entity_with_relations_compact_empties_both(self, server_db: Storage) -> None:
         self._seed(server_db)
         result = server.get_entity_with_relations("proj", "a", compact=True)
-        assert result["entity"]["observations"] == []
-        assert self._related(result)["observations"] == []
+        assert "observations" not in result["entity"]
+        assert "observations" not in self._related(result)
 
     def test_get_entity_with_relations_small_budget_trims_both(self, server_db: Storage) -> None:
         self._seed(server_db)
@@ -1122,17 +1196,34 @@ class TestGraphToolsObservationBudget:
         assert obs_contents(result["entity"]) == ["aaa"]
         assert obs_contents(self._related(result)) == ["xxx"]
 
-    def test_get_entity_with_relations_negative_returns_all(self, server_db: Storage) -> None:
+    def test_get_entity_with_relations_negative_returns_all_for_the_named_entity(self, server_db: Storage) -> None:
         self._seed(server_db)
         result = server.get_entity_with_relations("proj", "a", max_observation_chars=-1)
         assert obs_contents(result["entity"]) == ["aaa", "bbb", "ccc"]
-        assert obs_contents(self._related(result)) == ["xxx", "yyy", "zzz"]
+        assert "omitted" not in result["entity"]
+
+    def test_get_entity_with_relations_negative_keeps_the_default_budget_for_related_entities(
+        self, server_db: Storage
+    ) -> None:
+        big = "x" * (get_max_observation_chars() // 2 + 1)
+        server_db.entities.create(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": [big, big]},
+                {"name": "b", "entityType": "project", "observations": [big, big]},
+            ],
+        )
+        server_db.relations.create("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
+        result = server.get_entity_with_relations("proj", "a", max_observation_chars=-1)
+        assert len(obs_contents(result["entity"])) == 2
+        assert len(obs_contents(self._related(result))) == 1
+        assert self._related(result)["omitted"] == 1
 
     def test_get_entity_with_relations_filtered_compact_empties_both(self, server_db: Storage) -> None:
         self._seed(server_db)
         result = server.get_entity_with_relations("proj", "a", entityType="project", compact=True)
-        assert result["entity"]["observations"] == []
-        assert self._related(result)["observations"] == []
+        assert "observations" not in result["entity"]
+        assert "observations" not in self._related(result)
 
     def test_get_entity_with_relations_filtered_small_budget_trims_both(self, server_db: Storage) -> None:
         self._seed(server_db)
