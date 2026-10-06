@@ -35,8 +35,12 @@ def _tool_ranking(query: LabelledQuery) -> list[str]:
 
 def _replay(fixture: EvalFixture, include: Callable[[LabelledQuery], bool]) -> EvalReport:
     """Score the labelled queries `include` accepts on the tool rankings, with recency pinned to `fixture.now`."""
-    with _serving(fixture), mock.patch.object(reads, "datetime", **{"now.return_value": fixture.now}):
-        return evaluate(fixture.db, k=fixture.k, ranker=_tool_ranking, include=include)
+    with _serving(fixture), mock.patch.object(reads, "datetime", **{"now.return_value": fixture.now}) as clock:
+        report = evaluate(fixture.db, k=fixture.k, ranker=_tool_ranking, include=include)
+    if not clock.now.called:
+        msg = "the search never read the pinned clock, so recency is not pinned to the fixture"
+        raise RuntimeError(msg)
+    return report
 
 
 def measure(fixture: EvalFixture) -> Baseline:

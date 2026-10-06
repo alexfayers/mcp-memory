@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -58,6 +58,19 @@ class TestMeasure:
         measure(fixture)
 
         assert fixture.db.connection.query_one(count_sql)["n"] == before
+
+    def test_fails_when_the_search_ignores_the_pinned_clock(
+        self, fixture: EvalFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        search = reads.Reads.search
+
+        def search_with_explicit_now(self: reads.Reads, *args: Any, **kwargs: Any) -> reads.NodeList:
+            return search(self, *args, now=fixture.now, **kwargs)
+
+        monkeypatch.setattr(reads.Reads, "search", search_with_explicit_now)
+
+        with pytest.raises(RuntimeError, match="pinned clock"):
+            measure(fixture)
 
     def test_a_ranking_regression_lowers_recall(self, fixture: EvalFixture) -> None:
         before = measure(fixture).metrics["mean_recall_at_k"]

@@ -281,6 +281,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError, KeyError) as exc:
         print(f"cannot read baseline: {exc}", file=sys.stderr)
         return _EXIT_UNREADABLE
+    if args.head_on_base_data is not None and head_on_base is None:
+        print("head-on-base benchmark missing: comparing different benchmarks", file=sys.stderr)
     if args.head_on_base_data is None:
         comparison = _compare_artefacts(base, head)
         report, gating = comparison.report, {"": comparison}

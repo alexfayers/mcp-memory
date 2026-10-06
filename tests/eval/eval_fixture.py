@@ -4,7 +4,8 @@ Reproduces the live graph's measured shape - type mix, status mix, project sizes
 votes, observation counts/lengths, and the query/relevance-label distribution - at
 roughly 1/10 scale. Content (entity names, project names, query and observation text) is
 invented; every count, age, vote and length below is a measured live quantile. Used entities
-also carry the votes their labelled uses earn.
+also carry the votes their labelled uses earn, modelling the implicit vote a used entity gets in
+live use.
 """
 
 from __future__ import annotations

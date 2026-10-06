@@ -365,6 +365,10 @@ class TestChangedBenchmark:
         assert _compare(tmp_path, {"read_graph": 1000}, {"read_graph": 1500}, benchmark_changed=True) == 1
         assert "New benchmark: output size grew" in capsys.readouterr().err
 
+    def test_missing_head_on_base_data_warns_on_stderr(self, tmp_path: Path, capsys: _Capsys) -> None:
+        _compare(tmp_path, {"read_graph": 1000}, {"read_graph": 1000}, benchmark_changed=True)
+        assert "head-on-base benchmark missing: comparing different benchmarks" in capsys.readouterr().err
+
     def test_unreadable_cross_artefact_exits_two(self, tmp_path: Path, capsys: _Capsys) -> None:
         corrupt = tmp_path / "corrupt.json"
         corrupt.write_text("not json", encoding="utf-8")
