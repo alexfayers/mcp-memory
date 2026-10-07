@@ -6,7 +6,7 @@
 |----------------------------------------------------- | -------: | -------: | ------: | --------: |
 | src/mcp\_memory/\_\_init\_\_.py                      |        0 |        0 |    100% |           |
 | src/mcp\_memory/activity.py                          |      113 |        3 |     97% |145-146, 195 |
-| src/mcp\_memory/agent.py                             |      286 |       13 |     95% |496-511, 869-870, 941 |
+| src/mcp\_memory/agent.py                             |      285 |       13 |     95% |462-477, 835-836, 907 |
 | src/mcp\_memory/atomic\_write.py                     |       16 |        3 |     81% |     20-22 |
 | src/mcp\_memory/audit.py                             |      108 |        0 |    100% |           |
 | src/mcp\_memory/cli.py                               |      462 |      178 |     61% |59, 111-115, 174-187, 192-205, 210-219, 229-233, 238-249, 277-278, 285-286, 291-293, 297-299, 311-312, 409-411, 424-426, 434-477, 489, 510-516, 536-542, 567-579, 601-610, 622-623, 627-628, 638-644, 662-663, 678-684, 812-825, 834, 836, 838, 840, 845-854 |
@@ -15,7 +15,7 @@
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       69 |        4 |     94% |52-53, 85, 87 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
-| src/mcp\_memory/hooks/plugin.py                      |      416 |       26 |     94% |193, 239, 357, 364, 520, 582-583, 588-596, 618, 645, 685, 688-690, 700, 707-711, 749 |
+| src/mcp\_memory/hooks/plugin.py                      |      417 |       26 |     94% |179, 225, 343, 350, 506, 568-569, 574-582, 604, 631, 671, 674-676, 686, 693-697, 735 |
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
 | src/mcp\_memory/hooks/tracker.py                     |       90 |        1 |     99% |       108 |
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
@@ -51,6 +51,7 @@
 | src/mcp\_memory/storage/services/fts.py              |       11 |        0 |    100% |           |
 | src/mcp\_memory/storage/services/ids.py              |       29 |        0 |    100% |           |
 | src/mcp\_memory/storage/services/integrity.py        |       24 |        0 |    100% |           |
+| src/mcp\_memory/tool\_names.py                       |        2 |        0 |    100% |           |
 | src/mcp\_memory/usefulness.py                        |       72 |        2 |     97% |     50-51 |
 | src/mcp\_memory/visualise.py                         |      175 |        5 |     97% |161, 221-222, 310, 314 |
 | tests/\_\_init\_\_.py                                |       43 |        1 |     98% |        85 |
@@ -84,7 +85,7 @@
 | tests/test\_database.py                              |     1850 |        2 |     99% | 589, 1744 |
 | tests/test\_dream\_status.py                         |      200 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      280 |        0 |    100% |           |
-| tests/test\_hooks\_plugin.py                         |      932 |       67 |     93% |643, 1587-1592, 1597-1600, 1605-1613, 1624-1627, 1656-1659, 1701-1704, 1708-1711, 1715-1719, 1723-1725, 1730-1732, 1737-1742, 1746-1747, 1751-1753, 1758-1766 |
+| tests/test\_hooks\_plugin.py                         |      941 |       67 |     93% |643, 1594-1599, 1604-1607, 1612-1620, 1631-1634, 1663-1666, 1708-1711, 1715-1718, 1722-1726, 1730-1732, 1737-1739, 1744-1749, 1753-1754, 1758-1760, 1765-1773 |
 | tests/test\_metrics.py                               |      194 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_path\_resolver.py                        |       70 |        2 |     97% |     59-60 |
@@ -98,7 +99,7 @@
 | tests/test\_tracker.py                               |       66 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      620 |        0 |    100% |           |
-| **TOTAL**                                            | **13230** |  **517** | **96%** |           |
+| **TOTAL**                                            | **13241** |  **517** | **96%** |           |
 
 
 ## Setup coverage badge

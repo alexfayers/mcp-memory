@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_a44f0ac069e85531_test_audit_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-07 09:50 +0000
+            created at 2026-10-07 21:05 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -92,7 +92,7 @@
     <p class="run"><span class="n"><a id="t10" href="#t10">10</a></span><span class="t"><span class="key">from</span> <span class="nam">mcp</span><span class="op">.</span><span class="nam">server</span><span class="op">.</span><span class="nam">fastmcp</span> <span class="key">import</span> <span class="nam">FastMCP</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t11" href="#t11">11</a></span><span class="t"><span class="key">import</span> <span class="nam">pytest</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t12" href="#t12">12</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t13" href="#t13">13</a></span><span class="t"><span class="key">from</span> <span class="nam">mcp_memory</span> <span class="key">import</span> <span class="nam">agent</span><span class="op">,</span> <span class="nam">cli</span><span class="op">,</span> <span class="nam">dream_status</span><span class="op">,</span> <span class="nam">recall_status</span><span class="op">,</span> <span class="nam">server</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t13" href="#t13">13</a></span><span class="t"><span class="key">from</span> <span class="nam">mcp_memory</span> <span class="key">import</span> <span class="nam">agent</span><span class="op">,</span> <span class="nam">cli</span><span class="op">,</span> <span class="nam">dream_status</span><span class="op">,</span> <span class="nam">recall_status</span><span class="op">,</span> <span class="nam">server</span><span class="op">,</span> <span class="nam">tool_names</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t14" href="#t14">14</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t15" href="#t15">15</a></span><span class="t"><span class="key">if</span> <span class="nam">TYPE_CHECKING</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t16" href="#t16">16</a></span><span class="t">    <span class="key">from</span> <span class="nam">collections</span><span class="op">.</span><span class="nam">abc</span> <span class="key">import</span> <span class="nam">Awaitable</span><span class="op">,</span> <span class="nam">Callable</span>&nbsp;</span><span class="r"></span></p>
@@ -163,8 +163,8 @@
     <p class="pln"><span class="n"><a id="t81" href="#t81">81</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t82" href="#t82">82</a></span><span class="t"><span class="key">class</span> <span class="nam">TestMemoryToolClassification</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t83" href="#t83">83</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_classification_partitions_every_registered_tool</span><span class="op">(</span><span class="nam">self</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t84" href="#t84">84</a></span><span class="t">        <span class="nam">mutating</span> <span class="op">=</span> <span class="nam">set</span><span class="op">(</span><span class="nam">agent</span><span class="op">.</span><span class="nam">_MUTATING_MEMORY_TOOLS</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t85" href="#t85">85</a></span><span class="t">        <span class="nam">read_only</span> <span class="op">=</span> <span class="nam">set</span><span class="op">(</span><span class="nam">agent</span><span class="op">.</span><span class="nam">_READ_ONLY_MEMORY_TOOLS</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t84" href="#t84">84</a></span><span class="t">        <span class="nam">mutating</span> <span class="op">=</span> <span class="nam">set</span><span class="op">(</span><span class="nam">tool_names</span><span class="op">.</span><span class="nam">MUTATING_TOOLS</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t85" href="#t85">85</a></span><span class="t">        <span class="nam">read_only</span> <span class="op">=</span> <span class="nam">set</span><span class="op">(</span><span class="nam">tool_names</span><span class="op">.</span><span class="nam">READ_ONLY_TOOLS</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t86" href="#t86">86</a></span><span class="t">        <span class="key">assert</span> <span class="key">not</span> <span class="nam">mutating</span> <span class="op">&amp;</span> <span class="nam">read_only</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t87" href="#t87">87</a></span><span class="t">        <span class="key">assert</span> <span class="nam">mutating</span> <span class="op">|</span> <span class="nam">read_only</span> <span class="op">==</span> <span class="op">{</span><span class="nam">tool</span><span class="op">.</span><span class="nam">name</span> <span class="key">for</span> <span class="nam">tool</span> <span class="key">in</span> <span class="nam">asyncio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">server</span><span class="op">.</span><span class="nam">mcp</span><span class="op">.</span><span class="nam">list_tools</span><span class="op">(</span><span class="op">)</span><span class="op">)</span><span class="op">}</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t88" href="#t88">88</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
@@ -1232,7 +1232,7 @@
             <a class="nav" href="z_a44f0ac069e85531_test_audit_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-07 09:50 +0000
+            created at 2026-10-07 21:05 +0000
         </p>
     </div>
 </footer>
