@@ -124,16 +124,28 @@ class TestRegisterCopilotServer:
 
 
 class TestRegisterPiServer:
-    def test_adds_direct_mcp_prefixed_servers(self, tmp_path: cli.Path) -> None:
+    def test_adds_url_only_servers(self, tmp_path: cli.Path) -> None:
         mcp_path = tmp_path / "agent" / "mcp.json"
         cli._register_pi_server(mcp_path, "memory", "http://localhost:8000/mcp")
 
         data = json.loads(mcp_path.read_text(encoding="utf-8"))
-        assert data["mcpServers"]["memory"] == {
-            "url": "http://localhost:8000/mcp",
+        assert data["mcpServers"]["memory"] == {"url": "http://localhost:8000/mcp"}
+
+    def test_migration_drops_only_adapter_keys(self, tmp_path: cli.Path) -> None:
+        mcp_path = tmp_path / "mcp.json"
+        legacy = {
+            "url": "http://custom/mcp",
+            "headers": {"X": "1"},
             "directTools": True,
             "toolPrefix": "mcp",
+            "extra": 1,
         }
+        mcp_path.write_text(json.dumps({"mcpServers": {"memory": legacy}}), encoding="utf-8")
+
+        cli._register_pi_server(mcp_path, "memory", "http://localhost:8000/mcp")
+        data = json.loads(mcp_path.read_text(encoding="utf-8"))
+
+        assert data["mcpServers"]["memory"] == {"url": "http://custom/mcp", "headers": {"X": "1"}, "extra": 1}
 
     def test_keeps_existing_servers_and_settings(self, tmp_path: cli.Path) -> None:
         mcp_path = tmp_path / "mcp.json"

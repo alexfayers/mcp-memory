@@ -677,16 +677,16 @@ def _cmd_install_copilot(args: argparse.Namespace) -> None:
 
 
 def _pi_mcp_config_path() -> Path:
-    """Return pi-mcp-adapter's global config, under `$PI_CODING_AGENT_DIR` or ~/.pi/agent."""
+    """Return pi's global MCP config, under `$PI_CODING_AGENT_DIR` or ~/.pi/agent."""
     agent_dir = os.environ.get("PI_CODING_AGENT_DIR")
     return (Path(agent_dir).expanduser() if agent_dir else Path.home() / ".pi" / "agent") / "mcp.json"
 
 
 def _register_pi_server(mcp_path: Path, name: str, url: str) -> None:
-    """Add one HTTP MCP server entry to pi-mcp-adapter's mcp.json if missing.
+    """Add one HTTP MCP server entry to pi's mcp.json if missing.
 
-    Tools are registered directly under the `mcp__` prefix so hooks see each
-    memory call by name rather than through the adapter's proxy tool.
+    An existing entry keeps its settings; only the legacy `directTools` and
+    `toolPrefix` keys are dropped.
     """
     config: dict[str, object] = load_jsonc_object(mcp_path) if mcp_path.exists() and mcp_path.stat().st_size > 0 else {}
     servers_obj = config.setdefault("mcpServers", {})
@@ -695,18 +695,23 @@ def _register_pi_server(mcp_path: Path, name: str, url: str) -> None:
         raise TypeError(msg)
 
     servers: dict[str, object] = servers_obj
-    if name in servers:
+    existing = servers.get(name)
+    if existing is not None:
+        if isinstance(existing, dict) and ({"directTools", "toolPrefix"} & existing.keys()):
+            existing.pop("directTools", None)
+            existing.pop("toolPrefix", None)
+            mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         print(f"{name} MCP server already configured in Pi.")
         return
 
-    servers[name] = {"url": url, "directTools": True, "toolPrefix": "mcp"}
+    servers[name] = {"url": url}
     mcp_path.parent.mkdir(parents=True, exist_ok=True)
     mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     print(f"Added {name} MCP server to Pi (url: {url}).")
 
 
 def _cmd_install_pi() -> None:
-    """Register memory servers in pi-mcp-adapter's global MCP config."""
+    """Register memory servers in pi's global MCP config."""
     mcp_path = _pi_mcp_config_path()
     try:
         _register_pi_server(mcp_path, "memory", f"http://localhost:{resolve_port()}/mcp")
