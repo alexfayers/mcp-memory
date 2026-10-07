@@ -15,7 +15,7 @@
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       69 |        4 |     94% |52-53, 85, 87 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
-| src/mcp\_memory/hooks/plugin.py                      |      415 |       26 |     94% |193, 238, 356, 363, 519, 581-582, 587-595, 627, 633, 673, 676-678, 688, 695-699, 737 |
+| src/mcp\_memory/hooks/plugin.py                      |      416 |       26 |     94% |193, 239, 357, 364, 520, 582-583, 588-596, 618, 645, 685, 688-690, 700, 707-711, 749 |
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
 | src/mcp\_memory/hooks/tracker.py                     |       90 |        1 |     99% |       108 |
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
@@ -84,7 +84,7 @@
 | tests/test\_database.py                              |     1850 |        2 |     99% | 589, 1744 |
 | tests/test\_dream\_status.py                         |      200 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      280 |        0 |    100% |           |
-| tests/test\_hooks\_plugin.py                         |      903 |       67 |     93% |614, 1553-1558, 1563-1566, 1571-1579, 1590-1593, 1622-1625, 1667-1670, 1674-1677, 1681-1685, 1689-1691, 1696-1698, 1703-1708, 1712-1713, 1717-1719, 1724-1732 |
+| tests/test\_hooks\_plugin.py                         |      932 |       67 |     93% |643, 1587-1592, 1597-1600, 1605-1613, 1624-1627, 1656-1659, 1701-1704, 1708-1711, 1715-1719, 1723-1725, 1730-1732, 1737-1742, 1746-1747, 1751-1753, 1758-1766 |
 | tests/test\_metrics.py                               |      194 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_path\_resolver.py                        |       70 |        2 |     97% |     59-60 |
@@ -98,7 +98,7 @@
 | tests/test\_tracker.py                               |       66 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      620 |        0 |    100% |           |
-| **TOTAL**                                            | **13200** |  **517** | **96%** |           |
+| **TOTAL**                                            | **13230** |  **517** | **96%** |           |
 
 
 ## Setup coverage badge
