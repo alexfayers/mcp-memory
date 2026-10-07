@@ -10,7 +10,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 import pytest
 
-from mcp_memory import agent, cli, dream_status, recall_status, server
+from mcp_memory import agent, cli, dream_status, recall_status, server, tool_names
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -81,8 +81,8 @@ class TestRegisterRecall:
 
 class TestMemoryToolClassification:
     def test_classification_partitions_every_registered_tool(self) -> None:
-        mutating = set(agent._MUTATING_MEMORY_TOOLS)
-        read_only = set(agent._READ_ONLY_MEMORY_TOOLS)
+        mutating = set(tool_names.MUTATING_TOOLS)
+        read_only = set(tool_names.READ_ONLY_TOOLS)
         assert not mutating & read_only
         assert mutating | read_only == {tool.name for tool in asyncio.run(server.mcp.list_tools())}
 

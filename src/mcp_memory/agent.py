@@ -50,6 +50,7 @@ from .config import (
     get_recall_model,
 )
 from .storage.operations.maintenance import GC_DOWNVOTE_FLOOR
+from .tool_names import MUTATING_TOOLS
 
 __all__ = ["anyio", "dream_status", "shutil", "time"]
 
@@ -76,42 +77,6 @@ class SpawnResult(TypedDict):
     cost_usd: float | None
 
 
-# Mutating mcp-memory tools plus vote: recall is strictly read-only, so
-# every one of these is denied. Deny rules override the inherited
-# permissions.allow wildcard, so this is the hard safety guarantee (an
-# allow-list cannot subtract from an inherited allow).
-_MUTATING_MEMORY_TOOLS = (
-    "create_entities",
-    "create_relations",
-    "delete_entity",
-    "delete_relation",
-    "delete_project",
-    "add_observations",
-    "delete_observations",
-    "edit_observation",
-    "set_entity_status",
-    "set_metadata",
-    "move_project_entities",
-    "merge_entities",
-    "merge_observations",
-    "restore_entity",
-    "trim_observations_to_outcome",
-    "rename_entity",
-    "move_entity_cross_scope",
-    "vote",
-)
-# Every remaining registered memory tool. Kept beside the deny-list so a test can
-# assert the two partition the registered tool names, which is what makes a newly
-# added mutating tool fail loudly instead of silently reaching the recall agent.
-_READ_ONLY_MEMORY_TOOLS = (
-    "search_nodes",
-    "read_graph",
-    "list_metadata",
-    "get_project_for_path",
-    "get_group_members",
-    "search_all_projects",
-    "get_entity_with_relations",
-)
 # --strict-mcp-config isolates MCP servers but not built-ins. Deny the write/exec
 # ones so the agent cannot touch the filesystem or spawn processes, and the
 # read/web ones (Read/Grep/Glob/WebFetch/WebSearch) so it is forced onto the
@@ -130,8 +95,9 @@ _DISALLOWED_BUILTINS = (
     "WebSearch",
 )
 
+# Deny rules override the inherited permissions.allow wildcard; an allow-list cannot.
 DISALLOWED_TOOLS: tuple[str, ...] = (
-    *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS),
+    *(f"mcp__memory__{tool}" for tool in MUTATING_TOOLS),
     *_DISALLOWED_BUILTINS,
 )
 
@@ -140,7 +106,7 @@ DISALLOWED_TOOLS: tuple[str, ...] = (
 # built-in stays denied, keeping grooming to demote-never-delete.
 _LIGHT_TIER_ALLOWED = {"vote"}
 DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
-    *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS if tool not in _LIGHT_TIER_ALLOWED),
+    *(f"mcp__memory__{tool}" for tool in MUTATING_TOOLS if tool not in _LIGHT_TIER_ALLOWED),
     *_DISALLOWED_BUILTINS,
 )
 
@@ -151,7 +117,7 @@ DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
 # the source observation, consistent with delete_observations).
 _HEAVY_TIER_ALLOWED = {"vote", "merge_entities", "merge_observations"}
 HEAVY_DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
-    *(f"mcp__memory__{tool}" for tool in _MUTATING_MEMORY_TOOLS if tool not in _HEAVY_TIER_ALLOWED),
+    *(f"mcp__memory__{tool}" for tool in MUTATING_TOOLS if tool not in _HEAVY_TIER_ALLOWED),
     *_DISALLOWED_BUILTINS,
 )
 

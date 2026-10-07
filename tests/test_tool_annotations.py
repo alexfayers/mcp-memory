@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from mcp_memory import agent, server
+from mcp_memory import server, tool_names
 
 
 class TestToolAnnotations:
@@ -12,7 +12,7 @@ class TestToolAnnotations:
         tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
         for tool in tools.values():
             assert tool.annotations is not None
-        for name in agent._READ_ONLY_MEMORY_TOOLS:
+        for name in tool_names.READ_ONLY_TOOLS:
             assert tools[name].annotations.readOnlyHint is True
-        for name in agent._MUTATING_MEMORY_TOOLS:
+        for name in tool_names.MUTATING_TOOLS:
             assert tools[name].annotations.readOnlyHint is False
