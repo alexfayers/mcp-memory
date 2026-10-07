@@ -166,8 +166,8 @@ and `delete_project` are hard-destructive; `merge_entities` removes its source
 only by *soft-delete*, so that removal is reversible via `restore_entity`
 until a grace-window purge. `create_entities` never overwrites - it raises if
 the entity already exists, so it carries no destructive risk of its own.
-`_MUTATING_MEMORY_TOOLS` in `agent.py` is the authoritative list, and a test
-asserts it partitions the registered tool names with `_READ_ONLY_MEMORY_TOOLS`,
+`MUTATING_TOOLS` in `tool_names.py` is the authoritative list, and a test
+asserts it and `READ_ONLY_TOOLS` match every registered tool's `readOnlyHint`,
 so a newly added mutating tool cannot silently reach the agent.
 
 **Recursion guard:** `--strict-mcp-config` points the spawned agent's MCP config

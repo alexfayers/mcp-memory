@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 import json
@@ -17,6 +18,7 @@ pytest.importorskip("cline_hooks")
 from cline_hooks.core.plugin import HooksPlugin, hookimpl, plugins_override
 from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS
 
+from mcp_memory import server
 from mcp_memory.config import get_db_path
 from mcp_memory.hooks.plugin import (
     _DATE_PREFIX_WARNING,
@@ -34,6 +36,7 @@ from mcp_memory.hooks.plugin import (
     _is_file_edit,
     _is_memory_read,
     _is_memory_server_reachable,
+    _is_memory_write,
     _parse_mcp_arguments,
     _resolve_anchor,
     _resolved_project_set,
@@ -43,6 +46,7 @@ from mcp_memory.hooks.plugin import (
 from mcp_memory.hooks.tracker import get_scope, set_reminder_chance
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage import open_writable
+from mcp_memory.tool_names import READ_ONLY_TOOLS
 
 if TYPE_CHECKING:
     from mcp_memory.storage import Storage
@@ -57,13 +61,9 @@ _needs_frustration_check = pytest.mark.skipif(
     reason="frustration nudge is gated off by plugin.ENABLE_FRUSTRATION_CHECK",
 )
 
-_READ_TOOL_NAMES = [
-    "search_nodes",
-    "read_graph",
-    "list_metadata",
-    "search_all_projects",
-    "get_entity_with_relations",
-]
+_READ_TOOL_NAMES = sorted(READ_ONLY_TOOLS)
+
+_REGISTERED_READ_ONLY = {tool.name: tool.annotations.readOnlyHint for tool in asyncio.run(server.mcp.list_tools())}
 
 _EDIT_TOOL_NAMES = sorted(FILE_EDIT_TOOLS)
 
@@ -1267,6 +1267,13 @@ class TestIsMemoryRead:
 
     def test_non_memory_tool_is_not_read(self) -> None:
         assert not _is_memory_read("read_file", {})
+
+
+class TestEveryRegisteredToolIsClassified:
+    @pytest.mark.parametrize(("name", "read_only"), sorted(_REGISTERED_READ_ONLY.items()))
+    def test_registered_tool_is_classified_by_its_annotation(self, name: str, read_only: bool) -> None:
+        assert _is_memory_read(f"mcp__memory__{name}", {}) is read_only
+        assert _is_memory_write(f"mcp__memory__{name}", {}) is not read_only
 
 
 class TestIsFileEdit:

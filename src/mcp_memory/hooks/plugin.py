@@ -39,28 +39,14 @@ from mcp_memory.hooks.tracker import (
 from mcp_memory.path_resolver import normalize_path, resolve_project_for_path
 from mcp_memory.storage import open_readonly, open_writable
 from mcp_memory.storage.pure.rows import strip_today_date_prefix
+from mcp_memory.tool_names import MUTATING_TOOLS, READ_ONLY_TOOLS
 
 if TYPE_CHECKING:
     from mcp_memory.storage import Storage
 
-_MEMORY_WRITE_TOOL_NAMES = frozenset({
-    "create_entities",
-    "create_relations",
-    "add_observations",
-    "delete_entity",
-    "delete_relation",
-    "delete_observations",
-    "edit_observation",
-    "set_entity_status",
-})
+_MEMORY_WRITE_TOOL_NAMES = frozenset(MUTATING_TOOLS)
 
-_MEMORY_READ_TOOL_NAMES = frozenset({
-    "search_nodes",
-    "read_graph",
-    "list_metadata",
-    "search_all_projects",
-    "get_entity_with_relations",
-})
+_MEMORY_READ_TOOL_NAMES = frozenset(READ_ONLY_TOOLS)
 
 _MEMORY_REMINDER_TOOLS = FILE_EDIT_TOOLS | SHELL_TOOLS | {CanonicalTool.PLAN_MODE_RESPOND}
 
