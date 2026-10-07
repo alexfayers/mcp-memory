@@ -135,11 +135,10 @@ CREATE_ENTITIES_DESC = (
     "never add a second root). "
     "Name forms: feature/<project>/<area>, task/<TICKET-ID>-<slug> (name an investigation "
     "for its ticket, not its symptom), user-preferences/<alias>-<topic>, pattern/<short-noun>. "
-    "Non-exempt entity types (everything except project) MUST include at "
-    "least one relation. "
-    "Each entity dict must have keys: name (str), entityType (str), observations (list[str]). "
-    "Optional keys: status (str), relations (list of {target, type} dicts; see "
-    "create_relations for which type to pick). "
+    "Each entity dict must have keys: name (str), entityType (str), observations (list[str]), "
+    "and, unless entityType is project, relations (non-empty list of {target, type} dicts; see "
+    "create_relations for which type to pick) inline - without them nothing is created. "
+    "Optional key: status (str). "
     "Observation wording and what not to store: see add_observations. "
     "Set `status` via the `status` argument, never as a `STATUS:` observation. "
     "The server automatically records each observation's timestamp; do NOT prefix or embed "
@@ -523,7 +522,9 @@ def _validate_and_extract_relations(
             if not relations_raw or not isinstance(relations_raw, list):
                 raise ValueError(
                     f"Entity type '{entity_type}' requires at least one relation. "
-                    f"Only {sorted(_RELATION_EXEMPT_ENTITY_TYPES)} are exempt."
+                    f"Only {sorted(_RELATION_EXEMPT_ENTITY_TYPES)} are exempt. "
+                    "Pass relations inline in this call; create_relations afterwards cannot "
+                    "fix it because the entity is not created."
                 )
 
         if isinstance(relations_raw, list):
@@ -560,10 +561,11 @@ def _create_entities(
                 f"Entity '{name}' already exists in global scope. Cannot duplicate in project '{project}'."
             )
 
-    db.entities.create(project, entities)  # type: ignore[arg-type]
+    with db.transaction():
+        db.entities.create(project, entities)  # type: ignore[arg-type]
 
-    if all_relations:
-        db.relations.create(project, all_relations)
+        if all_relations:
+            db.relations.create(project, all_relations)
 
     return {"message": f"Created {len(entities)} entities in project '{project}'."}
 
