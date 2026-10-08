@@ -58,7 +58,7 @@ class TestValidateEntityTypes:
             _validate_and_extract_relations("proj", [{"name": "x", "entityType": "changelog", "observations": []}])
 
     def test_user_preferences_requires_relation(self) -> None:
-        with pytest.raises(ValueError, match="requires at least one relation"):
+        with pytest.raises(ValueError, match=r"requires at least one relation.*inline"):
             _validate_and_extract_relations(
                 "proj",
                 [
@@ -71,7 +71,7 @@ class TestValidateEntityTypes:
             )
 
     def test_pattern_requires_relation(self) -> None:
-        with pytest.raises(ValueError, match="requires at least one relation"):
+        with pytest.raises(ValueError, match=r"requires at least one relation.*inline"):
             _validate_and_extract_relations(
                 "proj", [{"name": "pattern/x", "entityType": "pattern", "observations": []}]
             )
@@ -406,6 +406,46 @@ class TestInlineRelations:
                     }
                 ],
             )
+
+
+class TestCreateEntitiesAtomicity:
+    def test_missing_relation_target_leaves_no_entity(self, server_db: Storage) -> None:
+        result = server.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/t",
+                    "entityType": "task",
+                    "observations": ["obs"],
+                    "relations": [{"target": "feature/missing", "type": "belongs-to"}],
+                }
+            ],
+        )
+        assert "not found" in result["error"]
+        assert not server_db.entities.exists_in("task/t", "proj")
+
+    def test_missing_relation_target_rolls_back_earlier_entities_in_batch(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "feature/f", "entityType": "feature", "observations": ["a"]}])
+        result = server.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/ok",
+                    "entityType": "task",
+                    "observations": ["obs"],
+                    "relations": [{"target": "feature/f", "type": "belongs-to"}],
+                },
+                {
+                    "name": "task/bad",
+                    "entityType": "task",
+                    "observations": ["obs"],
+                    "relations": [{"target": "feature/missing", "type": "belongs-to"}],
+                },
+            ],
+        )
+        assert "not found" in result["error"]
+        assert not server_db.entities.exists_in("task/ok", "proj")
+        assert not server_db.entities.exists_in("task/bad", "proj")
 
 
 class TestRuntimePolicyErrors:
