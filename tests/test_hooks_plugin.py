@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
@@ -301,6 +302,15 @@ def plugin() -> Iterator[MemoryPlugin]:
         yield MemoryPlugin()
 
 
+def _registered_paths(mapping: dict[Path, str]) -> AbstractContextManager[object]:
+    return patch(
+        "mcp_memory.hooks.plugin.resolve_project_for_path",
+        side_effect=lambda path: next(
+            (name for root, name in mapping.items() if Path(path).is_relative_to(root)), None
+        ),
+    )
+
+
 class TestMemoryPluginScopeTracking:
     def test_initial_scope_is_unknown(self, plugin: MemoryPlugin) -> None:
         assert get_scope("t1") is None
@@ -326,12 +336,13 @@ class TestMemoryPluginScopeTracking:
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
         assert get_scope("t1") == "repo-a"
 
-        plugin.on_hook(
-            "PostToolUse",
-            task_id="t1",
-            tool_name="write_to_file",
-            parameters={"path": str(repo_b / "src" / "file.py")},
-        )
+        with _registered_paths({repo_b: "repo-b"}):
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="write_to_file",
+                parameters={"path": str(repo_b / "src" / "file.py")},
+            )
         assert get_scope("t1") == "repo-b"
 
     def test_post_tool_use_updates_scope_from_read_path(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
@@ -341,12 +352,13 @@ class TestMemoryPluginScopeTracking:
         (repo_b / ".git").mkdir(parents=True)
 
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
-        plugin.on_hook(
-            "PostToolUse",
-            task_id="t1",
-            tool_name="read_file",
-            parameters={"path": str(repo_b / "src" / "file.py")},
-        )
+        with _registered_paths({repo_b: "repo-b"}):
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="read_file",
+                parameters={"path": str(repo_b / "src" / "file.py")},
+            )
         assert get_scope("t1") == "repo-b"
 
     def test_post_tool_use_updates_scope_from_working_dir(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
@@ -354,11 +366,27 @@ class TestMemoryPluginScopeTracking:
         (repo / ".git").mkdir(parents=True)
 
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(tmp_path)])
+        with _registered_paths({repo: "my-repo"}):
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="execute_command",
+                parameters={"working_dir": str(repo)},
+            )
+        assert get_scope("t1") == "my-repo"
+
+    def test_scope_preserved_when_unregistered_repo_entered(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
+        repo = tmp_path / "my-repo"
+        other = tmp_path / "other-repo"
+        (repo / ".git").mkdir(parents=True)
+        (other / ".git").mkdir(parents=True)
+
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
         plugin.on_hook(
             "PostToolUse",
             task_id="t1",
             tool_name="execute_command",
-            parameters={"working_dir": str(repo)},
+            parameters={"working_dir": str(other)},
         )
         assert get_scope("t1") == "my-repo"
 
@@ -376,6 +404,17 @@ class TestMemoryPluginScopeTracking:
             parameters={"working_dir": str(no_git)},
         )
         assert get_scope("t1") == "my-repo"
+
+    def test_task_start_under_home_repo_falls_back_to_dir_name(
+        self, plugin: MemoryPlugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".git").mkdir(parents=True)
+        (home / "sub").mkdir()
+        monkeypatch.setattr(Path, "home", lambda: home)
+
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(home / "sub")])
+        assert get_scope("t1") == "sub"
 
 
 class TestSessionScopeIsolation:
@@ -1898,12 +1937,13 @@ class TestFileEditsReducedWeight:
         (repo_b / ".git").mkdir(parents=True)
 
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo_a)])
-        plugin.on_hook(
-            "PostToolUse",
-            task_id="t1",
-            tool_name="replace_in_file",
-            parameters={"path": str(repo_b / "src" / "file.py")},
-        )
+        with _registered_paths({repo_b: "repo-b"}):
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="replace_in_file",
+                parameters={"path": str(repo_b / "src" / "file.py")},
+            )
         assert get_scope("t1") == "repo-b"
 
     def test_pre_tool_use_edit_still_blockable(self, plugin: MemoryPlugin) -> None:
