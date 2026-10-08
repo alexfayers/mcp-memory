@@ -173,11 +173,15 @@ def _is_memory_read(tool_name: str, parameters: dict[str, object]) -> bool:
 
 
 def _find_git_root(file_path: str) -> Path | None:
-    """Return the nearest ancestor directory containing a .git entry, or None."""
+    """Return the nearest ancestor directory containing a .git entry, or None.
+
+    The home directory is never a repository root (it may hold a dotfiles repo).
+    """
     current = Path(file_path).resolve()
     if current.is_file():
         current = current.parent
-    while current != current.parent:
+    home = Path.home().resolve()
+    while current not in {current.parent, home}:
         if (current / ".git").exists():
             return current
         current = current.parent
@@ -450,7 +454,7 @@ def _record_scope_from_parameters(task_id: str, tool_name: str, parameters: dict
         path_str = str(parameters.get("working_dir", "") or parameters.get("cwd", ""))
 
     if path_str:
-        detected = _resolve_project(path_str)
+        detected = resolve_project_for_path(path_str)
         if detected:
             set_scope(task_id, detected)
 
