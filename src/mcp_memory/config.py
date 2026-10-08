@@ -92,17 +92,20 @@ def get_agent_url() -> str:
     return f"http://localhost:{get_agent_port()}"
 
 
+def resolve_port() -> str:
+    """Return MCP_MEMORY_PORT, then the port of an installed service, then the default port."""
+    return os.environ.get("MCP_MEMORY_PORT") or detect_service_port() or _DEFAULT_PORT
+
+
 def get_memory_url() -> str:
     """Return the URL of the mcp-memory server that recall queries.
 
-    Prefers an explicit MCP_MEMORY_URL, then MCP_MEMORY_PORT, then the port of an
-    installed service, and finally the default port.
+    Prefers an explicit MCP_MEMORY_URL, then the resolved port.
     """
     explicit = os.environ.get("MCP_MEMORY_URL")
     if explicit:
         return explicit
-    port = os.environ.get("MCP_MEMORY_PORT") or detect_service_port() or _DEFAULT_PORT
-    return f"http://localhost:{port}/mcp"
+    return f"http://localhost:{resolve_port()}/mcp"
 
 
 def get_recall_model() -> str:

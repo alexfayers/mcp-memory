@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import platform
+import pwd
+import re
 import shutil
 import subprocess
 import sys
@@ -16,11 +18,11 @@ import textwrap
 
 from .config import (
     _DEFAULT_PORT,
-    detect_service_port,
     get_agent_port,
     get_db_path,
     get_default_db_path,
     get_surfaced_retention_days,
+    resolve_port,
 )
 from .jsonc import load_jsonc_object
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
@@ -101,11 +103,6 @@ def _agent_spec(port: str) -> _ServiceSpec:
     )
 
 
-def _detect_service_port() -> str:
-    """Read the port from an installed service config, falling back to env/default."""
-    return detect_service_port() or os.environ.get("MCP_MEMORY_PORT", _DEFAULT_PORT)
-
-
 def _find_binary(name: str) -> str:
     """Find a console-script binary path, or exit with an error."""
     path = shutil.which(name)
@@ -169,13 +166,35 @@ def _render_systemd(spec: _ServiceSpec, *, binary: str, user: str) -> str:
     )
 
 
+def _loaded_launchd_plist(uid: int, label: str) -> str | None:
+    """Return the plist path launchd loaded a label from, or None if it is not loaded."""
+    result = subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        return None
+    match = re.search(r"^\s*path = (.+)$", result.stdout, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
 def _setup_launchd(spec: _ServiceSpec, binary: str) -> None:
-    """Generate and install a macOS launchd plist from a service spec."""
+    """Generate and install a macOS launchd plist from a service spec.
+
+    Refuses when the label is already loaded from a different plist: launchd labels
+    are per user, so a plist under another HOME would replace that HOME's service.
+    """
+    uid = os.getuid()
+    loaded = _loaded_launchd_plist(uid, spec.label)
+    if loaded and loaded != str(spec.plist_path):
+        print(
+            f"Error: {spec.label} is already loaded from {loaded}; "
+            f"run `launchctl bootout gui/{uid}/{spec.label}` first to replace it",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     spec.plist_path.parent.mkdir(parents=True, exist_ok=True)
     spec.log_path.parent.mkdir(parents=True, exist_ok=True)
     spec.plist_path.write_text(_render_plist(spec, binary=binary))
 
-    uid = os.getuid()
     subprocess.run(
         ["launchctl", "bootout", f"gui/{uid}", str(spec.plist_path)],
         capture_output=True,
@@ -188,7 +207,20 @@ def _setup_launchd(spec: _ServiceSpec, binary: str) -> None:
 
 
 def _setup_systemd(spec: _ServiceSpec, binary: str) -> None:
-    """Generate and install a system-wide systemd unit from a service spec."""
+    """Generate and install a system-wide systemd unit from a service spec.
+
+    Refuses to replace an existing unit while HOME differs from the user's real home,
+    since the unit path is fixed and the new unit would point at the redirected HOME.
+    """
+    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    if spec.systemd_unit.exists() and Path.home() != real_home:
+        print(
+            f"Error: {spec.systemd_unit} already exists and HOME is {Path.home()}, not {real_home}; "
+            "run with the real HOME to replace it",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     spec.log_path.parent.mkdir(parents=True, exist_ok=True)
     unit_content = _render_systemd(spec, binary=binary, user=getpass.getuser())
 
@@ -294,7 +326,7 @@ def _cmd_migrate_db(args: argparse.Namespace) -> None:
     print(f"Moved {moved} entities: {source} -> {target}")
 
     if had_service:
-        port = _detect_service_port()
+        port = resolve_port()
         _cmd_setup_service(argparse.Namespace(port=port, db_path=str(target)))
         print("Service repointed at the default database location.")
     else:
@@ -512,7 +544,7 @@ def _cmd_install_claude_code() -> None:
         print("error: claude not found on PATH", file=sys.stderr)
         sys.exit(1)
 
-    _register_claude_code_server(claude_bin, "memory", f"http://localhost:{_detect_service_port()}/mcp")
+    _register_claude_code_server(claude_bin, "memory", f"http://localhost:{resolve_port()}/mcp")
     _register_claude_code_server(claude_bin, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
 
 
@@ -538,7 +570,7 @@ def _cmd_install_codex() -> None:
         print("error: codex not found on PATH", file=sys.stderr)
         sys.exit(1)
 
-    _register_codex_server(codex_bin, "memory", f"http://127.0.0.1:{_detect_service_port()}/mcp")
+    _register_codex_server(codex_bin, "memory", f"http://127.0.0.1:{resolve_port()}/mcp")
     _register_codex_server(codex_bin, "memory-agent", f"http://127.0.0.1:{get_agent_port()}/mcp")
 
 
@@ -560,7 +592,7 @@ def _register_antigravity_server(agy_bin: str, name: str, url: str) -> None:
 def _cmd_install_antigravity() -> None:
     """Register the memory data server in Antigravity."""
     agy_bin = shutil.which("agy")
-    url = f"http://localhost:{_detect_service_port()}/mcp"
+    url = f"http://localhost:{resolve_port()}/mcp"
     if agy_bin:
         _register_antigravity_server(agy_bin, "memory", url)
     else:
@@ -637,7 +669,7 @@ def _cmd_install_copilot(args: argparse.Namespace) -> None:
     """Register memory servers in VS Code Copilot MCP config."""
     mcp_path = Path(args.mcp_config).expanduser() if args.mcp_config else _default_copilot_mcp_config_path()
     try:
-        _register_copilot_server(mcp_path, "memory", f"http://localhost:{_detect_service_port()}/mcp")
+        _register_copilot_server(mcp_path, "memory", f"http://localhost:{resolve_port()}/mcp")
         _register_copilot_server(mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
@@ -677,7 +709,7 @@ def _cmd_install_pi() -> None:
     """Register memory servers in pi-mcp-adapter's global MCP config."""
     mcp_path = _pi_mcp_config_path()
     try:
-        _register_pi_server(mcp_path, "memory", f"http://localhost:{_detect_service_port()}/mcp")
+        _register_pi_server(mcp_path, "memory", f"http://localhost:{resolve_port()}/mcp")
         _register_pi_server(mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
@@ -692,8 +724,8 @@ def _build_parser() -> argparse.ArgumentParser:
     setup = sub.add_parser("setup-service", help="Install as a persistent background service")
     setup.add_argument(
         "--port",
-        default=os.environ.get("MCP_MEMORY_PORT", _DEFAULT_PORT),
-        help=f"HTTP port (default: {_DEFAULT_PORT}, or MCP_MEMORY_PORT)",
+        default=resolve_port(),
+        help=f"HTTP port (default: MCP_MEMORY_PORT, else the installed service's port, else {_DEFAULT_PORT})",
     )
     setup.add_argument(
         "--db-path",
@@ -791,8 +823,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     install.add_argument(
         "--port",
-        default=_detect_service_port(),
-        help=f"HTTP port (default: auto-detected from service, or {_DEFAULT_PORT})",
+        default=resolve_port(),
+        help=f"HTTP port (default: MCP_MEMORY_PORT, else the installed service's port, else {_DEFAULT_PORT})",
     )
     install.add_argument(
         "--mcp-config",

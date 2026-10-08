@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from mcp_memory import cli
+from mcp_memory import cli, config
 
 
 def _eval_since_help() -> str:
@@ -37,6 +37,11 @@ class TestSetupServiceDispatch:
         cli._cmd_setup_service(argparse.Namespace(port="3000", db_path="/x/m.db"))
         assert captured["spec"].binary_name == "mcp-memory"
         assert captured["spec"].port == "3000"
+
+    def test_keeps_installed_service_port_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MCP_MEMORY_PORT", raising=False)
+        monkeypatch.setattr(config, "detect_service_port", lambda: "3000")
+        assert cli._build_parser().parse_args(["setup-service"]).port == "3000"
 
 
 class TestRegisterClaudeCodeServer:
@@ -263,6 +268,49 @@ class TestRenderSystemd:
         assert "User=alice" in unit
 
 
+class TestSetupLaunchd:
+    def test_refuses_when_label_is_loaded_from_another_plist(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        plist = tmp_path / "com.mcp-memory.plist"
+        monkeypatch.setattr(cli, "_LAUNCHD_PLIST", plist)
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kw: object) -> object:
+            calls.append(cmd)
+            stdout = "\tstdout path = /x.log\n\tpath = /other/com.mcp-memory.plist\n"
+            return type("R", (), {"returncode": 0, "stdout": stdout})()
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._setup_launchd(cli._memory_spec("3000", tmp_path / "m.db"), "/bin/mcp-memory")
+
+        assert exc_info.value.code == 1
+        assert [cmd[1] for cmd in calls] == ["print"]
+        assert not plist.exists()
+        assert "/other/com.mcp-memory.plist" in capsys.readouterr().err
+
+
+class TestSetupSystemd:
+    def test_refuses_to_replace_unit_when_home_is_redirected(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        unit = tmp_path / "mcp-memory.service"
+        unit.write_text("", encoding="utf-8")
+        monkeypatch.setattr(cli, "_SYSTEMD_UNIT", unit)
+        monkeypatch.setenv("HOME", str(tmp_path / "redirected"))
+        calls: list[list[str]] = []
+        monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **_kw: calls.append(cmd))
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli._setup_systemd(cli._memory_spec("3000", tmp_path / "m.db"), "/bin/mcp-memory")
+
+        assert exc_info.value.code == 1
+        assert calls == []
+        assert str(unit) in capsys.readouterr().err
+
+
 class TestCmdRestart:
     def test_restarts_via_launchd_when_plist_installed(
         self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
@@ -344,7 +392,7 @@ class TestInstallAntigravity:
 
         monkeypatch.setattr(cli.shutil, "which", lambda cmd: "/usr/bin/agy" if cmd == "agy" else None)
         monkeypatch.setattr(cli.subprocess, "run", fake_run)
-        monkeypatch.setattr(cli, "_detect_service_port", lambda: "8000")
+        monkeypatch.setattr(cli, "resolve_port", lambda: "8000")
 
         cli._cmd_install_antigravity()
 

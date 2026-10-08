@@ -133,7 +133,7 @@ mcp-memory setup-service
 mcp-memory setup-service --port 3000
 ```
 
-The command auto-detects the platform and generates the appropriate service config.
+The command auto-detects the platform and generates the appropriate service config. Re-running it without `--port` keeps the installed service's port. On macOS it refuses to replace a `com.mcp-memory` job that launchd loaded from another plist, such as one under a different HOME. On Linux it refuses to replace an existing unit while HOME is not the user's real home.
 
 #### Migrating an existing database to the default location
 
