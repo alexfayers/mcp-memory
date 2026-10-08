@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Coverage for src/mcp_memory/storage/repositories/relations.py: 95%</title>
+    <title>Coverage for src/mcp_memory/storage/repositories/relations.py: 96%</title>
     <link rel="icon" sizes="32x32" href="favicon_32_cb_c827f16f.png">
     <link rel="stylesheet" href="style_cb_4667309f.css" type="text/css">
     <script src="coverage_html_cb_15cffcd0.js" defer></script>
@@ -12,7 +12,7 @@
     <div class="content">
         <h1>
             <span class="text">Coverage for </span><b>src<span class="sep">/</span>mcp_memory<span class="sep">/</span>storage<span class="sep">/</span>repositories<span class="sep">/</span>relations.py</b>:
-            <span class="pc_cov">95%</span>
+            <span class="pc_cov">96%</span>
         </h1>
         <aside id="help_panel_wrapper">
             <input id="help_panel_state" type="checkbox">
@@ -55,8 +55,8 @@
         </aside>
         <h2>
             <span class="text">76 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">72<span class="text"> run</span></button>
-            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">4<span class="text"> missing</span></button>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">73<span class="text"> run</span></button>
+            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">3<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">2<span class="text"> excluded</span></button>
         </h2>
         <p class="text">
@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_b43782a0fdcd3ca7_telemetry_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-07 21:05 +0000
+            created at 2026-10-08 18:33 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -145,7 +145,7 @@
     <p class="run"><span class="n"><a id="t63" href="#t63">63</a></span><span class="t">                    <span class="key">raise</span> <span class="nam">ValueError</span><span class="op">(</span><span class="fst">f&quot;</span><span class="fst">Source entity &#x27;</span><span class="op">{</span><span class="nam">relation</span><span class="op">.</span><span class="nam">source</span><span class="op">}</span><span class="fst">&#x27; not found in project &#x27;</span><span class="op">{</span><span class="nam">project</span><span class="op">}</span><span class="fst">&#x27;</span><span class="fst">&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t64" href="#t64">64</a></span><span class="t">                <span class="nam">target_id</span> <span class="op">=</span> <span class="nam">get_entity_id</span><span class="op">(</span><span class="nam">self</span><span class="op">.</span><span class="nam">_conn</span><span class="op">,</span> <span class="nam">relation</span><span class="op">.</span><span class="nam">target</span><span class="op">,</span> <span class="nam">project_id</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t65" href="#t65">65</a></span><span class="t">                <span class="key">if</span> <span class="nam">target_id</span> <span class="key">is</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t66" href="#t66">66</a></span><span class="t">                    <span class="key">raise</span> <span class="nam">ValueError</span><span class="op">(</span><span class="fst">f&quot;</span><span class="fst">Target entity &#x27;</span><span class="op">{</span><span class="nam">relation</span><span class="op">.</span><span class="nam">target</span><span class="op">}</span><span class="fst">&#x27; not found in project &#x27;</span><span class="op">{</span><span class="nam">project</span><span class="op">}</span><span class="fst">&#x27;</span><span class="fst">&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t66" href="#t66">66</a></span><span class="t">                    <span class="key">raise</span> <span class="nam">ValueError</span><span class="op">(</span><span class="fst">f&quot;</span><span class="fst">Target entity &#x27;</span><span class="op">{</span><span class="nam">relation</span><span class="op">.</span><span class="nam">target</span><span class="op">}</span><span class="fst">&#x27; not found in project &#x27;</span><span class="op">{</span><span class="nam">project</span><span class="op">}</span><span class="fst">&#x27;</span><span class="fst">&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t67" href="#t67">67</a></span><span class="t">                <span class="nam">source_type</span> <span class="op">=</span> <span class="nam">get_entity_type_name</span><span class="op">(</span><span class="nam">self</span><span class="op">.</span><span class="nam">_conn</span><span class="op">,</span> <span class="nam">source_id</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t68" href="#t68">68</a></span><span class="t">                <span class="nam">target_type</span> <span class="op">=</span> <span class="nam">get_entity_type_name</span><span class="op">(</span><span class="nam">self</span><span class="op">.</span><span class="nam">_conn</span><span class="op">,</span> <span class="nam">target_id</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t69" href="#t69">69</a></span><span class="t">                <span class="key">if</span> <span class="nam">source_type</span> <span class="op">==</span> <span class="str">&quot;task&quot;</span> <span class="key">and</span> <span class="nam">target_type</span> <span class="op">==</span> <span class="str">&quot;project&quot;</span> <span class="key">and</span> <span class="nam">relation</span><span class="op">.</span><span class="nam">relation_type</span> <span class="op">==</span> <span class="str">&quot;belongs-to&quot;</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -244,7 +244,7 @@
             <a class="nav" href="z_b43782a0fdcd3ca7_telemetry_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-07 21:05 +0000
+            created at 2026-10-08 18:33 +0000
         </p>
     </div>
 </footer>

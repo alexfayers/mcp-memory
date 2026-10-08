@@ -29,7 +29,7 @@
 | src/mcp\_memory/recall\_efficiency.py                |       18 |        0 |    100% |           |
 | src/mcp\_memory/recall\_status.py                    |       60 |        1 |     98% |       133 |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      515 |       48 |     91% |52-53, 350, 447, 457, 495, 553-555, 559, 565-568, 625-626, 651-652, 660, 668, 680-681, 741-742, 756-757, 938-939, 964, 980-985, 1020-1027, 1057-1058, 1081-1082, 1102-1103, 1298, 1302 |
+| src/mcp\_memory/server.py                            |      516 |       46 |     91% |52-53, 349, 446, 456, 494, 554-556, 560, 570, 627-628, 653-654, 662, 670, 682-683, 743-744, 758-759, 940-941, 966, 982-987, 1022-1029, 1059-1060, 1083-1084, 1104-1105, 1300, 1304 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       60 |        0 |    100% |           |
@@ -45,7 +45,7 @@
 | src/mcp\_memory/storage/repositories/entities.py     |      157 |        6 |     96% |35, 40, 96-98, 100 |
 | src/mcp\_memory/storage/repositories/observations.py |      127 |        0 |    100% |           |
 | src/mcp\_memory/storage/repositories/projects.py     |       97 |        0 |    100% |           |
-| src/mcp\_memory/storage/repositories/relations.py    |       76 |        4 |     95% |66, 97, 100, 123 |
+| src/mcp\_memory/storage/repositories/relations.py    |       76 |        3 |     96% |97, 100, 123 |
 | src/mcp\_memory/storage/repositories/telemetry.py    |       49 |        1 |     98% |        74 |
 | src/mcp\_memory/storage/services/\_\_init\_\_.py     |        0 |        0 |    100% |           |
 | src/mcp\_memory/storage/services/fts.py              |       11 |        0 |    100% |           |
@@ -93,13 +93,13 @@
 | tests/test\_recall\_status.py                        |       91 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
-| tests/test\_server.py                                |      736 |        0 |    100% |           |
+| tests/test\_server.py                                |      747 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       12 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       50 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       66 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      620 |        0 |    100% |           |
-| **TOTAL**                                            | **13241** |  **517** | **96%** |           |
+| **TOTAL**                                            | **13253** |  **514** | **96%** |           |
 
 
 ## Setup coverage badge
