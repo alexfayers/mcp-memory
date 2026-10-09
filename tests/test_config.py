@@ -14,23 +14,21 @@ class TestMemoryUrl:
         monkeypatch.setenv("MCP_MEMORY_URL", "http://example:9/mcp")
         assert config.get_memory_url() == "http://example:9/mcp"
 
-    def test_uses_memory_port_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MCP_MEMORY_URL", raising=False)
-        monkeypatch.setenv("MCP_MEMORY_PORT", "7777")
-        monkeypatch.setattr(config, "detect_service_port", lambda: None)
-        assert config.get_memory_url() == "http://localhost:7777/mcp"
 
-    def test_detects_running_service_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MCP_MEMORY_URL", raising=False)
-        monkeypatch.delenv("MCP_MEMORY_PORT", raising=False)
-        monkeypatch.setattr(config, "detect_service_port", lambda: "3000")
-        assert config.get_memory_url() == "http://localhost:3000/mcp"
-
-    def test_falls_back_to_default_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MCP_MEMORY_URL", raising=False)
-        monkeypatch.delenv("MCP_MEMORY_PORT", raising=False)
-        monkeypatch.setattr(config, "detect_service_port", lambda: None)
-        assert config.get_memory_url() == "http://localhost:8000/mcp"
+class TestResolvePort:
+    @pytest.mark.parametrize(
+        ("env_port", "service_port", "expected"),
+        [("7777", "3000", "7777"), (None, "3000", "3000"), (None, None, "8000")],
+    )
+    def test_prefers_env_then_installed_service_then_default(
+        self, monkeypatch: pytest.MonkeyPatch, env_port: str | None, service_port: str | None, expected: str
+    ) -> None:
+        if env_port:
+            monkeypatch.setenv("MCP_MEMORY_PORT", env_port)
+        else:
+            monkeypatch.delenv("MCP_MEMORY_PORT", raising=False)
+        monkeypatch.setattr(config, "detect_service_port", lambda: service_port)
+        assert config.resolve_port() == expected
 
 
 class TestAgentUrl:
