@@ -47,6 +47,7 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_MEMORY_WORKSPACE_MARKERS` | Directory names marking a multi-package workspace root, so sibling packages share one project scope (comma-separated); markers contributed by other cline-hooks plugins are used after these | (none) |
 | `MCP_MEMORY_READONLY_AGENTS` | Extra agent types exempt from the memory-update gate (comma-separated) | `Explore`, `Plan` |
 | `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names counted at reduced weight toward the gate (comma-separated) | `replace_in_file`, `write_to_file` |
+| `MCP_MEMORY_WRAPPER_TOOLS` | Extra wrapper tool names never blocked or counted by the memory-update gate, since their inner calls are gated separately (comma-separated) | `codemode` |
 | `MCP_MEMORY_MAX_OBSERVATION_CHARS` | Per-entity observation-content character budget for reads, applied highest-voted first; negative means unlimited | `2000` |
 | `MCP_MEMORY_CALL_METRICS_ENABLED` | Record per-call usage metrics (byte-size proxies and option usage). | `true` |
 | `MCP_MEMORY_CALL_METRICS_RETENTION_DAYS` | Days of tool-call usage telemetry retained before pruning. | `90` |

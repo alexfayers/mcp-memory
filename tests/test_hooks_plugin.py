@@ -1974,3 +1974,22 @@ class TestFileEditsReducedWeight:
                 parameters={},
             )
         mock_increment.assert_called_once_with("t1", _EDIT_TOOL_WEIGHT)
+
+    def test_wrapper_tool_not_blocked(self, plugin: MemoryPlugin) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
+            result = plugin.on_hook("PreToolUse", task_id="t1", tool_name="codemode", parameters={})
+        assert result is None
+
+    def test_wrapper_tool_not_counted(self, plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin.increment") as mock_increment:
+            plugin.on_hook("PostToolUse", task_id="t1", tool_name="codemode", parameters={})
+        mock_increment.assert_not_called()
+
+    def test_env_var_extends_wrapper_tools(self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_WRAPPER_TOOLS", "batch, run_script")
+        with patch("mcp_memory.hooks.plugin.increment") as mock_increment:
+            plugin.on_hook("PostToolUse", task_id="t1", tool_name="run_script", parameters={})
+        mock_increment.assert_not_called()
