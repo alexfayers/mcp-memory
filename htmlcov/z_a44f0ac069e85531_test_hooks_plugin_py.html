@@ -54,8 +54,8 @@
             </div>
         </aside>
         <h2>
-            <span class="text">963 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">896<span class="text"> run</span></button>
+            <span class="text">976 statements &nbsp;</span>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">909<span class="text"> run</span></button>
             <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">67<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">2<span class="text"> excluded</span></button>
         </h2>
@@ -64,8 +64,8 @@
             <a id="indexLink" class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
             <a id="nextFileLink" class="nav" href="z_a44f0ac069e85531_test_metrics_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
-            <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-11 23:54 +0000
+            <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
+            created at 2026-10-12 19:14 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -2056,6 +2056,25 @@
     <p class="run run2"><span class="n"><a id="t1974" href="#t1974">1974</a></span><span class="t">                <span class="nam">parameters</span><span class="op">=</span><span class="op">{</span><span class="op">}</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t1975" href="#t1975">1975</a></span><span class="t">            <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1976" href="#t1976">1976</a></span><span class="t">        <span class="nam">mock_increment</span><span class="op">.</span><span class="nam">assert_called_once_with</span><span class="op">(</span><span class="str">&quot;t1&quot;</span><span class="op">,</span> <span class="nam">_EDIT_TOOL_WEIGHT</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1977" href="#t1977">1977</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1978" href="#t1978">1978</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_wrapper_tool_not_blocked</span><span class="op">(</span><span class="nam">self</span><span class="op">,</span> <span class="nam">plugin</span><span class="op">:</span> <span class="nam">MemoryPlugin</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1979" href="#t1979">1979</a></span><span class="t">        <span class="key">with</span> <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t1980" href="#t1980">1980</a></span><span class="t">            <span class="nam">patch</span><span class="op">(</span><span class="str">&quot;mcp_memory.hooks.plugin.should_block&quot;</span><span class="op">,</span> <span class="nam">return_value</span><span class="op">=</span><span class="key">True</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t1981" href="#t1981">1981</a></span><span class="t">            <span class="nam">patch</span><span class="op">(</span><span class="str">&quot;mcp_memory.hooks.plugin._is_memory_server_reachable&quot;</span><span class="op">,</span> <span class="nam">return_value</span><span class="op">=</span><span class="key">True</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t1982" href="#t1982">1982</a></span><span class="t">        <span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1983" href="#t1983">1983</a></span><span class="t">            <span class="nam">result</span> <span class="op">=</span> <span class="nam">plugin</span><span class="op">.</span><span class="nam">on_hook</span><span class="op">(</span><span class="str">&quot;PreToolUse&quot;</span><span class="op">,</span> <span class="nam">task_id</span><span class="op">=</span><span class="str">&quot;t1&quot;</span><span class="op">,</span> <span class="nam">tool_name</span><span class="op">=</span><span class="str">&quot;codemode&quot;</span><span class="op">,</span> <span class="nam">parameters</span><span class="op">=</span><span class="op">{</span><span class="op">}</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1984" href="#t1984">1984</a></span><span class="t">        <span class="key">assert</span> <span class="nam">result</span> <span class="key">is</span> <span class="key">None</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1985" href="#t1985">1985</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1986" href="#t1986">1986</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_wrapper_tool_not_counted</span><span class="op">(</span><span class="nam">self</span><span class="op">,</span> <span class="nam">plugin</span><span class="op">:</span> <span class="nam">MemoryPlugin</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1987" href="#t1987">1987</a></span><span class="t">        <span class="key">with</span> <span class="nam">patch</span><span class="op">(</span><span class="str">&quot;mcp_memory.hooks.plugin.increment&quot;</span><span class="op">)</span> <span class="key">as</span> <span class="nam">mock_increment</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1988" href="#t1988">1988</a></span><span class="t">            <span class="nam">plugin</span><span class="op">.</span><span class="nam">on_hook</span><span class="op">(</span><span class="str">&quot;PostToolUse&quot;</span><span class="op">,</span> <span class="nam">task_id</span><span class="op">=</span><span class="str">&quot;t1&quot;</span><span class="op">,</span> <span class="nam">tool_name</span><span class="op">=</span><span class="str">&quot;codemode&quot;</span><span class="op">,</span> <span class="nam">parameters</span><span class="op">=</span><span class="op">{</span><span class="op">}</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1989" href="#t1989">1989</a></span><span class="t">        <span class="nam">mock_increment</span><span class="op">.</span><span class="nam">assert_not_called</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1990" href="#t1990">1990</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1991" href="#t1991">1991</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_env_var_extends_wrapper_tools</span><span class="op">(</span><span class="nam">self</span><span class="op">,</span> <span class="nam">plugin</span><span class="op">:</span> <span class="nam">MemoryPlugin</span><span class="op">,</span> <span class="nam">monkeypatch</span><span class="op">:</span> <span class="nam">pytest</span><span class="op">.</span><span class="nam">MonkeyPatch</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1992" href="#t1992">1992</a></span><span class="t">        <span class="nam">monkeypatch</span><span class="op">.</span><span class="nam">setenv</span><span class="op">(</span><span class="str">&quot;MCP_MEMORY_WRAPPER_TOOLS&quot;</span><span class="op">,</span> <span class="str">&quot;batch, run_script&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1993" href="#t1993">1993</a></span><span class="t">        <span class="key">with</span> <span class="nam">patch</span><span class="op">(</span><span class="str">&quot;mcp_memory.hooks.plugin.increment&quot;</span><span class="op">)</span> <span class="key">as</span> <span class="nam">mock_increment</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1994" href="#t1994">1994</a></span><span class="t">            <span class="nam">plugin</span><span class="op">.</span><span class="nam">on_hook</span><span class="op">(</span><span class="str">&quot;PostToolUse&quot;</span><span class="op">,</span> <span class="nam">task_id</span><span class="op">=</span><span class="str">&quot;t1&quot;</span><span class="op">,</span> <span class="nam">tool_name</span><span class="op">=</span><span class="str">&quot;run_script&quot;</span><span class="op">,</span> <span class="nam">parameters</span><span class="op">=</span><span class="op">{</span><span class="op">}</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1995" href="#t1995">1995</a></span><span class="t">        <span class="nam">mock_increment</span><span class="op">.</span><span class="nam">assert_not_called</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -2064,8 +2083,8 @@
             <a class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
             <a class="nav" href="z_a44f0ac069e85531_test_metrics_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
-            <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-10-11 23:54 +0000
+            <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
+            created at 2026-10-12 19:14 +0000
         </p>
     </div>
 </footer>
