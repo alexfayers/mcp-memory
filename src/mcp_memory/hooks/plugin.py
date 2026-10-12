@@ -108,6 +108,9 @@ _READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
 _FILE_EDIT_TOOLS_ENV = "MCP_MEMORY_EDIT_TOOLS"
 _EDIT_TOOL_WEIGHT = 0.25
 
+_DEFAULT_WRAPPER_TOOLS = frozenset({"codemode"})
+_WRAPPER_TOOLS_ENV = "MCP_MEMORY_WRAPPER_TOOLS"
+
 
 def _read_only_agent_types() -> frozenset[str]:
     """Return the agent types exempt from the memory gate, including env overrides."""
@@ -119,6 +122,13 @@ def _read_only_agent_types() -> frozenset[str]:
 def _is_exempt_agent(agent_type: str) -> bool:
     """Return True if a read-only subagent type is exempt from the memory gate."""
     return bool(agent_type) and agent_type in _read_only_agent_types()
+
+
+def _is_wrapper_tool(tool_name: str) -> bool:
+    """Return True if a tool call only wraps inner tool calls, which are gated separately."""
+    raw = os.environ.get(_WRAPPER_TOOLS_ENV, "")
+    extra = {name.strip() for name in raw.split(",") if name.strip()}
+    return _extract_mcp_suffix(tool_name) in _DEFAULT_WRAPPER_TOOLS | extra
 
 
 def _file_edit_tool_names() -> frozenset[str]:
@@ -712,7 +722,7 @@ class MemoryPlugin(HooksPlugin):
         project_scope = _task_scope(task_id, _str_list(kwargs.get("workspace_roots", [])))
         if _is_memory_write(tool_name, parameters):
             return _check_memory_write(task_id, project_scope, tool_name, parameters)
-        if _is_memory_read(tool_name, parameters):
+        if _is_memory_read(tool_name, parameters) or _is_wrapper_tool(tool_name):
             return None
         if is_subagent(kwargs):
             return None
@@ -754,7 +764,7 @@ class MemoryPlugin(HooksPlugin):
             record_write()
             return None
 
-        if _is_memory_read(tool_name, parameters):
+        if _is_memory_read(tool_name, parameters) or _is_wrapper_tool(tool_name):
             return None
 
         if _is_file_edit(tool_name):
