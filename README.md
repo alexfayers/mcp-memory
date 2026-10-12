@@ -119,7 +119,7 @@ mcp-memory install kiro <agent-config.json>   # patches Kiro agent JSON
 mcp-memory install claude-code                # adds via `claude mcp add`
 mcp-memory install codex                      # adds via `codex mcp add`
 mcp-memory install copilot                    # patches VS Code User mcp.json
-mcp-memory install pi                         # patches pi-mcp-adapter mcp.json (~/.pi/agent)
+mcp-memory install pi                         # patches pi mcp.json (~/.pi/agent)
 ```
 
 ### Running as a service
