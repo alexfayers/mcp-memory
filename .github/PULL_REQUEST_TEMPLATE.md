@@ -6,10 +6,10 @@
 
 <!-- Why it changed. -->
 
-## Testing
+## Dependencies
 
-<!-- How this was tested. -->
+<!-- Optional. e.g. Depends on #N -->
 
-## Checks
+## Issues
 
-- [ ] README/docs updated if behavior, tools, or env vars changed
+<!-- Optional. e.g. Closes #N -->
