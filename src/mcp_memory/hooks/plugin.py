@@ -11,12 +11,14 @@ import random
 import re
 import socket
 import sqlite3
+import textwrap
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from cline_hooks.core.parameters import FileEditParameters, ReadParameters
-from cline_hooks.core.plugin import HookResult, HooksPlugin, collect_contributions, hookspec, is_subagent
+from cline_hooks.core.plugin import HookResult, HooksPlugin, collect_contributions, hookimpl, hookspec, is_subagent
 from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS, FILE_READ_TOOLS, SHELL_TOOLS, CanonicalTool
+from cline_hooks.plugins.startup_blocks import StartupBlock
 
 from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
 from mcp_memory.hooks.review_tracker import (
@@ -42,6 +44,7 @@ from mcp_memory.storage.pure.rows import strip_today_date_prefix
 from mcp_memory.tool_names import MUTATING_TOOLS, READ_ONLY_TOOLS
 
 if TYPE_CHECKING:
+    from mcp_memory.models import Entity
     from mcp_memory.storage import Storage
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(MUTATING_TOOLS)
@@ -107,6 +110,9 @@ _READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
 
 _FILE_EDIT_TOOLS_ENV = "MCP_MEMORY_EDIT_TOOLS"
 _EDIT_TOOL_WEIGHT = 0.25
+
+_START_OBSERVATION_CHARS = 80
+_START_PROJECT_RELATIONS = 15
 
 _DEFAULT_WRAPPER_TOOLS = frozenset({"codemode"})
 _WRAPPER_TOOLS_ENV = "MCP_MEMORY_WRAPPER_TOOLS"
@@ -393,6 +399,64 @@ def _resolved_project_set(workspace_roots: list[str]) -> list[str]:
     return projects
 
 
+def _entity_lines(entity: Entity) -> tuple[str, str]:
+    """Return an entity's line without and with its first observation."""
+    details = [entity.entity_type]
+    if entity.status:
+        details.append(entity.status)
+    brief = f"- {entity.name} ({', '.join(details)})"
+    if not entity.observations:
+        return brief, brief
+    observation = textwrap.shorten(entity.observations[0].content, _START_OBSERVATION_CHARS, placeholder="...")
+    return brief, f"{brief}: {observation}"
+
+
+def _recent_memory(repo: str, left: int | None) -> str:
+    """Return the recent memory of `global` and the repo project, fitted to the characters left.
+
+    Every entity name is included. First observations, then the repo project entity's relations,
+    are added in order while they fit.
+
+    Args:
+        repo: The workspace's memory project.
+        left: The characters available, or None for no limit.
+
+    Returns:
+        The rendered memory.
+    """
+    project_entity = f"project/{repo}"
+    db = open_readonly(get_db_path())
+    try:
+        global_entities = db.reads.recent("global", max_observation_chars=0)["entities"]
+        repo_entities = db.reads.recent(repo, max_observation_chars=0)["entities"]
+        try:
+            graph = db.reads.get_entity_with_relations(repo, project_entity, max_observation_chars=0)
+        except ValueError:
+            graph = None
+    finally:
+        db.connection.close()
+    relations: list[str] = []
+    if graph is not None:
+        repo_entities = [graph["entity"], *(entity for entity in repo_entities if entity.name != project_entity)]
+        relations = [
+            f"{relation.source} -{relation.relation_type}-> {relation.target}"
+            for relation in graph["relations"][:_START_PROJECT_RELATIONS]
+        ]
+    lines: list[tuple[str, str]] = []
+    for heading, entities, extra in (("## global", global_entities, []), (f"\n## {repo}", repo_entities, relations)):
+        if entities:
+            lines.append((heading, heading))
+            lines.extend(_entity_lines(entity) for entity in entities)
+            lines.extend(("", relation) for relation in extra)
+    shown = [brief for brief, _ in lines]
+    for index, (_, full) in enumerate(lines):
+        fuller = [*shown[:index], full, *shown[index + 1 :]]
+        if left is not None and len("\n".join(line for line in fuller if line)) > left:
+            break
+        shown = fuller
+    return "\n".join(line for line in shown if line).strip("\n")
+
+
 def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     """Build memory-related context notes for task start."""
     parts: list[str] = []
@@ -403,7 +467,8 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     project_list = ", ".join(f"`{project}`" for project in projects)
     parts.append(
         "Session-start guidance (see the session-start skill for the full ritual):\n"
-        "1. `read_graph` on BOTH `global` and `<repo-name>` projects - always do this\n"
+        "1. Unless a `Startup block: recent memory` note is present, "
+        "`read_graph` on BOTH `global` and `<repo-name>` projects\n"
         "2. Only if the opening message asks about outstanding work, "
         f"scan for open tasks across {project_list}: "
         "`search_all_projects(query='task', entityType='task', "
@@ -637,6 +702,23 @@ class MemoryPlugin(HooksPlugin):
             "AttemptCompletion": lambda **_: HookResult(notes=[_MEMORY_COMPLETION_REMINDER]),
             "PreCompact": lambda **_: HookResult(notes=[_MEMORY_COMPACT_WARNING]),
         }
+
+    @hookimpl(optionalhook=True)
+    def startup_blocks(self, workspace_roots: list[str]) -> list[StartupBlock]:
+        """Return the recent-memory block for the workspace's project, or none without a workspace."""
+        repo = (_resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name) if workspace_roots else ""
+        if not repo:
+            return []
+        return [
+            StartupBlock(
+                title="recent memory",
+                replaces=(
+                    f"call read_graph on `global` and `{repo}` and get_entity_with_relations on `project/{repo}`"
+                ),
+                body=lambda left: _recent_memory(repo, left),
+                order=20,
+            )
+        ]
 
     def on_hook(self, hook_name: str, **kwargs: object) -> HookResult | None:
         """Handle hook events for memory tracking."""
