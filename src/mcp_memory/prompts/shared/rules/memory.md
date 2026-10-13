@@ -18,6 +18,7 @@ Unless a `Startup block: recent memory` is present, `read_graph`. Then `search_n
 - Each piece of work and user follow-up MUST be its own related `task/` entity, created before code.
 - MUST record a confirmed external change (merge, deploy, close) in the same response; plans MUST include memory updates.
 - Subagents MUST NOT write; main writes after a fresh read.
+- A memory hook block MUST get a real memory write on the NEXT tool call, never a placeholder shell command.
 - MUST render a presented `vote_score` as stars (e.g. ★3), not the raw number.
 - Before you {{TOOL_COMPLETE}}: record what changed, why, caveats, follow-ups; reusable lessons to `global`; set task `resolved`.
 
