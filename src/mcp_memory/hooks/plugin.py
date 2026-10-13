@@ -466,7 +466,7 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     projects = _resolved_project_set(workspace_roots)
     project_list = ", ".join(f"`{project}`" for project in projects)
     parts.append(
-        "Session-start guidance (see the session-start skill for the full ritual):\n"
+        "Session-start guidance:\n"
         "1. Unless a `Startup block: recent memory` note is present, "
         "`read_graph` on BOTH `global` and `<repo-name>` projects\n"
         "2. Only if the opening message asks about outstanding work, "
