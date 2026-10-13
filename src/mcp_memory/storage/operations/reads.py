@@ -137,6 +137,14 @@ class Reads:
             raise ValueError(f"Entity '{name}' not found in project '{project}'")
         return self._hydrate_entity(row, row["id"], compact=compact, max_observation_chars=max_observation_chars)
 
+    def get_entity_relations(self, project: str, name: str) -> list[Relation]:
+        """Get the relations touching a single entity, without loading the related entities."""
+        project_id = get_project_id(self._conn, project)
+        entity_id = None if project_id is None else get_entity_id(self._conn, name, project_id)
+        if project_id is None or entity_id is None:
+            raise ValueError(f"Entity '{name}' not found in project '{project}'")
+        return self._relations.for_entities(project_id, [entity_id])
+
     def get_entity_with_relations(
         self,
         project: str,

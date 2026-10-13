@@ -7,8 +7,12 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 import json
+import logging
 from pathlib import Path
+import shutil
 import socket
+import sqlite3
+import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -16,8 +20,10 @@ import pytest
 
 pytest.importorskip("cline_hooks")
 
-from cline_hooks.core.plugin import HooksPlugin, hookimpl, plugins_override
+from cline_hooks.core.frontends import DEFAULT_PROTOCOL
+from cline_hooks.core.plugin import HooksPlugin, collect_hook_results, hookimpl, load_plugins, plugins_override
 from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS
+from cline_hooks.plugins.startup_blocks import StartupBlock, StartupBlocksPlugin, block_header
 
 from mcp_memory import server
 from mcp_memory.config import get_db_path
@@ -42,11 +48,13 @@ from mcp_memory.hooks.plugin import (
     _resolve_anchor,
     _resolved_project_set,
     _safe_project,
+    _task_scope,
     _workspace_entity_note,
 )
 from mcp_memory.hooks.tracker import get_scope, set_reminder_chance
+from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
-from mcp_memory.storage import open_writable
+from mcp_memory.storage import open_readonly, open_writable
 from mcp_memory.tool_names import READ_ONLY_TOOLS
 
 if TYPE_CHECKING:
@@ -691,6 +699,47 @@ class TestResolvedProjectSet:
         repo.mkdir()
         assert _resolved_project_set([str(repo)]) == ["global", "acme"]
 
+    def test_db_error_is_logged(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        with caplog.at_level(logging.WARNING, logger="hooks"):
+            _resolved_project_set([str(repo)])
+        assert "Could not read project groups for acme" in caplog.text
+
+    def test_closes_the_connection(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._db()
+        opened = self._spy_on_open_readonly(monkeypatch)
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        _resolved_project_set([str(repo)])
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[0].connection.query_one("SELECT 1")
+
+    def test_closes_the_connection_when_the_read_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._db()
+        opened = self._spy_on_open_readonly(monkeypatch, failing_reads=True)
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        assert _resolved_project_set([str(repo)]) == ["global", "acme"]
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[0].connection.query_one("SELECT 1")
+
+    def _spy_on_open_readonly(self, monkeypatch: pytest.MonkeyPatch, *, failing_reads: bool = False) -> list[Storage]:
+        opened: list[Storage] = []
+
+        def _fail(_project: str) -> list[str]:
+            raise sqlite3.OperationalError("read failed")
+
+        def _spy(path: Path) -> Storage:
+            db = open_readonly(path)
+            opened.append(db)
+            if failing_reads:
+                db.projects.group_members = _fail  # type: ignore[method-assign]
+            return db
+
+        monkeypatch.setattr("mcp_memory.hooks.plugin.open_readonly", _spy)
+        return opened
+
 
 class TestBuildTaskStartContext:
     def test_includes_workspace_entity_note(self, tmp_path: Path) -> None:
@@ -704,8 +753,16 @@ class TestBuildTaskStartContext:
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
         instructions = next(part for part in parts if "Session-start guidance" in part)
-        for step in ("1. ", "2. ", "3. ", "4. "):
+        assert instructions.startswith("Session-start guidance:\n")
+        for step in ("1. ", "2. ", "3. "):
             assert step in instructions
+        assert "4. " not in instructions
+
+    def test_leaves_the_recent_memory_read_to_the_startup_block(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        parts = _build_task_start_context([str(repo)])
+        assert not any("read_graph" in part for part in parts)
 
     def test_task_scan_step_is_conditional_on_outstanding_work_ask(self, tmp_path: Path) -> None:
         repo = tmp_path / "acme"
@@ -724,6 +781,241 @@ class TestBuildTaskStartContext:
         parts = _build_task_start_context([str(repo)])
         instructions = next(part for part in parts if "Session-start guidance" in part)
         assert "`global`, `llm-prompts`, `cline-hooks`" in instructions
+
+
+def _recent_memory_block(repo: Path) -> StartupBlock:
+    (block,) = MemoryPlugin().startup_blocks([str(repo)])
+    return block
+
+
+def _seed(project: str, *entities: dict[str, object]) -> Storage:
+    db = open_writable(get_db_path())
+    db.entities.create(project, list(entities))
+    return db
+
+
+class TestRecentMemoryStartupBlock:
+    def test_describes_the_steps_it_replaces(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        block = _recent_memory_block(repo)
+        assert block.title == "recent memory"
+        assert "read_graph" in block.replaces
+        assert "project/acme" in block.replaces
+
+    def test_no_workspace_roots_gives_no_block(self) -> None:
+        assert MemoryPlugin().startup_blocks([]) == []
+
+    def test_lists_recent_entities_of_global_and_repo(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        _seed("global", {"name": "pattern/one", "entityType": "pattern", "observations": ["first fact"]})
+        _seed("acme", {"name": "task/two", "entityType": "task", "observations": ["second fact"], "status": "planned"})
+        text = _recent_memory_block(repo).body(None)
+        assert "## global\n- pattern/one (pattern): first fact" in text
+        assert "## acme\n- task/two (task, planned): second fact" in text
+
+
+def _entity(name: str, observation: str = "fact", entity_type: str = "task") -> dict[str, object]:
+    return {"name": name, "entityType": entity_type, "observations": [observation]}
+
+
+class TestRecentMemoryInjection:
+    @pytest.fixture(autouse=True)
+    def _protocol(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("cline_hooks.core.protocol._active_protocol", DEFAULT_PROTOCOL())
+
+    def _task_start_notes(self, repo: Path) -> list[str]:
+        with plugins_override([StartupBlocksPlugin(), _real_plugin()]):
+            return collect_hook_results(
+                load_plugins(),
+                "TaskStart",
+                task_id="task-1",
+                workspace_roots=[str(repo)],
+                source="startup",
+            ).notes
+
+    def test_task_start_injects_the_block_with_the_recent_memory(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        _seed("acme", _entity("task/one", "the fact"))
+        notes = self._task_start_notes(repo)
+        block_note = next(note for note in notes if note.startswith(block_header("recent memory")))
+        assert "- task/one (task): the fact" in block_note
+
+    def test_task_start_without_a_database_leaves_the_read_to_the_model(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        notes = self._task_start_notes(repo)
+        assert not any(note.startswith(block_header("recent memory")) for note in notes)
+        assert any(note.startswith("recent memory was not injected") for note in notes)
+
+
+class TestStartupOutsideGitRepo:
+    @pytest.fixture(autouse=True)
+    def _protocol(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("cline_hooks.core.protocol._active_protocol", DEFAULT_PROTOCOL())
+
+    def test_plain_directory_uses_its_folder_name_as_the_project(self, tmp_path: Path) -> None:
+        plain = tmp_path / "scratch-dir"
+        plain.mkdir()
+        _seed("scratch-dir", _entity("task/one", "the fact"))
+        (block,) = MemoryPlugin().startup_blocks([str(plain)])
+        assert "project/scratch-dir" in block.replaces
+        assert "## scratch-dir\n- task/one (task): the fact" in block.body(None)
+        assert "`project/scratch-dir`" in (_workspace_entity_note([str(plain)]) or "")
+
+    def test_nonexistent_directory_uses_its_folder_name_as_the_project(self, tmp_path: Path) -> None:
+        missing = tmp_path / "gone"
+        (block,) = _real_plugin().startup_blocks([str(missing)])
+        assert "project/gone" in block.replaces
+        notes = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(missing)]).notes
+        assert "The project memory entity for this workspace is `project/gone`." in notes
+
+    def test_repository_without_commits_uses_its_folder_name_as_the_project(self, tmp_path: Path) -> None:
+        repo = tmp_path / "fresh-repo"
+        repo.mkdir()
+        git = shutil.which("git")
+        if git is None:
+            pytest.skip("git is not installed")
+        subprocess.run([git, "init", "--quiet", str(repo)], check=True)
+        _seed("fresh-repo", _entity("task/one", "the fact"))
+        (block,) = MemoryPlugin().startup_blocks([str(repo)])
+        assert "project/fresh-repo" in block.replaces
+        assert "## fresh-repo\n- task/one (task): the fact" in block.body(None)
+
+    @pytest.mark.parametrize("root", ["", "  ", "/"])
+    def test_workspace_root_without_a_name_gives_no_block_and_no_project(self, root: str) -> None:
+        plugin = _real_plugin()
+        assert plugin.startup_blocks([root]) == []
+        notes = plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[root]).notes
+        assert not any("project/" in note or "This workspace" in note for note in notes)
+        assert get_scope("t1") is None
+
+
+class TestTaskScopeWithoutNamedRoot:
+    @pytest.mark.parametrize("root", ["", "  ", "/"])
+    def test_root_without_a_name_does_not_resolve_to_a_project(
+        self, root: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        git = shutil.which("git")
+        if git is None:
+            pytest.skip("git is not installed")
+        cwd_repo = tmp_path / "cwd-repo"
+        cwd_repo.mkdir()
+        subprocess.run([git, "init", "--quiet", str(cwd_repo)], check=True)
+        monkeypatch.chdir(cwd_repo)
+        assert _task_scope("t1", [root]) == "unknown"
+        assert get_scope("t1") is None
+
+    def test_named_roots_resolve_to_their_folder_name_and_are_remembered(self, tmp_path: Path) -> None:
+        plain = tmp_path / "scratch-dir"
+        plain.mkdir()
+        assert _task_scope("t1", [str(plain)]) == "scratch-dir"
+        assert get_scope("t1") == "scratch-dir"
+
+    def test_blank_root_is_skipped_for_the_next_named_root(self, tmp_path: Path) -> None:
+        plain = tmp_path / "scratch-dir"
+        plain.mkdir()
+        assert _task_scope("t1", ["", str(plain)]) == "scratch-dir"
+
+
+class TestRecentMemoryContent:
+    def test_project_entity_is_listed_even_when_not_among_the_newest(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        _seed("acme", _entity("project/acme", "the project", "project"))
+        for index in range(12):
+            _seed("acme", _entity(f"task/{index}"))
+        text = _recent_memory_block(repo).body(None)
+        assert "- project/acme (project): the project" in text
+
+    def test_project_entity_is_not_listed_twice(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        _seed("acme", _entity("project/acme", "the project", "project"))
+        assert _recent_memory_block(repo).body(None).count("- project/acme ") == 1
+
+    def test_long_observation_is_cut_and_marked(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        _seed("acme", _entity("task/long", "x" * 200))
+        text = _recent_memory_block(repo).body(None)
+        assert f": {'x' * 80}..." in text
+        assert "x" * 81 not in text
+
+    def test_uses_the_registered_project_not_the_folder_name(self, tmp_path: Path) -> None:
+        repo = tmp_path / "checkout-2"
+        repo.mkdir()
+        db = _seed("acme", _entity("task/one"))
+        db.projects.add_path("acme", str(repo))
+        assert "## acme\n- task/one" in _recent_memory_block(repo).body(None)
+
+    def test_missing_database_raises(self, tmp_path: Path) -> None:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        with pytest.raises(sqlite3.Error):
+            _recent_memory_block(repo).body(None)
+
+
+class TestRecentMemoryBudget:
+    def _repo_with_memory(self, tmp_path: Path) -> Path:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        _seed("global", *(_entity(f"pattern/{i}", "g" * 60, "pattern") for i in range(10)))
+        _seed("acme", _entity("project/acme", "p" * 60, "project"), *(_entity(f"task/{i}", "t" * 60) for i in range(9)))
+        return repo
+
+    def test_unlimited_includes_every_observation(self, tmp_path: Path) -> None:
+        text = _recent_memory_block(self._repo_with_memory(tmp_path)).body(None)
+        assert text.count("g" * 60) == 10
+        assert text.count("t" * 60) == 9
+
+    def test_small_budget_keeps_every_name_and_drops_observations(self, tmp_path: Path) -> None:
+        block = _recent_memory_block(self._repo_with_memory(tmp_path))
+        full = block.body(None)
+        names_only = block.body(0)
+        left = (len(full) + len(names_only)) // 2
+        text = block.body(left)
+        assert len(names_only) < len(text) <= left
+        assert all(f"pattern/{i} " in text for i in range(10))
+        assert all(f"task/{i} " in text for i in range(9))
+        assert "project/acme " in text
+        kept = sum(text.count(fill * 60) for fill in "gtp")
+        assert 0 < kept < 20
+
+    def test_names_only_is_returned_even_when_over_budget(self, tmp_path: Path) -> None:
+        block = _recent_memory_block(self._repo_with_memory(tmp_path))
+        assert "g" * 60 not in block.body(0)
+        assert block.body(-5) == block.body(0)
+
+
+class TestRecentMemoryProjectRelations:
+    def _repo_with_relations(self, tmp_path: Path, count: int) -> Path:
+        repo = tmp_path / "acme"
+        repo.mkdir()
+        names = [f"task/{i}" for i in range(count)]
+        db = _seed("acme", _entity("project/acme", "p", "project"), *(_entity(name) for name in names))
+        db.relations.create("acme", [Relation("project/acme", name, "part-of") for name in names])
+        return repo
+
+    def test_caps_relations_and_counts_the_rest(self, tmp_path: Path) -> None:
+        text = _recent_memory_block(self._repo_with_relations(tmp_path, 20)).body(None)
+        assert text.count(" -part-of-> ") == 15
+        assert "+5 more relations" in text
+
+    def test_does_not_load_the_related_entities(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("related entities must not be loaded")
+
+        monkeypatch.setattr("mcp_memory.storage.operations.reads.Reads.get_entity_with_relations", _boom)
+        text = _recent_memory_block(self._repo_with_relations(tmp_path, 3)).body(None)
+        assert text.count(" -part-of-> ") == 3
+
+    def test_no_overflow_line_within_the_cap(self, tmp_path: Path) -> None:
+        text = _recent_memory_block(self._repo_with_relations(tmp_path, 15)).body(None)
+        assert text.count(" -part-of-> ") == 15
+        assert "more relations" not in text
 
 
 class TestIsMemoryServerReachable:

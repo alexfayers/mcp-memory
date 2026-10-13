@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
+import logging
 import os
 from pathlib import Path
 import random
@@ -15,8 +17,9 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from cline_hooks.core.parameters import FileEditParameters, ReadParameters
-from cline_hooks.core.plugin import HookResult, HooksPlugin, collect_contributions, hookspec, is_subagent
+from cline_hooks.core.plugin import HookResult, HooksPlugin, collect_contributions, hookimpl, hookspec, is_subagent
 from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS, FILE_READ_TOOLS, SHELL_TOOLS, CanonicalTool
+from cline_hooks.plugins.startup_blocks import StartupBlock
 
 from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
 from mcp_memory.hooks.review_tracker import (
@@ -42,7 +45,10 @@ from mcp_memory.storage.pure.rows import strip_today_date_prefix
 from mcp_memory.tool_names import MUTATING_TOOLS, READ_ONLY_TOOLS
 
 if TYPE_CHECKING:
+    from mcp_memory.models import Entity, Relation
     from mcp_memory.storage import Storage
+
+logger = logging.getLogger("hooks")
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(MUTATING_TOOLS)
 
@@ -107,6 +113,9 @@ _READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
 
 _FILE_EDIT_TOOLS_ENV = "MCP_MEMORY_EDIT_TOOLS"
 _EDIT_TOOL_WEIGHT = 0.25
+
+_START_OBSERVATION_CHARS = 80
+_START_PROJECT_RELATIONS = 15
 
 _DEFAULT_WRAPPER_TOOLS = frozenset({"codemode"})
 _WRAPPER_TOOLS_ENV = "MCP_MEMORY_WRAPPER_TOOLS"
@@ -229,15 +238,22 @@ def _resolve_anchor(path: str) -> tuple[Path, str] | None:
     return anchor, git_root.name
 
 
+def _primary_root(workspace_roots: list[str]) -> str | None:
+    """Return the first workspace root, or None where there is none or it is blank."""
+    if not workspace_roots or not workspace_roots[0].strip():
+        return None
+    return workspace_roots[0]
+
+
 def _registration_target(workspace_roots: list[str]) -> tuple[Path, str] | None:
     """Return the (anchor, candidate name) eligible for auto-registration, or None.
 
     None means no registration should happen: no workspace, the path is already mapped
     (never clobber), no repository root was found, or the anchor is the home directory.
     """
-    if not workspace_roots:
+    cwd = _primary_root(workspace_roots)
+    if cwd is None:
         return None
-    cwd = workspace_roots[0]
     if resolve_project_for_path(cwd) is not None:
         return None
     resolved = _resolve_anchor(cwd)
@@ -360,16 +376,31 @@ def _date_prefix_note(tool_name: str, parameters: dict[str, object]) -> str | No
 
 def _workspace_entity_note(workspace_roots: list[str]) -> str | None:
     """Return the project memory entity note for the first workspace root."""
-    if not workspace_roots:
+    name = _repo_project(workspace_roots)
+    if name is None:
         return None
-    root = workspace_roots[0]
-    basename = Path(root).name
-    resolved = _resolve_project(root)
-    name = resolved or basename
+    basename = Path(workspace_roots[0]).name
     note = f"The project memory entity for this workspace is `project/{name}`."
-    if resolved and resolved != basename:
+    if name != basename:
         note += f" (resolved from a registered path; folder is `{basename}`)"
     return note
+
+
+def _repo_project(workspace_roots: list[str]) -> str | None:
+    """Return the memory project of the first workspace root, or None without a named one."""
+    root = _primary_root(workspace_roots)
+    if root is None:
+        return None
+    return _resolve_project(root) or Path(root).name or None
+
+
+def _group_members(repo_name: str) -> list[str]:
+    """Return the other projects sharing a group with the repo project."""
+    db = open_readonly(get_db_path())
+    try:
+        return db.projects.group_members(repo_name)
+    finally:
+        db.connection.close()
 
 
 def _resolved_project_set(workspace_roots: list[str]) -> list[str]:
@@ -381,16 +412,125 @@ def _resolved_project_set(workspace_roots: list[str]) -> list[str]:
     degrades to [global, repo-name] rather than breaking task start.
     """
     projects = ["global"]
-    if not workspace_roots:
+    repo_name = _repo_project(workspace_roots)
+    if repo_name is None:
         return projects
-    repo_name = _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
     projects.append(repo_name)
     try:
-        db = open_readonly(get_db_path())
-        projects.extend(db.projects.group_members(repo_name))
-    except (sqlite3.Error, OSError):
-        pass
+        projects.extend(_group_members(repo_name))
+    except (sqlite3.Error, OSError) as error:
+        logger.warning("Could not read project groups for %s: %s", repo_name, error)
     return projects
+
+
+@dataclass(frozen=True)
+class _RecentSection:
+    """One project's part of the recent-memory block."""
+
+    project: str
+    entities: list[Entity]
+    relations: list[Relation] = field(default_factory=list)
+    relations_omitted: int = 0
+
+
+def _entity_line(entity: Entity, *, with_observation: bool) -> str:
+    """Render one entity as `- name (type[, status][, +votes])`, optionally with its first observation."""
+    details = [entity.entity_type]
+    if entity.status:
+        details.append(entity.status)
+    if entity.vote_score:
+        details.append(f"{entity.vote_score:+d}")
+    line = f"- {entity.name} ({', '.join(details)})"
+    if with_observation and entity.observations:
+        text = " ".join(entity.observations[0].content.split())
+        if len(text) > _START_OBSERVATION_CHARS:
+            text = text[:_START_OBSERVATION_CHARS] + "..."
+        line += f": {text}"
+    return line
+
+
+def _render_recent(sections: list[_RecentSection], details: int | None) -> str:
+    """Render sections as entity lines, adding detail to the first `details` entities and then relations.
+
+    Args:
+        sections: The projects to render, in order.
+        details: How many entities and relations get detail, or None for all of them.
+
+    Returns:
+        Every entity name, plus the first observation of each entity that got detail.
+    """
+    left = details
+    blocks: list[str] = []
+    for section in sections:
+        lines = [f"## {section.project}"]
+        for entity in section.entities:
+            detailed = left is None or left > 0
+            left = left - 1 if left is not None and detailed else left
+            lines.append(_entity_line(entity, with_observation=detailed))
+        shown = 0
+        for relation in section.relations:
+            if left is not None and left <= 0:
+                break
+            left = left - 1 if left is not None else left
+            lines.append(f"{relation.source} -{relation.relation_type}-> {relation.target}")
+            shown += 1
+        omitted = section.relations_omitted + len(section.relations) - shown
+        if omitted:
+            lines.append(f"+{omitted} more relations")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _recent_sections(repo: str) -> list[_RecentSection]:
+    """Read the recent entities of `global` and the repo project, and the repo's project entity with its relations."""
+    project_entity_name = f"project/{repo}"
+    db = open_readonly(get_db_path())
+    try:
+        global_entities = db.reads.recent("global", max_observation_chars=0)["entities"]
+        repo_entities = db.reads.recent(repo, max_observation_chars=0)["entities"]
+        project_entity: Entity | None
+        relations: list[Relation] = []
+        try:
+            project_entity = db.reads.get_entity(repo, project_entity_name, max_observation_chars=0)
+            relations = db.reads.get_entity_relations(repo, project_entity_name)
+        except ValueError:
+            project_entity = None
+    finally:
+        db.connection.close()
+    repo_section = _RecentSection(repo, repo_entities)
+    if project_entity is not None:
+        repo_section = _RecentSection(
+            repo,
+            [project_entity, *(entity for entity in repo_entities if entity.name != project_entity_name)],
+            relations[:_START_PROJECT_RELATIONS],
+            max(len(relations) - _START_PROJECT_RELATIONS, 0),
+        )
+    return [_RecentSection("global", global_entities), repo_section]
+
+
+def _recent_memory(repo: str, left: int | None) -> str:
+    """Return the recent memory of `global` and the repo project, fitted to the characters left.
+
+    Every entity name is always included. First observations and the repo project entity's
+    relations are added, in that order, while they fit.
+
+    Args:
+        repo: The workspace's memory project.
+        left: The characters available, or None for no limit.
+
+    Returns:
+        The rendered memory.
+    """
+    sections = _recent_sections(repo)
+    if left is None:
+        return _render_recent(sections, None)
+    text = _render_recent(sections, 0)
+    for details in range(1, sum(len(s.entities) + len(s.relations) for s in sections) + 1):
+        fuller = _render_recent(sections, details)
+        if len(fuller) > left:
+            break
+        text = fuller
+    return text
 
 
 def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
@@ -402,17 +542,16 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     projects = _resolved_project_set(workspace_roots)
     project_list = ", ".join(f"`{project}`" for project in projects)
     parts.append(
-        "Session-start guidance (see the session-start skill for the full ritual):\n"
-        "1. `read_graph` on BOTH `global` and `<repo-name>` projects - always do this\n"
-        "2. Only if the opening message asks about outstanding work, "
+        "Session-start guidance:\n"
+        "1. Only if the opening message asks about outstanding work, "
         f"scan for open tasks across {project_list}: "
         "`search_all_projects(query='task', entityType='task', "
         "status=['in-progress','planned'], ...)` "
         "(use unrestricted `search_all_projects`, no `projects` filter, only on explicit "
         "request for the full picture). Otherwise skip this scan - targeted searches for "
         "the ask still surface anything relevant\n"
-        "3. `search_nodes` for task keywords in `<repo-name>` project\n"
-        "4. `get_entity_with_relations` on any relevant result"
+        "2. `search_nodes` for task keywords in `<repo-name>` project\n"
+        "3. `get_entity_with_relations` on any relevant result"
     )
     return parts
 
@@ -446,7 +585,7 @@ def _task_scope(task_id: str, workspace_roots: list[str]) -> str:
     if scope is not None:
         return scope
     for root in workspace_roots:
-        detected = _resolve_project(root)
+        detected = _repo_project([root])
         if detected:
             set_scope(task_id, detected)
             return detected
@@ -638,6 +777,23 @@ class MemoryPlugin(HooksPlugin):
             "PreCompact": lambda **_: HookResult(notes=[_MEMORY_COMPACT_WARNING]),
         }
 
+    @hookimpl(optionalhook=True)
+    def startup_blocks(self, workspace_roots: list[str]) -> list[StartupBlock]:
+        """Return the recent-memory block for the workspace's project, or none without a workspace."""
+        repo = _repo_project(workspace_roots)
+        if repo is None:
+            return []
+        return [
+            StartupBlock(
+                title="recent memory",
+                replaces=(
+                    f"call read_graph on `global` and `{repo}` and get_entity_with_relations on `project/{repo}`"
+                ),
+                body=lambda left: _recent_memory(repo, left),
+                order=20,
+            )
+        ]
+
     def on_hook(self, hook_name: str, **kwargs: object) -> HookResult | None:
         """Handle hook events for memory tracking."""
         handler = self._handlers.get(hook_name)
@@ -651,8 +807,9 @@ class MemoryPlugin(HooksPlugin):
         clear(task_id)
         set_reminder_chance(task_id, 0.0)
         auto_note = self._maybe_auto_register(workspace_roots)
-        if workspace_roots:
-            set_scope(task_id, _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name)
+        project = _repo_project(workspace_roots)
+        if project is not None:
+            set_scope(task_id, project)
         notes = _build_task_start_context(workspace_roots)
         if auto_note:
             notes.append(auto_note)

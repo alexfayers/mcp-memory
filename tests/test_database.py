@@ -92,6 +92,22 @@ class TestMoveProjectEntities:
         result = store.reads.get_entity_with_relations("dst", "a")
         assert any(r.target == "b" for r in result["relations"])
 
+    def test_get_entity_relations_returns_only_the_relations(self, store: Storage) -> None:
+        store.entities.create(
+            "src",
+            [
+                {"name": "a", "entityType": "task", "observations": ["a"]},
+                {"name": "b", "entityType": "feature", "observations": ["b"]},
+            ],
+        )
+        store.relations.create("src", [Relation(source="a", target="b", relation_type="implements")])
+        assert store.reads.get_entity_relations("src", "a") == [Relation("a", "b", "implements")]
+
+    def test_get_entity_relations_unknown_entity_raises(self, store: Storage) -> None:
+        store.entities.create("src", [{"name": "a", "entityType": "task", "observations": ["a"]}])
+        with pytest.raises(ValueError, match="not found"):
+            store.reads.get_entity_relations("src", "missing")
+
     def test_source_scope_emptied(self, store: Storage) -> None:
         store.entities.create("src", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         store.entities.create("dst", [{"name": "d0", "entityType": "task", "observations": ["x"]}])
@@ -156,6 +172,11 @@ class TestReadsDoNotCreateProjects:
     def test_get_entity_with_relations_leaves_no_project_row(self, store: Storage) -> None:
         with pytest.raises(ValueError, match="not found"):
             store.reads.get_entity_with_relations("ghost", "e1")
+        assert "ghost" not in store.projects.names()
+
+    def test_get_entity_relations_leaves_no_project_row(self, store: Storage) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            store.reads.get_entity_relations("ghost", "e1")
         assert "ghost" not in store.projects.names()
 
     def test_search_leaves_no_project_row(self, store: Storage) -> None:

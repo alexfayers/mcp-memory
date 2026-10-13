@@ -10,7 +10,7 @@ description: Guide {{agent}} on using mcp-memory for persistent memory.
 
 ## Start
 
-`read_graph` then `search_nodes` on `global` and `<repo-name>` (keywords, `user-preferences`, project, `pattern/`s, files, ticket IDs, `status="in-progress"`); `get_entity_with_relations` on hits and `project/<repo-name>` (`entityType="task"`); summarize decisions, constraints, pitfalls before planning.
+{% if AGENT not in ["claude-code", "pi"] %}`read_graph` then {% endif %}`search_nodes` on `global` and `<repo-name>` (keywords, `user-preferences`, project, `pattern/`s, files, ticket IDs, `status="in-progress"`); `get_entity_with_relations` on hits{% if AGENT not in ["claude-code", "pi"] %} and `project/<repo-name>` (`entityType="task"`){% endif %}; summarize decisions, constraints, pitfalls before planning.
 
 ## Working
 
