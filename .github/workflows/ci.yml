@@ -33,6 +33,7 @@ jobs:
       - run: just type-check
 
   test:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'blocked') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
