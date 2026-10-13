@@ -1,10 +1,8 @@
 rules:
   - changed-files:
-      - any-glob-to-any-file: 'src/mcp_memory/prompts/*/rules/**'
-
-skills:
-  - changed-files:
-      - any-glob-to-any-file: 'src/mcp_memory/prompts/*/skills/**'
+      - any-glob-to-any-file:
+          - 'src/mcp_memory/prompts/*/rules/**'
+          - 'src/mcp_memory/prompts/*/skills/**'
 
 tooling:
   - changed-files:
@@ -17,3 +15,7 @@ tooling:
 tests:
   - changed-files:
       - any-glob-to-any-file: 'tests/**'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: '.github/**'
