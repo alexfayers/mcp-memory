@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
@@ -16,8 +17,10 @@ import pytest
 
 pytest.importorskip("cline_hooks")
 
-from cline_hooks.core.plugin import HooksPlugin, hookimpl, plugins_override
+from cline_hooks.core.plugin import HooksPlugin, collect_hook_results, hookimpl, load_plugins, plugins_override
 from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS
+from cline_hooks.frontends.claude_code.protocol import ClaudeCodeProtocol
+from cline_hooks.plugins.startup_blocks import RESERVE_CHARS, StartupBlocksPlugin
 
 from mcp_memory import server
 from mcp_memory.config import get_db_path
@@ -690,6 +693,37 @@ class TestResolvedProjectSet:
         repo = tmp_path / "acme"
         repo.mkdir()
         assert _resolved_project_set([str(repo)]) == ["global", "acme"]
+
+
+def _task_start_notes(*plugins: HooksPlugin, roots: list[str], **kwargs: object) -> list[str]:
+    with (
+        plugins_override([_real_plugin(), *plugins]),
+        patch("cline_hooks.core.protocol._active_protocol", ClaudeCodeProtocol()),
+    ):
+        return collect_hook_results(load_plugins(), "TaskStart", task_id="t1", workspace_roots=roots, **kwargs).notes
+
+
+class TestRecentMemoryStartupBlock:
+    def test_lists_recent_entities_of_global_and_repo(self, tmp_path: Path) -> None:
+        db = open_writable(get_db_path())
+        db.entities.create("global", [{"name": "p/one", "entityType": "pattern", "observations": ["first fact"]}])
+        db.entities.create("acme", [{"name": "task/two", "entityType": "task", "observations": ["second fact"]}])
+        notes = _task_start_notes(StartupBlocksPlugin(), roots=[str(tmp_path / "acme")])
+        assert any("- p/one (pattern): first fact\n\n## acme\n- task/two (task): second" in n for n in notes)
+
+    def test_budget_keeps_names(self, tmp_path: Path) -> None:
+        names = [f"task/{number}" for number in range(5)]
+        entities = [{"name": name, "entityType": "task", "observations": ["x" * 70]} for name in names]
+        open_writable(get_db_path()).entities.create("acme", entities)
+        spec = replace(ClaudeCodeProtocol.frontend_spec, max_context_chars=RESERVE_CHARS + 400)
+        with patch.object(ClaudeCodeProtocol, "frontend_spec", spec):
+            notes = _task_start_notes(StartupBlocksPlugin(), roots=[str(tmp_path / "acme")])
+        (note,) = (n for n in notes if n.startswith("Startup block"))
+        assert all(f"- {name} (task)" in note for name in names)
+        assert note.count("x" * 70) < len(names)
+
+    def test_no_workspace_gives_no_block(self) -> None:
+        assert not any(note.startswith("Startup block") for note in _task_start_notes(StartupBlocksPlugin(), roots=[]))
 
 
 class TestBuildTaskStartContext:
