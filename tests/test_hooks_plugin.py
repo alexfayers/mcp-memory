@@ -738,6 +738,7 @@ class TestBuildTaskStartContext:
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
         instructions = next(part for part in parts if "Session-start guidance" in part)
+        assert instructions.startswith("Session-start guidance:\n")
         for step in ("1. ", "2. ", "3. ", "4. "):
             assert step in instructions
 
