@@ -53,7 +53,6 @@ _MEMORY_READ_TOOL_NAMES = frozenset(READ_ONLY_TOOLS)
 
 _MEMORY_REMINDER_TOOLS = FILE_EDIT_TOOLS | SHELL_TOOLS | {CanonicalTool.PLAN_MODE_RESPOND}
 
-# Update prompts/shared/rules/hooks-mcp-memory.md if any of these messages change.
 _MEMORY_REMINDER_TEMPLATE = (
     "MEMORY UPDATE REQUIRED: Update the `{project}` project and `global`"
     " scopes in the memory server now.\n"
@@ -86,7 +85,6 @@ _FRUSTRATION_TIERS = (
     (1, "mild", 1),
 )
 
-# Update prompts/shared/rules/hooks-mcp-memory.md if this message changes.
 _FRUSTRATION_NUDGE_TEMPLATE = (
     "FRUSTRATION [{severity}]: {signals}.\n"
     "1. Decide: aimed at you, or the code?\n"
@@ -290,7 +288,6 @@ _SCOPE_MISMATCH_WARNING = (
     " intentional, run the exact same call again to proceed."
 )
 
-# Update prompts/shared/rules/hooks-mcp-memory.md if this message changes.
 _DATE_PREFIX_WARNING = (
     "REDUNDANT DATE PREFIX: {count} observation(s) in this call start with today's date"
     " (first: `{example}`). The server records each observation's timestamp itself and strips"
@@ -689,7 +686,6 @@ class MemoryPlugin(HooksPlugin):
     hookspecs = MemorySpec
 
     def __init__(self) -> None:
-        # Update prompts/shared/rules/hooks-mcp-memory.md if hook-event wiring changes.
         self._handlers: dict[str, Callable[..., HookResult | None]] = {
             "TaskStart": self._on_task_start,
             "TaskCancel": self._on_task_end,
