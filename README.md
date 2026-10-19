@@ -15,7 +15,7 @@
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       69 |        4 |     94% |52-53, 85, 87 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
-| src/mcp\_memory/hooks/plugin.py                      |      471 |       28 |     94% |198, 363, 406, 409, 440-441, 585, 647-648, 653-661, 683, 727, 767, 770-772, 782, 789-793, 831 |
+| src/mcp\_memory/hooks/plugin.py                      |      471 |       28 |     94% |196, 360, 403, 406, 437-438, 582, 644-645, 650-658, 680, 723, 763, 766-768, 778, 785-789, 827 |
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
 | src/mcp\_memory/hooks/tracker.py                     |       90 |        1 |     99% |       108 |
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
