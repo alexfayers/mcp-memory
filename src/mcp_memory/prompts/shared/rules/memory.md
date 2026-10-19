@@ -16,6 +16,7 @@ Unless a `Startup block: recent memory` is present, `read_graph`. Then `search_n
 
 - MUST write silently as you go, never batched: edits, discoveries, decisions, feedback, facts; failures and insights to `global`.
 - Each piece of work and user follow-up MUST be its own related `task/` entity, created before code.
+- New information that replaces or contradicts an observation: MUST `search_nodes` for it first, then `edit_observation` it in place. MUST edit or delete a contradicted observation in the same step.
 - MUST record a confirmed external change (merge, deploy, close) in the same response; plans MUST include memory updates.
 - Subagents MUST NOT write; main writes after a fresh read.
 - A memory hook block MUST get a real memory write on the NEXT tool call, never a placeholder shell command.
