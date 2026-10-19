@@ -197,11 +197,11 @@ GET_ENTITY_WITH_RELATIONS_DESC = (
     "Optionally filter by entityType and/or relationType." + _TARGET_MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
 ADD_OBSERVATIONS_DESC = (
-    "Append observations to an existing entity without overwriting. "
-    "Skips duplicates. Throws if the entity does not exist. Returns the content hashes of the "
-    "newly-added observations, usable with vote/delete_observations/"
-    "merge_observations. "
-    "To reorder existing observations by usefulness rather than add one, see vote. "
+    "Append observations to an existing entity, skipping duplicates. "
+    "Throws if the entity does not exist. Returns content hashes of added "
+    "observations, usable with vote/delete_observations/merge_observations. "
+    "To reorder by usefulness instead of adding, see vote. "
+    "If this replaces or contradicts an observation, search_nodes then edit_observation instead. "
     "One atomic fact per observation, on the entity it concerns - create one rather than "
     "dump onto an unrelated entity. Tense: present for project/feature, past for task; "
     "rationale goes in its own observation. Past ~30 observations, extract focused pattern/ "
@@ -209,8 +209,7 @@ ADD_OBSERVATIONS_DESC = (
     "changelogs, file paths in global, ephemeral status, commit SHAs, workarounds for "
     "retired tools, or implementation steps of a resolved task (keep 1-3 outcome "
     "observations - see trim_observations_to_outcome). "
-    "The server automatically records each observation's timestamp; do NOT prefix or embed "
-    "a date/timestamp in the observation text yourself."
+    "The server timestamps each observation; do NOT embed a date in the text."
 )
 DELETE_OBSERVATIONS_DESC = (
     "Delete specific observations from an existing entity by exact content match "
