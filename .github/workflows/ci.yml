@@ -11,7 +11,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
@@ -23,7 +23,7 @@ jobs:
   type-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
@@ -39,7 +39,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
@@ -59,7 +59,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
@@ -105,7 +105,7 @@ jobs:
       group: benchmark-badge
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
@@ -131,6 +131,6 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: node --test .github/scripts/*.test.js
       - uses: alexfayers/llm-prompts/.github/actions/pr-template@main
