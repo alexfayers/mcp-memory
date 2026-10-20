@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -61,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -107,7 +107,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
