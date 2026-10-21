@@ -1,4 +1,4 @@
-"""FastMCP server exposing an LLM recall layer in front of mcp-memory.
+"""MCPServer server exposing an LLM recall layer in front of mcp-memory.
 
 `recall` spawns an ephemeral headless ``claude -p`` agent locked to the
 mcp-memory read tools, absorbs the heavy graph traversal in that throwaway
@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, TypedDict
 
 import anyio
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from starlette.responses import JSONResponse
 
@@ -246,12 +246,7 @@ RECALL_DESC = (
     "or when a result is too large to fit."
 )
 
-mcp = FastMCP(
-    "memory-agent",
-    stateless_http=True,
-    json_response=True,
-    port=get_agent_port(),
-)
+mcp = MCPServer("memory-agent")
 
 
 def _claude_bin() -> str | None:
@@ -556,7 +551,7 @@ async def recall(query: str) -> str:
         )
 
 
-def _register_recall(server: FastMCP) -> None:
+def _register_recall(server: MCPServer) -> None:
     """Register the recall tool, but only when the claude CLI it depends on is present.
 
     Without claude every recall would fail at spawn time, so the tool is hidden from
@@ -567,7 +562,7 @@ def _register_recall(server: FastMCP) -> None:
             recall,
             description=RECALL_DESC,
             title="Recall from memory",
-            annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=False, openWorldHint=True),
+            annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=False, open_world_hint=True),
         )
 
 
@@ -861,7 +856,7 @@ async def _serve() -> None:
 
     The coordinator starts only when the claude CLI it would spawn is present AND at
     least one tier is enabled; otherwise it would poll forever with every pass
-    no-opping. It is an explicit background task rather than a FastMCP ``lifespan``:
+    no-opping. It is an explicit background task rather than an MCPServer ``lifespan``:
     in stateless_http mode the low-level server runs per request, so a lifespan task
     would be spawned and cancelled on every request. Cancelled cleanly on shutdown.
     """
@@ -878,7 +873,7 @@ async def _serve() -> None:
     run_coordinator = _claude_bin() is not None and bool(_enabled_tiers())
     coordinator = asyncio.create_task(_coordinator_loop()) if run_coordinator else None
     try:
-        await mcp.run_streamable_http_async()
+        await mcp.run_streamable_http_async(port=get_agent_port(), stateless_http=True, json_response=True)
     finally:
         if coordinator is not None:
             coordinator.cancel()

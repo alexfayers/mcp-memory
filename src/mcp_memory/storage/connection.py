@@ -6,6 +6,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Any, cast
 
 
@@ -16,11 +17,12 @@ class Connection:
         self._db = db
         self.path = path
         self._depth = 0
+        self._lock = threading.RLock()
 
     @classmethod
     def open_writable(cls, path: str | Path) -> Connection:
         path = Path(path)
-        db = sqlite3.connect(str(path))
+        db = sqlite3.connect(str(path), check_same_thread=False)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA synchronous=NORMAL")
@@ -47,16 +49,20 @@ class Connection:
         return cls(db, path)
 
     def query_one(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Row | None:
-        return cast("sqlite3.Row | None", self._db.execute(sql, params).fetchone())
+        with self._lock:
+            return cast("sqlite3.Row | None", self._db.execute(sql, params).fetchone())
 
     def query_all(self, sql: str, params: Sequence[Any] = ()) -> list[sqlite3.Row]:
-        return self._db.execute(sql, params).fetchall()
+        with self._lock:
+            return self._db.execute(sql, params).fetchall()
 
     def write(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Cursor:
-        return self._db.execute(sql, params)
+        with self._lock:
+            return self._db.execute(sql, params)
 
     def write_many(self, sql: str, params: Iterable[Sequence[Any]]) -> sqlite3.Cursor:
-        return self._db.executemany(sql, params)
+        with self._lock:
+            return self._db.executemany(sql, params)
 
     @property
     def total_changes(self) -> int:
@@ -65,6 +71,10 @@ class Connection:
 
     @contextmanager
     def transaction(self, commit: bool = True) -> Iterator[None]:
+        with self._lock:
+            yield from self._transaction(commit)
+
+    def _transaction(self, commit: bool) -> Iterator[None]:
         self._depth += 1
         try:
             yield

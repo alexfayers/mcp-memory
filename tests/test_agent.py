@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import pytest
 
 from mcp_memory import agent, cli, dream_status, recall_status, server, tool_names
@@ -63,18 +63,18 @@ class TestBuildMcpConfig:
 
 class TestRegisterRecall:
     @staticmethod
-    def _tool_names(server: FastMCP) -> set[str]:
+    def _tool_names(server: MCPServer) -> set[str]:
         return {tool.name for tool in asyncio.run(server.list_tools())}
 
     def test_registers_recall_when_claude_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/bin/claude")
-        server = FastMCP("test")
+        server = MCPServer("test")
         agent._register_recall(server)
         assert "recall" in self._tool_names(server)
 
     def test_hides_recall_when_claude_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(agent.shutil, "which", lambda _: None)
-        server = FastMCP("test")
+        server = MCPServer("test")
         agent._register_recall(server)
         assert "recall" not in self._tool_names(server)
 
@@ -724,7 +724,7 @@ class TestServe:
             started.append("coordinating")
             await asyncio.sleep(3600)
 
-        async def fake_serve_http() -> None:
+        async def fake_serve_http(**_: Any) -> None:
             await asyncio.sleep(0.02)
 
         monkeypatch.setattr(agent, "_coordinator_loop", fake_loop)
@@ -771,7 +771,7 @@ class TestServe:
         monkeypatch.setattr(agent, "get_dream_heavy_enabled", lambda: False)
         recall_status.record_start()  # a stale in-flight count a crash could leave
 
-        async def fake_serve_http() -> None:
+        async def fake_serve_http(**_: Any) -> None:
             await asyncio.sleep(0.01)
 
         monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)
@@ -791,7 +791,7 @@ class TestServe:
         recorded: list[dict[str, object]] = []
         monkeypatch.setattr(agent.dream_status, "record_startup", lambda **kwargs: recorded.append(kwargs))
 
-        async def fake_serve_http() -> None:
+        async def fake_serve_http(**_: Any) -> None:
             await asyncio.sleep(0.01)
 
         monkeypatch.setattr(agent.mcp, "run_streamable_http_async", fake_serve_http)

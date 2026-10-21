@@ -4,14 +4,11 @@
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
-mcp-memory's dev dependency group references [`cline-hooks`](https://github.com/alexfayers/cline-hooks)
-as an editable path dependency at `../cline-hooks`, so clone it as a sibling of this repo before
-syncing:
-
 ```bash
-git clone https://github.com/alexfayers/cline-hooks.git ../cline-hooks
 uv sync
 ```
+
+To edit [`cline-hooks`](https://github.com/alexfayers/cline-hooks) alongside this repo, clone it as a sibling and run `uv pip install -e ../cline-hooks` after `uv sync`.
 
 ## Checks
 

@@ -13,6 +13,6 @@ class TestToolAnnotations:
         for tool in tools.values():
             assert tool.annotations is not None
         for name in tool_names.READ_ONLY_TOOLS:
-            assert tools[name].annotations.readOnlyHint is True
+            assert tools[name].annotations.read_only_hint is True
         for name in tool_names.MUTATING_TOOLS:
-            assert tools[name].annotations.readOnlyHint is False
+            assert tools[name].annotations.read_only_hint is False

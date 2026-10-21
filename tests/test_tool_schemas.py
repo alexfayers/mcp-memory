@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 import pytest
 
 from mcp_memory import server
@@ -39,7 +39,7 @@ def _schema_nodes(node: object) -> Iterator[dict[str, Any]]:
 
 
 def _input_schemas() -> list[dict[str, Any]]:
-    return [tool.inputSchema for tool in asyncio.run(server.mcp.list_tools())]
+    return [tool.input_schema for tool in asyncio.run(server.mcp.list_tools())]
 
 
 class TestPrunedInputSchemas:
@@ -57,7 +57,7 @@ class TestPrunedInputSchemas:
 
     def test_optional_argument_keeps_its_type(self) -> None:
         tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
-        assert tools["read_graph"].inputSchema["properties"]["max_observation_chars"] == {"type": "integer"}
+        assert tools["read_graph"].input_schema["properties"]["max_observation_chars"] == {"type": "integer"}
 
     def test_tool_titles_are_kept(self) -> None:
         tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
