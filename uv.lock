@@ -132,7 +132,7 @@ wheels = [
 [[package]]
 name = "cline-hooks"
 version = "1.0"
-source = { editable = "../cline-hooks" }
+source = { git = "https://github.com/alexfayers/cline-hooks#e42776c8de5093fa43bc346c9bdb2ee1875cbdc4" }
 dependencies = [
     { name = "bashlex" },
     { name = "gitpython" },
@@ -140,37 +140,6 @@ dependencies = [
     { name = "pluggy" },
     { name = "pydantic" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "bashlex" },
-    { name = "gitpython" },
-    { name = "platformdirs" },
-    { name = "pluggy", specifier = ">=1.6.0" },
-    { name = "pydantic", specifier = ">=2" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "coverage", specifier = ">=7.0" },
-    { name = "fayers-configs", git = "https://github.com/alexfayers/fayers-configs" },
-    { name = "mypy", specifier = ">=1.15" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "pytest-cov", specifier = ">=6.1.1" },
-    { name = "pytest-mock", specifier = ">=3.14" },
-    { name = "ruff", specifier = ">=0.11.0" },
-]
-lint = [
-    { name = "fayers-configs", git = "https://github.com/alexfayers/fayers-configs" },
-    { name = "ruff", specifier = ">=0.11.0" },
-]
-test = [
-    { name = "coverage", specifier = ">=7.0" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "pytest-cov", specifier = ">=6.1.1" },
-    { name = "pytest-mock", specifier = ">=3.14" },
-]
-typecheck = [{ name = "mypy", specifier = ">=1.15" }]
 
 [[package]]
 name = "colorama"
@@ -571,7 +540,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "cline-hooks", editable = "../cline-hooks" },
+    { name = "cline-hooks", git = "https://github.com/alexfayers/cline-hooks" },
     { name = "fayers-configs", git = "https://github.com/alexfayers/fayers-configs" },
     { name = "mypy", specifier = ">=1.15" },
     { name = "pytest", specifier = ">=8" },

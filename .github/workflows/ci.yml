@@ -12,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v10.3.0
         with:
@@ -24,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v10.3.0
         with:
@@ -40,7 +38,6 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v7
-      - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v10.3.0
         with:
@@ -60,7 +57,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v10.3.0
         with:
@@ -106,7 +102,6 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
-      - run: git clone --depth 1 https://github.com/alexfayers/cline-hooks ../cline-hooks
       - uses: extractions/setup-just@v4
       - uses: astral-sh/setup-uv@v10.3.0
         with:
