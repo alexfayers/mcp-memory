@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from .storage import Storage
 
 _READ_ONLY_ANNOTATIONS = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+_ALWAYS_LOAD_META = {"anthropic/alwaysLoad": True}
 logger = logging.getLogger(__name__)
 
 
@@ -570,6 +571,7 @@ def _create_entities(
         read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
     ),
     title="Create entities",
+    meta=_ALWAYS_LOAD_META,
 )
 @_track
 def create_entities(
@@ -587,6 +589,7 @@ def create_entities(
     description=SEARCH_NODES_DESC,
     annotations=_READ_ONLY_ANNOTATIONS,
     title="Search memory",
+    meta=_ALWAYS_LOAD_META,
 )
 @_track
 def search_nodes(
@@ -628,6 +631,7 @@ def search_nodes(
     description=READ_GRAPH_DESC,
     annotations=_READ_ONLY_ANNOTATIONS,
     title="Read graph",
+    meta=_ALWAYS_LOAD_META,
 )
 @_track
 def read_graph(
@@ -1080,6 +1084,7 @@ def get_entity_with_relations(
         read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
     title="Add observations",
+    meta=_ALWAYS_LOAD_META,
 )
 @_track
 def add_observations(
@@ -1153,6 +1158,7 @@ def edit_observation(
         read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
     ),
     title="Trim observations to outcome",
+    meta=_ALWAYS_LOAD_META,
 )
 @_track
 def trim_observations_to_outcome(project: str, name: str, keep_hashes: list[str]) -> dict[str, object]:
@@ -1229,6 +1235,7 @@ def move_entity_cross_scope(source_project: str, target_project: str, name: str)
         read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
     title="Set entity status",
+    meta=_ALWAYS_LOAD_META,
 )
 @_track
 def set_entity_status(
