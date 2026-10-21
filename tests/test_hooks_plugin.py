@@ -18,7 +18,7 @@ import pytest
 pytest.importorskip("cline_hooks")
 
 from cline_hooks.core.plugin import HooksPlugin, collect_hook_results, hookimpl, load_plugins, plugins_override
-from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS
+from cline_hooks.core.vocabulary import BOOKKEEPING_TOOLS, FILE_EDIT_TOOLS, MESSAGE_TOOLS, SKILL_TOOLS
 from cline_hooks.frontends.claude_code.protocol import ClaudeCodeProtocol
 from cline_hooks.plugins.startup_blocks import RESERVE_CHARS, StartupBlocksPlugin
 
@@ -47,7 +47,7 @@ from mcp_memory.hooks.plugin import (
     _safe_project,
     _workspace_entity_note,
 )
-from mcp_memory.hooks.tracker import get_scope, set_reminder_chance
+from mcp_memory.hooks.tracker import _MEMORY_BLOCK_THRESHOLD, get_scope, set_reminder_chance
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage import open_writable
 from mcp_memory.tool_names import READ_ONLY_TOOLS
@@ -557,6 +557,27 @@ class TestMemoryPluginMessages:
             assert _edit("t1") is not None
         with patch("random.random", return_value=0.5):
             assert _edit("t2") is not None
+
+    def test_reminder_and_block_tell_the_model_to_edit_a_replaced_observation(self, plugin: MemoryPlugin) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin.should_warn", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
+            blocked = plugin.on_hook("PreToolUse", task_id="t1", tool_name="execute_command", parameters={})
+            reminded = plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
+        assert blocked is not None
+        assert reminded is not None
+        assert "edit_observation" in (blocked.block or "")
+        assert "edit_observation" in reminded.notes[0]
+
+    @pytest.mark.parametrize("warn", [False, True])
+    def test_reminder_fires_for_any_tool_type_once_the_soft_threshold_is_reached(
+        self, plugin: MemoryPlugin, warn: bool
+    ) -> None:
+        with patch("mcp_memory.hooks.plugin.should_warn", return_value=warn), patch("random.random", return_value=1.0):
+            result = plugin.on_hook("PostToolUse", task_id="t1", tool_name="web_fetch", parameters={})
+        assert (result is not None) is warn
 
 
 class TestMemoryPluginServerDownGating:
@@ -1630,6 +1651,7 @@ class TestMemoryReviewNudge:
             patch("mcp_memory.hooks.plugin.clear"),
             patch("mcp_memory.hooks.plugin.reset") as mock_reset,
             patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+            patch("mcp_memory.hooks.plugin.has_edited", return_value=True),
         ):
             MemoryPlugin().on_hook(
                 "PostToolUse", task_id="t1", tool_name="read_file", parameters={}, is_state_write=True
@@ -1937,6 +1959,7 @@ class TestMemoryReadsDoNotIncrement:
             patch("mcp_memory.hooks.plugin.clear"),
             patch("mcp_memory.hooks.plugin.reset"),
             patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+            patch("mcp_memory.hooks.plugin.has_edited", return_value=True),
         ):
             plugin = MemoryPlugin()
             plugin.on_hook(
@@ -2010,21 +2033,100 @@ class TestFileEditsReducedWeight:
             )
         mock_increment.assert_called_once_with("t1", _EDIT_TOOL_WEIGHT)
 
-    def test_wrapper_tool_not_blocked(self, plugin: MemoryPlugin) -> None:
+    def test_wrapper_tool_is_gated_and_counted_as_one_call(self, plugin: MemoryPlugin) -> None:
+        parameters = {"code": "await tools.mcp__semble__search({})"}
         with (
             patch("mcp_memory.hooks.plugin.should_block", return_value=True),
             patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
         ):
-            result = plugin.on_hook("PreToolUse", task_id="t1", tool_name="codemode", parameters={})
-        assert result is None
+            blocked = plugin.on_hook("PreToolUse", task_id="t1", tool_name="codemode", parameters=parameters)
+        with (
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+            patch("mcp_memory.hooks.plugin.has_edited", return_value=True),
+        ):
+            plugin.on_hook("PostToolUse", task_id="t1", tool_name="codemode", parameters=parameters)
+        assert blocked is not None
+        assert blocked.block is not None
+        mock_increment.assert_called_once_with("t1")
 
-    def test_wrapper_tool_not_counted(self, plugin: MemoryPlugin) -> None:
-        with patch("mcp_memory.hooks.plugin.increment") as mock_increment:
-            plugin.on_hook("PostToolUse", task_id="t1", tool_name="codemode", parameters={})
-        mock_increment.assert_not_called()
-
-    def test_env_var_extends_wrapper_tools(self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize("tool_name", ["codemode", "run_script"])
+    def test_wrapper_tool_naming_a_memory_write_is_neither_gated_nor_counted(
+        self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch, tool_name: str
+    ) -> None:
         monkeypatch.setenv("MCP_MEMORY_WRAPPER_TOOLS", "batch, run_script")
-        with patch("mcp_memory.hooks.plugin.increment") as mock_increment:
-            plugin.on_hook("PostToolUse", task_id="t1", tool_name="run_script", parameters={})
+        parameters = {"code": "await tools.mcp__memory__add_observations({})"}
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            gated = plugin.on_hook("PreToolUse", task_id="t1", tool_name=tool_name, parameters=parameters)
+            plugin.on_hook("PostToolUse", task_id="t1", tool_name=tool_name, parameters=parameters)
+        assert gated is None
         mock_increment.assert_not_called()
+
+    @pytest.mark.parametrize("tool_name", [*sorted(BOOKKEEPING_TOOLS | SKILL_TOOLS | MESSAGE_TOOLS), "other_tool"])
+    def test_bookkeeping_tool_is_not_counted_but_still_gated(
+        self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch, tool_name: str
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_UNCOUNTED_TOOLS", "note_tool, other_tool")
+        with (
+            patch("mcp_memory.hooks.plugin.has_edited", return_value=True),
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            gated = plugin.on_hook("PreToolUse", task_id="t1", tool_name=tool_name, parameters={})
+            plugin.on_hook("PostToolUse", task_id="t1", tool_name=tool_name, parameters={})
+        assert gated is not None
+        assert gated.block is not None
+        mock_increment.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("hook_name", "call"),
+        [
+            ("PreToolUse", {"tool_name": "use_mcp_tool", "parameters": {"tool_name": "search", "arguments": "{}"}}),
+            ("PreMcpToolUse", {"mcp_tool_name": "search", "mcp_arguments": "{}"}),
+            ("PostToolUse", {"tool_name": "use_mcp_tool", "parameters": {"tool_name": "search", "arguments": "{}"}}),
+        ],
+    )
+    def test_call_made_inside_a_wrapper_is_neither_gated_nor_counted(
+        self, plugin: MemoryPlugin, hook_name: str, call: dict[str, object]
+    ) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+            patch("mcp_memory.hooks.plugin.increment") as mock_increment,
+        ):
+            result = plugin.on_hook(hook_name, task_id="t1", parent_tool_call_id="call-1", **call)
+        assert result is None
+        mock_increment.assert_not_called()
+
+
+class TestMemoryGateWaitsForFirstFileEdit:
+    @pytest.fixture
+    def live_plugin(self) -> Iterator[MemoryPlugin]:
+        """A MemoryPlugin on the real tracker with a started task and a reachable memory server."""
+        with (
+            patch.object(MemoryPlugin, "_maybe_auto_register", return_value=None),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
+            plugin = MemoryPlugin()
+            plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[])
+            yield plugin
+
+    def test_lookup_only_session_gets_no_reminder_and_no_block(self, live_plugin: MemoryPlugin) -> None:
+        set_reminder_chance("t1", 1.0)
+        with patch("random.random", return_value=0.0):
+            for _ in range(_MEMORY_BLOCK_THRESHOLD * 2):
+                for hook in ("PostToolUse", "PreToolUse"):
+                    assert live_plugin.on_hook(hook, task_id="t1", tool_name="execute_command", parameters={}) is None
+
+    def test_session_is_gated_once_a_file_edit_is_made(self, live_plugin: MemoryPlugin) -> None:
+        live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="write_to_file", parameters={})
+        with patch("random.random", return_value=1.0):
+            for _ in range(_MEMORY_BLOCK_THRESHOLD):
+                live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
+        blocked = live_plugin.on_hook("PreToolUse", task_id="t1", tool_name="execute_command", parameters={})
+        assert blocked is not None
+        assert blocked.block is not None
