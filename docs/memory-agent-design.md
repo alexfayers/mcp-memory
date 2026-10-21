@@ -39,10 +39,10 @@ observation merge is not reversible. See the safety model below.
 
 Two independent processes over HTTP:
 
-- **mcp-memory** - the existing data store. Pure SQLite-backed FastMCP server.
+- **mcp-memory** - the existing data store. Pure SQLite-backed MCPServer server.
   No model, no credentials, no network to any model provider. **Unchanged** by
   this work.
-- **memory-agent** - a new, additive FastMCP HTTP server (same shape as
+- **memory-agent** - a new, additive MCPServer HTTP server (same shape as
   mcp-memory, different port). It is the LLM layer. It spawns an ephemeral
   headless agent per request and returns its result.
 
@@ -74,7 +74,7 @@ that is otherwise millisecond data reads. A separate, opt-in server:
 
 A single tool. This is the whole context-cleanliness win and ships first.
 
-- **Handler MUST be `async def`.** FastMCP runs sync tool handlers directly on
+- **Handler MUST be `async def`.** MCPServer runs sync tool handlers directly on
   the event loop with no threadpool, so a blocking multi-second subprocess in a
   sync handler would serialise every concurrent request to *this* server. Use
   `asyncio.create_subprocess_exec`.
@@ -167,7 +167,7 @@ only by *soft-delete*, so that removal is reversible via `restore_entity`
 until a grace-window purge. `create_entities` never overwrites - it raises if
 the entity already exists, so it carries no destructive risk of its own.
 `MUTATING_TOOLS` in `tool_names.py` is the authoritative list, and a test
-asserts it and `READ_ONLY_TOOLS` match every registered tool's `readOnlyHint`,
+asserts it and `READ_ONLY_TOOLS` match every registered tool's `read_only_hint`,
 so a newly added mutating tool cannot silently reach the agent.
 
 **Recursion guard:** `--strict-mcp-config` points the spawned agent's MCP config
@@ -249,7 +249,7 @@ when the idle window opens. It reuses the v1 spawn stack verbatim (hermetic
 watcher starts only when the dream is enabled **and** the `claude` CLI resolves on
 `PATH`; otherwise it would poll uselessly and every pass would no-op.
 
-This is **not** started via FastMCP's `lifespan=` parameter:
+This is **not** started via MCPServer's `lifespan=` parameter:
 `streamable_http_app()` wires its own lifespan (`session_manager.run()`) and
 hands the user lifespan to the low-level server, which in `stateless_http=True`
 mode runs *per request* - a task started there would be spawned and cancelled on

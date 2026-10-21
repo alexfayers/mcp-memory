@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -1336,7 +1336,7 @@ class TestServe:
             started.append("sweeping")
             await asyncio.sleep(3600)
 
-        async def fake_serve_http() -> None:
+        async def fake_serve_http(**_: Any) -> None:
             await asyncio.sleep(0.02)
 
         monkeypatch.setattr(server, "_sweep_loop", fake_sweep_loop)
@@ -1347,3 +1347,18 @@ class TestServe:
         self._wire_serve(monkeypatch, started)
         asyncio.run(server._serve())
         assert started == ["sweeping"]
+
+    def test_serves_on_the_configured_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        served: dict[str, Any] = {}
+
+        async def fake_serve_http(**kwargs: Any) -> None:
+            served.update(kwargs)
+
+        async def fake_sweep_loop() -> None:
+            await asyncio.sleep(3600)
+
+        monkeypatch.setenv("MCP_MEMORY_PORT", "8123")
+        monkeypatch.setattr(server, "_sweep_loop", fake_sweep_loop)
+        monkeypatch.setattr(server.mcp, "run_streamable_http_async", fake_serve_http)
+        asyncio.run(server._serve())
+        assert served["port"] == 8123

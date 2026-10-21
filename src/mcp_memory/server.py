@@ -1,4 +1,4 @@
-"""FastMCP server exposing the memory knowledge graph as MCP tools."""
+"""MCPServer exposing the memory knowledge graph as MCP tools."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 import anyio
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import Tool, ToolAnnotations
 
 from . import metrics, usefulness
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
     from .storage import Storage
 
-_READ_ONLY_ANNOTATIONS = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+_READ_ONLY_ANNOTATIONS = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 logger = logging.getLogger(__name__)
 
 
@@ -81,22 +81,17 @@ def _prune_schema(node: Any) -> Any:
     return pruned
 
 
-class _PrunedSchemaFastMCP(FastMCP):
-    """FastMCP whose advertised tool input schemas omit tokens the client does not need."""
+class _PrunedSchemaMCPServer(MCPServer):
+    """MCPServer whose advertised tool input schemas omit tokens the client does not need."""
 
     async def list_tools(self) -> list[Tool]:
         return [
-            tool.model_copy(update={"inputSchema": _prune_schema(tool.inputSchema)})
+            tool.model_copy(update={"input_schema": _prune_schema(tool.input_schema)})
             for tool in await super().list_tools()
         ]
 
 
-mcp = _PrunedSchemaFastMCP(
-    "mcp-memory",
-    stateless_http=True,
-    json_response=True,
-    port=int(os.environ.get("MCP_MEMORY_PORT", "8000")),
-)
+mcp = _PrunedSchemaMCPServer("mcp-memory")
 
 VALID_ENTITY_TYPES = frozenset({
     "project",
@@ -571,7 +566,9 @@ def _create_entities(
 
 @mcp.tool(
     description=CREATE_ENTITIES_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
+    ),
     title="Create entities",
 )
 @_track
@@ -710,7 +707,9 @@ def _set_metadata(
 
 @mcp.tool(
     description=SET_METADATA_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Set project metadata",
 )
 @_track
@@ -760,7 +759,9 @@ def get_group_members(project: str) -> dict[str, object]:
 
 @mcp.tool(
     description=MOVE_PROJECT_ENTITIES_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Move project entities",
 )
 @_track
@@ -776,7 +777,9 @@ def move_project_entities(source: str, target: str) -> dict[str, object]:
 
 @mcp.tool(
     description=MERGE_ENTITIES_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Merge entities",
 )
 @_track
@@ -795,7 +798,9 @@ def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
 
 @mcp.tool(
     description=MERGE_OBSERVATIONS_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Merge observations",
 )
 @_track
@@ -814,7 +819,9 @@ def merge_observations(project: str, entityName: str, sourceHash: str, targetHas
 
 @mcp.tool(
     description=DELETE_PROJECT_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Delete project",
 )
 @_track
@@ -942,7 +949,9 @@ def search_all_projects(
 
 @mcp.tool(
     description=CREATE_RELATIONS_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
+    ),
     title="Create relations",
 )
 @_track
@@ -969,7 +978,9 @@ def create_relations(
 
 @mcp.tool(
     description=DELETE_ENTITY_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Delete entity",
 )
 @_track
@@ -988,7 +999,9 @@ def delete_entity(
 
 @mcp.tool(
     description=RESTORE_ENTITY_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    ),
     title="Restore deleted entity",
 )
 @_track
@@ -1007,7 +1020,9 @@ def restore_entity(
 
 @mcp.tool(
     description=DELETE_RELATION_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Delete relation",
 )
 @_track
@@ -1061,7 +1076,9 @@ def get_entity_with_relations(
 
 @mcp.tool(
     description=ADD_OBSERVATIONS_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    ),
     title="Add observations",
 )
 @_track
@@ -1085,7 +1102,9 @@ def add_observations(
 
 @mcp.tool(
     description=DELETE_OBSERVATIONS_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Delete observations",
 )
 @_track
@@ -1106,7 +1125,9 @@ def delete_observations(
 
 @mcp.tool(
     description=EDIT_OBSERVATION_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Edit observation",
 )
 @_track
@@ -1128,7 +1149,9 @@ def edit_observation(
 
 @mcp.tool(
     description=TRIM_OBSERVATIONS_TO_OUTCOME_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Trim observations to outcome",
 )
 @_track
@@ -1163,7 +1186,9 @@ def _rename_entity(project: str, old_name: str, new_name: str) -> str:
 
 @mcp.tool(
     description=RENAME_ENTITY_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Rename entity",
 )
 @_track
@@ -1177,7 +1202,9 @@ def rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
 
 @mcp.tool(
     description=MOVE_ENTITY_CROSS_SCOPE_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
+    ),
     title="Move entity across scopes",
 )
 @_track
@@ -1198,7 +1225,9 @@ def move_entity_cross_scope(source_project: str, target_project: str, name: str)
 
 @mcp.tool(
     description=SET_ENTITY_STATUS_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    ),
     title="Set entity status",
 )
 @_track
@@ -1229,7 +1258,9 @@ def set_entity_status(
 
 @mcp.tool(
     description=VOTE_DESC,
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
+    ),
     title="Vote on usefulness",
 )
 @_track
@@ -1280,14 +1311,18 @@ async def _sweep_loop() -> None:
 async def _serve() -> None:
     """Serve over streamable HTTP, running the maintenance sweep loop alongside.
 
-    The sweep loop is an explicit background task rather than a FastMCP ``lifespan``:
+    The sweep loop is an explicit background task rather than an MCPServer ``lifespan``:
     this server runs with ``stateless_http=True``, where a lifespan-attached task is
     spawned and cancelled per client session rather than once globally, which is wrong
     for a singleton periodic job. Cancelled cleanly on shutdown.
     """
     sweeper = asyncio.create_task(_sweep_loop())
     try:
-        await mcp.run_streamable_http_async()
+        await mcp.run_streamable_http_async(
+            port=int(os.environ.get("MCP_MEMORY_PORT", "8000")),
+            stateless_http=True,
+            json_response=True,
+        )
     finally:
         sweeper.cancel()
         with contextlib.suppress(asyncio.CancelledError):

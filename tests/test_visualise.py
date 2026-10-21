@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import pytest
 
 from mcp_memory import (
@@ -42,9 +42,9 @@ def _clear_activity() -> None:
 @pytest.fixture
 def client(store: Storage) -> httpx.AsyncClient:
     """Create an async test client with visualise routes registered."""
-    mcp = FastMCP("test", stateless_http=True, json_response=True)
+    mcp = MCPServer("test")
     register_visualise_routes(mcp, lambda: store)
-    app = mcp.streamable_http_app()
+    app = mcp.streamable_http_app(stateless_http=True, json_response=True)
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 

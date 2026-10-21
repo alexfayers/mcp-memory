@@ -18,7 +18,7 @@ from .metrics import usage_over_time
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     from .models import Entity, Observation
     from .storage import NodeList, Storage
@@ -172,8 +172,8 @@ async def _parse_vote_body(
     return project, name, vote, (observation_hash if require_hash else None)
 
 
-def register_visualise_routes(mcp: FastMCP, get_db: Callable[[], Storage]) -> None:
-    """Register the /visualise and /api/* custom routes on the FastMCP server."""
+def register_visualise_routes(mcp: MCPServer, get_db: Callable[[], Storage]) -> None:
+    """Register the /visualise and /api/* custom routes on the MCPServer."""
 
     @mcp.custom_route("/api/projects", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_projects(request: Request) -> JSONResponse:

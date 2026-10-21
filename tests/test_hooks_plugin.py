@@ -67,7 +67,7 @@ _needs_frustration_check = pytest.mark.skipif(
 
 _READ_TOOL_NAMES = sorted(READ_ONLY_TOOLS)
 
-_REGISTERED_READ_ONLY = {tool.name: tool.annotations.readOnlyHint for tool in asyncio.run(server.mcp.list_tools())}
+_REGISTERED_READ_ONLY = {tool.name: tool.annotations.read_only_hint for tool in asyncio.run(server.mcp.list_tools())}
 
 _EDIT_TOOL_NAMES = sorted(FILE_EDIT_TOOLS)
 
