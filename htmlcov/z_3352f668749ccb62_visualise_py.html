@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_a44f0ac069e85531___init___py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
-            created at 2026-10-21 12:36 +0000
+            created at 2026-10-21 16:21 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -100,7 +100,7 @@
     <p class="exc show_exc"><span class="n"><a id="t18" href="#t18">18</a></span><span class="t"><span class="key">if</span> <span class="nam">TYPE_CHECKING</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t19" href="#t19">19</a></span><span class="t">    <span class="key">from</span> <span class="nam">collections</span><span class="op">.</span><span class="nam">abc</span> <span class="key">import</span> <span class="nam">Callable</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t20" href="#t20">20</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="exc show_exc"><span class="n"><a id="t21" href="#t21">21</a></span><span class="t">    <span class="key">from</span> <span class="nam">mcp</span><span class="op">.</span><span class="nam">server</span><span class="op">.</span><span class="nam">fastmcp</span> <span class="key">import</span> <span class="nam">FastMCP</span>&nbsp;</span><span class="r"></span></p>
+    <p class="exc show_exc"><span class="n"><a id="t21" href="#t21">21</a></span><span class="t">    <span class="key">from</span> <span class="nam">mcp</span><span class="op">.</span><span class="nam">server</span><span class="op">.</span><span class="nam">mcpserver</span> <span class="key">import</span> <span class="nam">MCPServer</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t22" href="#t22">22</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t23" href="#t23">23</a></span><span class="t">    <span class="key">from</span> <span class="op">.</span><span class="nam">models</span> <span class="key">import</span> <span class="nam">Entity</span><span class="op">,</span> <span class="nam">Observation</span>&nbsp;</span><span class="r"></span></p>
     <p class="exc show_exc"><span class="n"><a id="t24" href="#t24">24</a></span><span class="t">    <span class="key">from</span> <span class="op">.</span><span class="nam">storage</span> <span class="key">import</span> <span class="nam">NodeList</span><span class="op">,</span> <span class="nam">Storage</span>&nbsp;</span><span class="r"></span></p>
@@ -254,8 +254,8 @@
     <p class="run"><span class="n"><a id="t172" href="#t172">172</a></span><span class="t">    <span class="key">return</span> <span class="nam">project</span><span class="op">,</span> <span class="nam">name</span><span class="op">,</span> <span class="nam">vote</span><span class="op">,</span> <span class="op">(</span><span class="nam">observation_hash</span> <span class="key">if</span> <span class="nam">require_hash</span> <span class="key">else</span> <span class="key">None</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t173" href="#t173">173</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t174" href="#t174">174</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t175" href="#t175">175</a></span><span class="t"><span class="key">def</span> <span class="nam">register_visualise_routes</span><span class="op">(</span><span class="nam">mcp</span><span class="op">:</span> <span class="nam">FastMCP</span><span class="op">,</span> <span class="nam">get_db</span><span class="op">:</span> <span class="nam">Callable</span><span class="op">[</span><span class="op">[</span><span class="op">]</span><span class="op">,</span> <span class="nam">Storage</span><span class="op">]</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t176" href="#t176">176</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Register the /visualise and /api/* custom routes on the FastMCP server.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t175" href="#t175">175</a></span><span class="t"><span class="key">def</span> <span class="nam">register_visualise_routes</span><span class="op">(</span><span class="nam">mcp</span><span class="op">:</span> <span class="nam">MCPServer</span><span class="op">,</span> <span class="nam">get_db</span><span class="op">:</span> <span class="nam">Callable</span><span class="op">[</span><span class="op">[</span><span class="op">]</span><span class="op">,</span> <span class="nam">Storage</span><span class="op">]</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t176" href="#t176">176</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Register the /visualise and /api/* custom routes on the MCPServer.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t177" href="#t177">177</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t178" href="#t178">178</a></span><span class="t">    <span class="op">@</span><span class="nam">mcp</span><span class="op">.</span><span class="nam">custom_route</span><span class="op">(</span><span class="str">&quot;/api/projects&quot;</span><span class="op">,</span> <span class="nam">methods</span><span class="op">=</span><span class="op">[</span><span class="str">&quot;GET&quot;</span><span class="op">]</span><span class="op">,</span> <span class="nam">include_in_schema</span><span class="op">=</span><span class="key">False</span><span class="op">)</span>  <span class="com"># type: ignore[untyped-decorator]</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t179" href="#t179">179</a></span><span class="t">    <span class="key">async</span> <span class="key">def</span> <span class="nam">api_projects</span><span class="op">(</span><span class="nam">request</span><span class="op">:</span> <span class="nam">Request</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">JSONResponse</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -426,7 +426,7 @@
             <a class="nav" href="z_a44f0ac069e85531___init___py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
-            created at 2026-10-21 12:36 +0000
+            created at 2026-10-21 16:21 +0000
         </p>
     </div>
 </footer>

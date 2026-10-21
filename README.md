@@ -6,7 +6,7 @@
 |----------------------------------------------------- | -------: | -------: | ------: | --------: |
 | src/mcp\_memory/\_\_init\_\_.py                      |        0 |        0 |    100% |           |
 | src/mcp\_memory/activity.py                          |      113 |        3 |     97% |145-146, 195 |
-| src/mcp\_memory/agent.py                             |      285 |       13 |     95% |462-477, 835-836, 907 |
+| src/mcp\_memory/agent.py                             |      285 |       13 |     95% |457-472, 830-831, 902 |
 | src/mcp\_memory/atomic\_write.py                     |       16 |        3 |     81% |     20-22 |
 | src/mcp\_memory/audit.py                             |      108 |        0 |    100% |           |
 | src/mcp\_memory/cli.py                               |      481 |      178 |     63% |61, 108-112, 173, 194-206, 224-237, 242-251, 261-265, 270-281, 309-310, 317-318, 323-325, 329-331, 343-344, 441-443, 456-458, 466-509, 521, 542-548, 568-574, 599-611, 633-642, 654-655, 659-660, 670-676, 694-695, 715-721, 849-862, 871, 873, 875, 877, 882-891 |
@@ -29,10 +29,10 @@
 | src/mcp\_memory/recall\_efficiency.py                |       18 |        0 |    100% |           |
 | src/mcp\_memory/recall\_status.py                    |       60 |        1 |     98% |       133 |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      516 |       46 |     91% |52-53, 348, 445, 455, 493, 553-555, 559, 569, 626-627, 652-653, 661, 669, 681-682, 742-743, 757-758, 939-940, 965, 981-986, 1021-1028, 1058-1059, 1082-1083, 1103-1104, 1299, 1303 |
+| src/mcp\_memory/server.py                            |      516 |       45 |     91% |52-53, 343, 440, 450, 488, 548-550, 554, 623-624, 649-650, 658, 666, 678-679, 741-742, 756-757, 946-947, 974, 992-997, 1036-1043, 1073-1074, 1099-1100, 1122-1123, 1334, 1338 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
-| src/mcp\_memory/storage/connection.py                |       60 |        0 |    100% |           |
+| src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
 | src/mcp\_memory/storage/operations/\_\_init\_\_.py   |        0 |        0 |    100% |           |
 | src/mcp\_memory/storage/operations/maintenance.py    |       49 |        3 |     94% |123-124, 131 |
 | src/mcp\_memory/storage/operations/reads.py          |      148 |        0 |    100% |           |
@@ -93,13 +93,14 @@
 | tests/test\_recall\_status.py                        |       91 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
-| tests/test\_server.py                                |      747 |        0 |    100% |           |
+| tests/test\_server.py                                |      758 |        1 |     99% |      1358 |
+| tests/test\_server\_http.py                          |       59 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       12 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       50 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       66 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      620 |        0 |    100% |           |
-| **TOTAL**                                            | **13421** |  **516** | **96%** |           |
+| **TOTAL**                                            | **13500** |  **516** | **96%** |           |
 
 
 ## Setup coverage badge

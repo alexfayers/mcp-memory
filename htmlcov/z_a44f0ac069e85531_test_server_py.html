@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>Coverage for tests/test_server.py: 100%</title>
+    <title>Coverage for tests/test_server.py: 99%</title>
     <link rel="icon" sizes="32x32" href="favicon_32_cb_c827f16f.png">
     <link rel="stylesheet" href="style_cb_4667309f.css" type="text/css">
     <script src="coverage_html_cb_15cffcd0.js" defer></script>
@@ -12,7 +12,7 @@
     <div class="content">
         <h1>
             <span class="text">Coverage for </span><b>tests<span class="sep">/</span>test_server.py</b>:
-            <span class="pc_cov">100%</span>
+            <span class="pc_cov">99%</span>
         </h1>
         <aside id="help_panel_wrapper">
             <input id="help_panel_state" type="checkbox">
@@ -54,18 +54,18 @@
             </div>
         </aside>
         <h2>
-            <span class="text">747 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">747<span class="text"> run</span></button>
-            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">0<span class="text"> missing</span></button>
+            <span class="text">758 statements &nbsp;</span>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">757<span class="text"> run</span></button>
+            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">1<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">2<span class="text"> excluded</span></button>
         </h2>
         <p class="text">
             <a id="prevFileLink" class="nav" href="z_a44f0ac069e85531_test_review_tracker_py.html">&#xab; prev</a> &nbsp; &nbsp;
             <a id="indexLink" class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
-            <a id="nextFileLink" class="nav" href="z_a44f0ac069e85531_test_tool_annotations_py.html">&#xbb; next</a>
+            <a id="nextFileLink" class="nav" href="z_a44f0ac069e85531_test_server_http_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
-            created at 2026-10-21 12:36 +0000
+            created at 2026-10-21 16:21 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -88,7 +88,7 @@
     <p class="run"><span class="n"><a id="t6" href="#t6">6</a></span><span class="t"><span class="key">from</span> <span class="nam">collections</span><span class="op">.</span><span class="nam">abc</span> <span class="key">import</span> <span class="nam">Iterator</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t7" href="#t7">7</a></span><span class="t"><span class="key">from</span> <span class="nam">pathlib</span> <span class="key">import</span> <span class="nam">Path</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t8" href="#t8">8</a></span><span class="t"><span class="key">from</span> <span class="nam">types</span> <span class="key">import</span> <span class="nam">SimpleNamespace</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t9" href="#t9">9</a></span><span class="t"><span class="key">from</span> <span class="nam">typing</span> <span class="key">import</span> <span class="nam">TYPE_CHECKING</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t9" href="#t9">9</a></span><span class="t"><span class="key">from</span> <span class="nam">typing</span> <span class="key">import</span> <span class="nam">TYPE_CHECKING</span><span class="op">,</span> <span class="nam">Any</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t10" href="#t10">10</a></span><span class="t"><span class="key">from</span> <span class="nam">unittest</span><span class="op">.</span><span class="nam">mock</span> <span class="key">import</span> <span class="nam">MagicMock</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t11" href="#t11">11</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t12" href="#t12">12</a></span><span class="t"><span class="key">import</span> <span class="nam">pytest</span>&nbsp;</span><span class="r"></span></p>
@@ -1418,7 +1418,7 @@
     <p class="run"><span class="n"><a id="t1336" href="#t1336">1336</a></span><span class="t">            <span class="nam">started</span><span class="op">.</span><span class="nam">append</span><span class="op">(</span><span class="str">&quot;sweeping&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1337" href="#t1337">1337</a></span><span class="t">            <span class="key">await</span> <span class="nam">asyncio</span><span class="op">.</span><span class="nam">sleep</span><span class="op">(</span><span class="num">3600</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1338" href="#t1338">1338</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1339" href="#t1339">1339</a></span><span class="t">        <span class="key">async</span> <span class="key">def</span> <span class="nam">fake_serve_http</span><span class="op">(</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1339" href="#t1339">1339</a></span><span class="t">        <span class="key">async</span> <span class="key">def</span> <span class="nam">fake_serve_http</span><span class="op">(</span><span class="op">**</span><span class="nam">_</span><span class="op">:</span> <span class="nam">Any</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1340" href="#t1340">1340</a></span><span class="t">            <span class="key">await</span> <span class="nam">asyncio</span><span class="op">.</span><span class="nam">sleep</span><span class="op">(</span><span class="num">0.02</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1341" href="#t1341">1341</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1342" href="#t1342">1342</a></span><span class="t">        <span class="nam">monkeypatch</span><span class="op">.</span><span class="nam">setattr</span><span class="op">(</span><span class="nam">server</span><span class="op">,</span> <span class="str">&quot;_sweep_loop&quot;</span><span class="op">,</span> <span class="nam">fake_sweep_loop</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
@@ -1429,16 +1429,31 @@
     <p class="run"><span class="n"><a id="t1347" href="#t1347">1347</a></span><span class="t">        <span class="nam">self</span><span class="op">.</span><span class="nam">_wire_serve</span><span class="op">(</span><span class="nam">monkeypatch</span><span class="op">,</span> <span class="nam">started</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1348" href="#t1348">1348</a></span><span class="t">        <span class="nam">asyncio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">server</span><span class="op">.</span><span class="nam">_serve</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1349" href="#t1349">1349</a></span><span class="t">        <span class="key">assert</span> <span class="nam">started</span> <span class="op">==</span> <span class="op">[</span><span class="str">&quot;sweeping&quot;</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1350" href="#t1350">1350</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1351" href="#t1351">1351</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_serves_on_the_configured_port</span><span class="op">(</span><span class="nam">self</span><span class="op">,</span> <span class="nam">monkeypatch</span><span class="op">:</span> <span class="nam">pytest</span><span class="op">.</span><span class="nam">MonkeyPatch</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1352" href="#t1352">1352</a></span><span class="t">        <span class="nam">served</span><span class="op">:</span> <span class="nam">dict</span><span class="op">[</span><span class="nam">str</span><span class="op">,</span> <span class="nam">Any</span><span class="op">]</span> <span class="op">=</span> <span class="op">{</span><span class="op">}</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1353" href="#t1353">1353</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1354" href="#t1354">1354</a></span><span class="t">        <span class="key">async</span> <span class="key">def</span> <span class="nam">fake_serve_http</span><span class="op">(</span><span class="op">**</span><span class="nam">kwargs</span><span class="op">:</span> <span class="nam">Any</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1355" href="#t1355">1355</a></span><span class="t">            <span class="nam">served</span><span class="op">.</span><span class="nam">update</span><span class="op">(</span><span class="nam">kwargs</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1356" href="#t1356">1356</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1357" href="#t1357">1357</a></span><span class="t">        <span class="key">async</span> <span class="key">def</span> <span class="nam">fake_sweep_loop</span><span class="op">(</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t1358" href="#t1358">1358</a></span><span class="t">            <span class="key">await</span> <span class="nam">asyncio</span><span class="op">.</span><span class="nam">sleep</span><span class="op">(</span><span class="num">3600</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1359" href="#t1359">1359</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1360" href="#t1360">1360</a></span><span class="t">        <span class="nam">monkeypatch</span><span class="op">.</span><span class="nam">setenv</span><span class="op">(</span><span class="str">&quot;MCP_MEMORY_PORT&quot;</span><span class="op">,</span> <span class="str">&quot;8123&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1361" href="#t1361">1361</a></span><span class="t">        <span class="nam">monkeypatch</span><span class="op">.</span><span class="nam">setattr</span><span class="op">(</span><span class="nam">server</span><span class="op">,</span> <span class="str">&quot;_sweep_loop&quot;</span><span class="op">,</span> <span class="nam">fake_sweep_loop</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1362" href="#t1362">1362</a></span><span class="t">        <span class="nam">monkeypatch</span><span class="op">.</span><span class="nam">setattr</span><span class="op">(</span><span class="nam">server</span><span class="op">.</span><span class="nam">mcp</span><span class="op">,</span> <span class="str">&quot;run_streamable_http_async&quot;</span><span class="op">,</span> <span class="nam">fake_serve_http</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1363" href="#t1363">1363</a></span><span class="t">        <span class="nam">asyncio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">server</span><span class="op">.</span><span class="nam">_serve</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1364" href="#t1364">1364</a></span><span class="t">        <span class="key">assert</span> <span class="nam">served</span><span class="op">[</span><span class="str">&quot;port&quot;</span><span class="op">]</span> <span class="op">==</span> <span class="num">8123</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
         <p>
             <a class="nav" href="z_a44f0ac069e85531_test_review_tracker_py.html">&#xab; prev</a> &nbsp; &nbsp;
             <a class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
-            <a class="nav" href="z_a44f0ac069e85531_test_tool_annotations_py.html">&#xbb; next</a>
+            <a class="nav" href="z_a44f0ac069e85531_test_server_http_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
-            created at 2026-10-21 12:36 +0000
+            created at 2026-10-21 16:21 +0000
         </p>
     </div>
 </footer>
