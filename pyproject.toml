@@ -6,7 +6,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 authors = [{ name = "Alex Fayers" }]
-dependencies = ["mcp>=1.27,<2", "httpx", "better-profanity"]
+dependencies = ["mcp>=2.3,<3", "httpx", "better-profanity"]
 
 [project.scripts]
 mcp-memory = "mcp_memory.cli:main"
