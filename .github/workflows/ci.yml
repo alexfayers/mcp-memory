@@ -55,6 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
       - uses: extractions/setup-just@v4
@@ -66,13 +67,14 @@ jobs:
         id: benchmark
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          ALLOW_GROWTH: ${{ contains(github.event.pull_request.labels.*.name, 'size-increase-accepted') }}
-          ALLOW_RANKING_DROP: ${{ contains(github.event.pull_request.labels.*.name, 'ranking-drop-accepted') }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           git fetch --depth 1 origin "$BASE_SHA"
+          labels=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')
           flags=""
-          if [ "$ALLOW_GROWTH" = "true" ]; then flags="$flags --allow-growth"; fi
-          if [ "$ALLOW_RANKING_DROP" = "true" ]; then flags="$flags --allow-ranking-drop"; fi
+          if grep -qx 'size-increase-accepted' <<< "$labels"; then flags="$flags --allow-growth"; fi
+          if grep -qx 'ranking-drop-accepted' <<< "$labels"; then flags="$flags --allow-ranking-drop"; fi
           status=0
           just bench-diff "$BASE_SHA" $flags > benchmark.md || status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
