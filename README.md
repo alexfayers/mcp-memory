@@ -29,7 +29,7 @@
 | src/mcp\_memory/recall\_efficiency.py                |       18 |        0 |    100% |           |
 | src/mcp\_memory/recall\_status.py                    |       60 |        1 |     98% |       133 |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      516 |       45 |     91% |52-53, 343, 440, 450, 488, 548-550, 554, 623-624, 649-650, 658, 666, 678-679, 741-742, 756-757, 946-947, 974, 992-997, 1036-1043, 1073-1074, 1099-1100, 1122-1123, 1334, 1338 |
+| src/mcp\_memory/server.py                            |      517 |       45 |     91% |53-54, 344, 441, 451, 489, 549-551, 555, 626-627, 653-654, 662, 670, 682-683, 745-746, 760-761, 950-951, 978, 996-1001, 1040-1047, 1077-1078, 1104-1105, 1127-1128, 1341, 1345 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
@@ -95,12 +95,12 @@
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
 | tests/test\_server.py                                |      758 |        1 |     99% |      1358 |
 | tests/test\_server\_http.py                          |       59 |        0 |    100% |           |
-| tests/test\_tool\_annotations.py                     |       12 |        0 |    100% |           |
+| tests/test\_tool\_annotations.py                     |       17 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       50 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       66 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      620 |        0 |    100% |           |
-| **TOTAL**                                            | **13500** |  **516** | **96%** |           |
+| **TOTAL**                                            | **13506** |  **516** | **96%** |           |
 
 
 ## Setup coverage badge
