@@ -16,3 +16,16 @@ class TestToolAnnotations:
             assert tools[name].annotations.read_only_hint is True
         for name in tool_names.MUTATING_TOOLS:
             assert tools[name].annotations.read_only_hint is False
+
+    def test_only_the_hot_tools_are_marked_always_load(self) -> None:
+        hot_tools = {
+            "add_observations",
+            "read_graph",
+            "search_nodes",
+            "create_entities",
+            "set_entity_status",
+            "trim_observations_to_outcome",
+        }
+        tools = asyncio.run(server.mcp.list_tools())
+        always_loaded = {tool.name for tool in tools if (tool.meta or {}).get("anthropic/alwaysLoad") is True}
+        assert always_loaded == hot_tools
