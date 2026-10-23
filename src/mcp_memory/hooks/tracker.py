@@ -14,6 +14,8 @@ from mcp_memory.config import get_data_dir
 logger = logging.getLogger("hooks")
 
 _MEMORY_BLOCK_THRESHOLD = 10
+_MEMORY_WARN_RATIO = 0.8
+_MEMORY_WARN_THRESHOLD = _MEMORY_BLOCK_THRESHOLD * _MEMORY_WARN_RATIO
 
 
 def _state_path() -> Path:
@@ -73,11 +75,16 @@ def reset(task_id: str) -> None:
         _write(data)
 
 
-def should_block(task_id: str, threshold: int = _MEMORY_BLOCK_THRESHOLD) -> bool:
+def should_block(task_id: str, threshold: float = _MEMORY_BLOCK_THRESHOLD) -> bool:
     """Return True if the counter has reached the blocking threshold."""
     with _locked():
         count = _read().get(task_id, 0)
     return isinstance(count, (int, float)) and count >= threshold
+
+
+def should_warn(task_id: str, threshold: float = _MEMORY_WARN_THRESHOLD) -> bool:
+    """Return True if the counter has reached the soft reminder threshold."""
+    return should_block(task_id, threshold)
 
 
 def clear(task_id: str) -> None:
@@ -124,6 +131,20 @@ def set_scope(task_id: str, project: str) -> None:
     with _locked():
         data = _read()
         data[f"{task_id}:scope"] = project
+        _write(data)
+
+
+def has_edited(task_id: str) -> bool:
+    """Return True if the task has made a file edit."""
+    with _locked():
+        return _read().get(f"{task_id}:edited") is True
+
+
+def mark_edited(task_id: str) -> None:
+    """Record that the task has made a file edit."""
+    with _locked():
+        data = _read()
+        data[f"{task_id}:edited"] = True
         _write(data)
 
 

@@ -52,6 +52,16 @@ class TestShouldBlock:
         assert tracker.should_block("t1") is False
 
 
+class TestShouldWarn:
+    def test_warns_from_the_soft_threshold_but_not_before(self) -> None:
+        assert tracker._MEMORY_WARN_THRESHOLD < tracker._MEMORY_BLOCK_THRESHOLD
+        for _ in range(int(tracker._MEMORY_WARN_THRESHOLD) - 1):
+            tracker.increment("t1")
+        assert tracker.should_warn("t1") is False
+        tracker.increment("t1")
+        assert tracker.should_warn("t1") is True
+
+
 class TestReset:
     def test_reset_zeroes_counter(self) -> None:
         for _ in range(tracker._MEMORY_BLOCK_THRESHOLD):

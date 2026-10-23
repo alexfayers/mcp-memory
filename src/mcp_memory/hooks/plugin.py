@@ -17,7 +17,15 @@ from urllib.parse import urlparse
 
 from cline_hooks.core.parameters import FileEditParameters, ReadParameters
 from cline_hooks.core.plugin import HookResult, HooksPlugin, collect_contributions, hookimpl, hookspec, is_subagent
-from cline_hooks.core.vocabulary import FILE_EDIT_TOOLS, FILE_READ_TOOLS, SHELL_TOOLS, CanonicalTool
+from cline_hooks.core.vocabulary import (
+    BOOKKEEPING_TOOLS,
+    FILE_EDIT_TOOLS,
+    FILE_READ_TOOLS,
+    MESSAGE_TOOLS,
+    SHELL_TOOLS,
+    SKILL_TOOLS,
+    CanonicalTool,
+)
 from cline_hooks.plugins.startup_blocks import StartupBlock
 
 from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
@@ -30,13 +38,16 @@ from mcp_memory.hooks.tracker import (
     clear,
     get_reminder_chance,
     get_scope,
+    has_edited,
     has_scope_blocked,
     increment,
+    mark_edited,
     mark_scope_blocked,
     reset,
     set_reminder_chance,
     set_scope,
     should_block,
+    should_warn,
 )
 from mcp_memory.path_resolver import normalize_path, resolve_project_for_path
 from mcp_memory.storage import open_readonly, open_writable
@@ -48,21 +59,25 @@ if TYPE_CHECKING:
     from mcp_memory.storage import Storage
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(MUTATING_TOOLS)
+_MEMORY_WRITE_CALL = re.compile(rf"_(?:{'|'.join(map(re.escape, MUTATING_TOOLS))})\b")
 
 _MEMORY_READ_TOOL_NAMES = frozenset(READ_ONLY_TOOLS)
 
 _MEMORY_REMINDER_TOOLS = FILE_EDIT_TOOLS | SHELL_TOOLS | {CanonicalTool.PLAN_MODE_RESPOND}
 
+_MEMORY_REPLACE_CLAUSE = (
+    "If this replaces or contradicts an observation, search_nodes then edit_observation it instead of appending."
+)
 _MEMORY_REMINDER_TEMPLATE = (
-    "MEMORY UPDATE REQUIRED: Update the `{project}` project and `global`"
+    "MEMORY UPDATE REQUIRED: MUST update the `{project}` project and `global`"
     " scopes in the memory server now.\n"
-    "Record what you just did and why. One fact per observation."
+    "MUST record what you just did and why. MUST write one fact per observation. " + _MEMORY_REPLACE_CLAUSE
 )
 _MEMORY_REMINDER_CHANCE = 0.6
 _MEMORY_COOLDOWN_STEPS = 5
 _MEMORY_BLOCK_TEMPLATE = (
-    "MEMORY UPDATE REQUIRED: You have made many tool calls without updating memory. "
-    "Update the `{project}` project and `global` scopes in the memory server before continuing."
+    "MEMORY UPDATE REQUIRED: MUST update the `{project}` project and `global` scopes in the memory server "
+    "before continuing. " + _MEMORY_REPLACE_CLAUSE
 )
 _MEMORY_SERVER_DOWN_NOTE = (
     "Memory server appears to be unreachable ({url}) - skipping the memory-update "
@@ -115,6 +130,9 @@ _START_PROJECT_RELATIONS = 15
 _DEFAULT_WRAPPER_TOOLS = frozenset({"codemode"})
 _WRAPPER_TOOLS_ENV = "MCP_MEMORY_WRAPPER_TOOLS"
 
+_UNCOUNTED_TOOLS = BOOKKEEPING_TOOLS | SKILL_TOOLS | MESSAGE_TOOLS
+_UNCOUNTED_TOOLS_ENV = "MCP_MEMORY_UNCOUNTED_TOOLS"
+
 
 def _read_only_agent_types() -> frozenset[str]:
     """Return the agent types exempt from the memory gate, including env overrides."""
@@ -133,6 +151,19 @@ def _is_wrapper_tool(tool_name: str) -> bool:
     raw = os.environ.get(_WRAPPER_TOOLS_ENV, "")
     extra = {name.strip() for name in raw.split(",") if name.strip()}
     return _extract_mcp_suffix(tool_name) in _DEFAULT_WRAPPER_TOOLS | extra
+
+
+def _is_bookkeeping_tool(tool_name: str) -> bool:
+    """Return True if a tool only does harness bookkeeping and is not counted toward the gate."""
+    raw = os.environ.get(_UNCOUNTED_TOOLS_ENV, "")
+    extra = {name.strip() for name in raw.split(",") if name.strip()}
+    return _extract_mcp_suffix(tool_name) in _UNCOUNTED_TOOLS | extra
+
+
+def _is_uncounted_call(tool_name: str, parameters: dict[str, object], kwargs: dict[str, object]) -> bool:
+    """Return True if a call is made inside a wrapper tool, or is a wrapper call running a memory write."""
+    runs_memory_write = _is_wrapper_tool(tool_name) and _MEMORY_WRITE_CALL.search(str(parameters)) is not None
+    return bool(kwargs.get("parent_tool_call_id")) or runs_memory_write
 
 
 def _file_edit_tool_names() -> frozenset[str]:
@@ -800,7 +831,7 @@ class MemoryPlugin(HooksPlugin):
         project_scope = _task_scope(task_id, _str_list(kwargs.get("workspace_roots", [])))
         if _is_memory_write(tool_name, parameters):
             return _check_memory_write(task_id, project_scope, tool_name, parameters)
-        if _is_memory_read(tool_name, parameters) or _is_wrapper_tool(tool_name):
+        if _is_memory_read(tool_name, parameters) or _is_uncounted_call(tool_name, parameters, kwargs):
             return None
         if is_subagent(kwargs):
             return None
@@ -820,7 +851,7 @@ class MemoryPlugin(HooksPlugin):
                 "arguments": mcp_arguments,
             }
             return _check_memory_write(task_id, project_scope, "use_mcp_tool", params)
-        if mcp_tool_name in _MEMORY_READ_TOOL_NAMES:
+        if mcp_tool_name in _MEMORY_READ_TOOL_NAMES or kwargs.get("parent_tool_call_id"):
             return None
         if is_subagent(kwargs):
             return None
@@ -836,26 +867,34 @@ class MemoryPlugin(HooksPlugin):
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
         _task_scope(task_id, workspace_roots)
 
+        if _is_file_edit(tool_name):
+            mark_edited(task_id)
+
         if _is_memory_write(tool_name, parameters):
             reset(task_id)
             set_reminder_chance(task_id, 0.0)
             record_write()
             return None
 
-        if _is_memory_read(tool_name, parameters) or _is_wrapper_tool(tool_name):
+        if (
+            _is_memory_read(tool_name, parameters)
+            or _is_bookkeeping_tool(tool_name)
+            or _is_uncounted_call(tool_name, parameters, kwargs)
+        ):
             return None
 
         if _is_file_edit(tool_name):
             increment(task_id, _EDIT_TOOL_WEIGHT)
-        else:
+        elif has_edited(task_id):
             increment(task_id)
         _record_scope_from_parameters(task_id, tool_name, parameters)
 
-        if tool_name in _MEMORY_REMINDER_TOOLS:
-            if _reminder_due(task_id):
-                reminder = _MEMORY_REMINDER_TEMPLATE.format(
-                    project=_task_scope(task_id, workspace_roots),
-                )
-                return HookResult(notes=[reminder])
+        if should_warn(task_id) or (
+            tool_name in _MEMORY_REMINDER_TOOLS and has_edited(task_id) and _reminder_due(task_id)
+        ):
+            reminder = _MEMORY_REMINDER_TEMPLATE.format(
+                project=_task_scope(task_id, workspace_roots),
+            )
+            return HookResult(notes=[reminder])
 
         return None
