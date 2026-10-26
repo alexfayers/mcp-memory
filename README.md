@@ -6,12 +6,12 @@
 |----------------------------------------------------- | -------: | -------: | ------: | --------: |
 | src/mcp\_memory/\_\_init\_\_.py                      |        0 |        0 |    100% |           |
 | src/mcp\_memory/activity.py                          |      113 |        3 |     97% |145-146, 195 |
-| src/mcp\_memory/agent.py                             |      285 |       13 |     95% |457-472, 830-831, 902 |
 | src/mcp\_memory/atomic\_write.py                     |       16 |        3 |     81% |     20-22 |
 | src/mcp\_memory/audit.py                             |      108 |        0 |    100% |           |
-| src/mcp\_memory/cli.py                               |      481 |      178 |     63% |61, 108-112, 173, 194-206, 224-237, 242-251, 261-265, 270-281, 309-310, 317-318, 323-325, 329-331, 343-344, 441-443, 456-458, 466-509, 521, 542-548, 568-574, 599-611, 633-642, 654-655, 659-660, 670-676, 694-695, 715-721, 849-862, 871, 873, 875, 877, 882-891 |
-| src/mcp\_memory/config.py                            |      118 |        2 |     98% |  141, 263 |
-| src/mcp\_memory/dream\_status.py                     |      113 |        2 |     98% |  227, 253 |
+| src/mcp\_memory/cli.py                               |      593 |      126 |     79% |67, 87-91, 162, 191-196, 214-227, 232-241, 250, 262, 277, 333-337, 342-353, 381-382, 389-390, 395-397, 401-403, 415-416, 513-515, 528-530, 543, 559-560, 582-583, 586-589, 595-598, 604-607, 665-666, 700-701, 736-737, 764-773, 785-786, 805-807, 825-826, 850-852, 982, 984, 986, 988, 992-994, 1003, 1005, 1007, 1009, 1014-1023 |
+| src/mcp\_memory/config.py                            |      103 |        1 |     99% |       221 |
+| src/mcp\_memory/dream.py                             |      201 |       10 |     95% |   340-355 |
+| src/mcp\_memory/dream\_status.py                     |      113 |        2 |     98% |  226, 252 |
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       69 |        4 |     94% |52-53, 85, 87 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
@@ -26,10 +26,8 @@
 | src/mcp\_memory/models.py                            |       42 |        0 |    100% |           |
 | src/mcp\_memory/path\_resolver.py                    |       35 |        1 |     97% |        18 |
 | src/mcp\_memory/payload.py                           |       11 |        0 |    100% |           |
-| src/mcp\_memory/recall\_efficiency.py                |       18 |        0 |    100% |           |
-| src/mcp\_memory/recall\_status.py                    |       60 |        1 |     98% |       133 |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      517 |       45 |     91% |53-54, 344, 441, 451, 489, 549-551, 555, 626-627, 653-654, 662, 670, 682-683, 745-746, 760-761, 950-951, 978, 996-1001, 1040-1047, 1077-1078, 1104-1105, 1127-1128, 1341, 1345 |
+| src/mcp\_memory/server.py                            |      520 |       45 |     91% |53-54, 344, 441, 451, 489, 549-551, 555, 626-627, 653-654, 662, 670, 682-683, 745-746, 760-761, 950-951, 978, 996-1001, 1040-1047, 1077-1078, 1104-1105, 1127-1128, 1344, 1348 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
@@ -53,7 +51,7 @@
 | src/mcp\_memory/storage/services/integrity.py        |       24 |        0 |    100% |           |
 | src/mcp\_memory/tool\_names.py                       |        2 |        0 |    100% |           |
 | src/mcp\_memory/usefulness.py                        |       72 |        2 |     97% |     50-51 |
-| src/mcp\_memory/visualise.py                         |      175 |        5 |     97% |161, 221-222, 310, 314 |
+| src/mcp\_memory/visualise.py                         |      160 |        5 |     97% |136, 195-196, 269, 273 |
 | tests/\_\_init\_\_.py                                |       43 |        1 |     98% |        85 |
 | tests/conftest.py                                    |       10 |        0 |    100% |           |
 | tests/eval/\_\_init\_\_.py                           |        0 |        0 |    100% |           |
@@ -66,23 +64,22 @@
 | tests/eval/regen\_baseline.py                        |       27 |        1 |     96% |        61 |
 | tests/eval/size\_baseline.py                         |       45 |        0 |    100% |           |
 | tests/eval/test\_badge\_endpoints.py                 |       23 |        0 |    100% |           |
-| tests/eval/test\_benchmark\_scenarios.py             |       75 |        0 |    100% |           |
+| tests/eval/test\_benchmark\_scenarios.py             |       58 |        0 |    100% |           |
 | tests/eval/test\_compare\_baseline.py                |      241 |        0 |    100% |           |
 | tests/eval/test\_eval\_baseline.py                   |       26 |        0 |    100% |           |
 | tests/eval/test\_eval\_fixture.py                    |      172 |        1 |     99% |       150 |
 | tests/eval/test\_eval\_harness.py                    |       95 |        0 |    100% |           |
 | tests/eval/test\_ranking\_eval.py                    |      418 |        0 |    100% |           |
 | tests/eval/test\_ranking\_replay.py                  |       50 |        0 |    100% |           |
-| tests/eval/test\_recall\_efficiency.py               |       39 |        0 |    100% |           |
 | tests/eval/test\_regen\_baseline.py                  |       52 |        0 |    100% |           |
 | tests/eval/test\_size\_baseline.py                   |       42 |        0 |    100% |           |
 | tests/naming\_check.py                               |      105 |      105 |      0% |    12-162 |
 | tests/test\_activity.py                              |      148 |        0 |    100% |           |
-| tests/test\_agent.py                                 |      749 |        9 |     99% |560-561, 688, 929-930, 976-977, 1041-1042 |
 | tests/test\_audit.py                                 |      251 |        0 |    100% |           |
-| tests/test\_cli.py                                   |      285 |        0 |    100% |           |
-| tests/test\_config.py                                |      191 |        0 |    100% |           |
+| tests/test\_cli.py                                   |      525 |        2 |     99% |   56, 249 |
+| tests/test\_config.py                                |      173 |        0 |    100% |           |
 | tests/test\_database.py                              |     1850 |        2 |     99% | 589, 1744 |
+| tests/test\_dream.py                                 |      483 |        3 |     99% |429-430, 527 |
 | tests/test\_dream\_status.py                         |      200 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      280 |        0 |    100% |           |
 | tests/test\_hooks\_plugin.py                         |     1056 |       67 |     94% |706, 1690-1695, 1700-1703, 1708-1716, 1727-1730, 1759-1762, 1804-1807, 1811-1814, 1818-1822, 1826-1828, 1833-1835, 1840-1845, 1849-1850, 1854-1856, 1861-1869 |
@@ -90,7 +87,6 @@
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_path\_resolver.py                        |       70 |        2 |     97% |     59-60 |
 | tests/test\_payload.py                               |       58 |        0 |    100% |           |
-| tests/test\_recall\_status.py                        |       91 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
 | tests/test\_server.py                                |      758 |        1 |     99% |      1358 |
@@ -99,8 +95,8 @@
 | tests/test\_tool\_schemas.py                         |       50 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
-| tests/test\_visualise.py                             |      620 |        0 |    100% |           |
-| **TOTAL**                                            | **13593** |  **516** | **96%** |           |
+| tests/test\_visualise.py                             |      558 |        0 |    100% |           |
+| **TOTAL**                                            | **13263** |  **455** | **97%** |           |
 
 
 ## Setup coverage badge

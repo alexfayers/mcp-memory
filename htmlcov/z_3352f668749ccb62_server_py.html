@@ -54,8 +54,8 @@
             </div>
         </aside>
         <h2>
-            <span class="text">517 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">472<span class="text"> run</span></button>
+            <span class="text">520 statements &nbsp;</span>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">475<span class="text"> run</span></button>
             <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">45<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">3<span class="text"> excluded</span></button>
         </h2>
@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_9f4a2ce59afcc3e1___init___py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
-            created at 2026-10-25 09:38 +0000
+            created at 2026-10-26 14:50 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -98,7 +98,7 @@
     <p class="run"><span class="n"><a id="t16" href="#t16">16</a></span><span class="t"><span class="key">from</span> <span class="nam">mcp</span><span class="op">.</span><span class="nam">server</span><span class="op">.</span><span class="nam">mcpserver</span> <span class="key">import</span> <span class="nam">MCPServer</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t17" href="#t17">17</a></span><span class="t"><span class="key">from</span> <span class="nam">mcp</span><span class="op">.</span><span class="nam">types</span> <span class="key">import</span> <span class="nam">Tool</span><span class="op">,</span> <span class="nam">ToolAnnotations</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t18" href="#t18">18</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t19" href="#t19">19</a></span><span class="t"><span class="key">from</span> <span class="op">.</span> <span class="key">import</span> <span class="nam">metrics</span><span class="op">,</span> <span class="nam">usefulness</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t19" href="#t19">19</a></span><span class="t"><span class="key">from</span> <span class="op">.</span> <span class="key">import</span> <span class="nam">dream</span><span class="op">,</span> <span class="nam">metrics</span><span class="op">,</span> <span class="nam">usefulness</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t20" href="#t20">20</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">activity</span> <span class="key">import</span> <span class="nam">record_tool</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t21" href="#t21">21</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">config</span> <span class="key">import</span> <span class="nam">get_db_path</span><span class="op">,</span> <span class="nam">get_sweep_interval_seconds</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t22" href="#t22">22</a></span><span class="t"><span class="key">from</span> <span class="op">.</span><span class="nam">models</span> <span class="key">import</span> <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
@@ -1398,33 +1398,36 @@
     <p class="pln"><span class="n"><a id="t1316" href="#t1316">1316</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1317" href="#t1317">1317</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1318" href="#t1318">1318</a></span><span class="t"><span class="key">async</span> <span class="key">def</span> <span class="nam">_serve</span><span class="op">(</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t1319" href="#t1319">1319</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Serve over streamable HTTP, running the maintenance sweep loop alongside.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1319" href="#t1319">1319</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Serve over streamable HTTP, running the maintenance sweep loop and dream coordinator alongside.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1320" href="#t1320">1320</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t1321" href="#t1321">1321</a></span><span class="t"><span class="str">    The sweep loop is an explicit background task rather than an MCPServer ``lifespan``:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1321" href="#t1321">1321</a></span><span class="t"><span class="str">    The sweep loop and dream coordinator are explicit background tasks rather than an MCPServer ``lifespan``:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1322" href="#t1322">1322</a></span><span class="t"><span class="str">    this server runs with ``stateless_http=True``, where a lifespan-attached task is</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1323" href="#t1323">1323</a></span><span class="t"><span class="str">    spawned and cancelled per client session rather than once globally, which is wrong</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1324" href="#t1324">1324</a></span><span class="t"><span class="str">    for a singleton periodic job. Cancelled cleanly on shutdown.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1325" href="#t1325">1325</a></span><span class="t"><span class="str">    &quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t1326" href="#t1326">1326</a></span><span class="t">    <span class="nam">sweeper</span> <span class="op">=</span> <span class="nam">asyncio</span><span class="op">.</span><span class="nam">create_task</span><span class="op">(</span><span class="nam">_sweep_loop</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1327" href="#t1327">1327</a></span><span class="t">    <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1328" href="#t1328">1328</a></span><span class="t">        <span class="key">await</span> <span class="nam">mcp</span><span class="op">.</span><span class="nam">run_streamable_http_async</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t1329" href="#t1329">1329</a></span><span class="t">            <span class="nam">port</span><span class="op">=</span><span class="nam">int</span><span class="op">(</span><span class="nam">os</span><span class="op">.</span><span class="nam">environ</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="str">&quot;MCP_MEMORY_PORT&quot;</span><span class="op">,</span> <span class="str">&quot;8000&quot;</span><span class="op">)</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t1330" href="#t1330">1330</a></span><span class="t">            <span class="nam">stateless_http</span><span class="op">=</span><span class="key">True</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t1331" href="#t1331">1331</a></span><span class="t">            <span class="nam">json_response</span><span class="op">=</span><span class="key">True</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t1332" href="#t1332">1332</a></span><span class="t">        <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t1333" href="#t1333">1333</a></span><span class="t">    <span class="key">finally</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1334" href="#t1334">1334</a></span><span class="t">        <span class="nam">sweeper</span><span class="op">.</span><span class="nam">cancel</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1335" href="#t1335">1335</a></span><span class="t">        <span class="key">with</span> <span class="nam">contextlib</span><span class="op">.</span><span class="nam">suppress</span><span class="op">(</span><span class="nam">asyncio</span><span class="op">.</span><span class="nam">CancelledError</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1336" href="#t1336">1336</a></span><span class="t">            <span class="key">await</span> <span class="nam">sweeper</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t1337" href="#t1337">1337</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t1338" href="#t1338">1338</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1339" href="#t1339">1339</a></span><span class="t"><span class="key">def</span> <span class="nam">main</span><span class="op">(</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t1340" href="#t1340">1340</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Run the MCP server with streamable HTTP transport.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t1341" href="#t1341">1341</a></span><span class="t">    <span class="nam">anyio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">_serve</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t1342" href="#t1342">1342</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t1343" href="#t1343">1343</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t1344" href="#t1344">1344</a></span><span class="t"><span class="key">if</span> <span class="nam">__name__</span> <span class="op">==</span> <span class="str">&quot;__main__&quot;</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t1345" href="#t1345">1345</a></span><span class="t">    <span class="nam">main</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1327" href="#t1327">1327</a></span><span class="t">    <span class="nam">dreamer</span> <span class="op">=</span> <span class="nam">dream</span><span class="op">.</span><span class="nam">start_coordinator</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1328" href="#t1328">1328</a></span><span class="t">    <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1329" href="#t1329">1329</a></span><span class="t">        <span class="key">await</span> <span class="nam">mcp</span><span class="op">.</span><span class="nam">run_streamable_http_async</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t1330" href="#t1330">1330</a></span><span class="t">            <span class="nam">port</span><span class="op">=</span><span class="nam">int</span><span class="op">(</span><span class="nam">os</span><span class="op">.</span><span class="nam">environ</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="str">&quot;MCP_MEMORY_PORT&quot;</span><span class="op">,</span> <span class="str">&quot;8000&quot;</span><span class="op">)</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t1331" href="#t1331">1331</a></span><span class="t">            <span class="nam">stateless_http</span><span class="op">=</span><span class="key">True</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t1332" href="#t1332">1332</a></span><span class="t">            <span class="nam">json_response</span><span class="op">=</span><span class="key">True</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t1333" href="#t1333">1333</a></span><span class="t">        <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1334" href="#t1334">1334</a></span><span class="t">    <span class="key">finally</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1335" href="#t1335">1335</a></span><span class="t">        <span class="key">for</span> <span class="nam">task</span> <span class="key">in</span> <span class="op">(</span><span class="nam">sweeper</span><span class="op">,</span> <span class="nam">dreamer</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1336" href="#t1336">1336</a></span><span class="t">            <span class="key">if</span> <span class="nam">task</span> <span class="key">is</span> <span class="key">not</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1337" href="#t1337">1337</a></span><span class="t">                <span class="nam">task</span><span class="op">.</span><span class="nam">cancel</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1338" href="#t1338">1338</a></span><span class="t">                <span class="key">with</span> <span class="nam">contextlib</span><span class="op">.</span><span class="nam">suppress</span><span class="op">(</span><span class="nam">asyncio</span><span class="op">.</span><span class="nam">CancelledError</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1339" href="#t1339">1339</a></span><span class="t">                    <span class="key">await</span> <span class="nam">task</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1340" href="#t1340">1340</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1341" href="#t1341">1341</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1342" href="#t1342">1342</a></span><span class="t"><span class="key">def</span> <span class="nam">main</span><span class="op">(</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1343" href="#t1343">1343</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Run the MCP server with streamable HTTP transport.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t1344" href="#t1344">1344</a></span><span class="t">    <span class="nam">anyio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">_serve</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1345" href="#t1345">1345</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1346" href="#t1346">1346</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t1347" href="#t1347">1347</a></span><span class="t"><span class="key">if</span> <span class="nam">__name__</span> <span class="op">==</span> <span class="str">&quot;__main__&quot;</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t1348" href="#t1348">1348</a></span><span class="t">    <span class="nam">main</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -1434,7 +1437,7 @@
             <a class="nav" href="z_9f4a2ce59afcc3e1___init___py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.2">coverage.py v7.16.2</a>,
-            created at 2026-10-25 09:38 +0000
+            created at 2026-10-26 14:50 +0000
         </p>
     </div>
 </footer>
