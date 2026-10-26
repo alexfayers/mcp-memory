@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 from mcp.server.mcpserver import MCPServer
-from mcp.types import Tool, ToolAnnotations
+from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 
 from . import dream, metrics, usefulness
 from .activity import record_tool
@@ -25,6 +25,7 @@ from .models import (
     Relation,
     normalize_relation_type,
 )
+from .payload import compact_json
 from .storage import GraphResult, NodeList, open_writable
 from .visualise import register_visualise_routes
 
@@ -38,11 +39,11 @@ _ALWAYS_LOAD_META = {"anthropic/alwaysLoad": True}
 logger = logging.getLogger(__name__)
 
 
-def _track[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
-    """Record each tool call's activity without altering its behaviour or schema."""
+def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
+    """Record each tool call's activity and return its result as compact JSON text plus structured content."""
 
     @functools.wraps(fn)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> CallToolResult:
         result = fn(*args, **kwargs)
         try:
             bound = inspect.signature(fn).bind_partial(*args, **kwargs)
@@ -52,7 +53,7 @@ def _track[**P, R](fn: Callable[P, R]) -> Callable[P, R]:
             metrics.record(_get_db(), fn.__name__, arguments, result)
         except Exception:  # ruff: ignore[try-except-pass] - instrumentation must never break a tool call
             pass
-        return result
+        return CallToolResult(content=[TextContent(type="text", text=compact_json(result))], structured_content=result)
 
     return wrapper
 
