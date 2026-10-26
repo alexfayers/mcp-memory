@@ -19,15 +19,15 @@
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
 | src/mcp\_memory/hooks/tracker.py                     |      102 |        1 |     99% |       115 |
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
-| src/mcp\_memory/metrics.py                           |       86 |        0 |    100% |           |
+| src/mcp\_memory/metrics.py                           |       86 |        2 |     98% |     64-65 |
 | src/mcp\_memory/migrations/\_\_init\_\_.py           |        0 |        0 |    100% |           |
 | src/mcp\_memory/migrations/runner.py                 |       30 |        3 |     90% |     24-26 |
 | src/mcp\_memory/migrations/schema.py                 |       23 |        0 |    100% |           |
 | src/mcp\_memory/models.py                            |       42 |        0 |    100% |           |
 | src/mcp\_memory/path\_resolver.py                    |       35 |        1 |     97% |        18 |
-| src/mcp\_memory/payload.py                           |       11 |        0 |    100% |           |
+| src/mcp\_memory/payload.py                           |       12 |        0 |    100% |           |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      520 |       45 |     91% |53-54, 344, 441, 451, 489, 549-551, 555, 626-627, 653-654, 662, 670, 682-683, 745-746, 760-761, 950-951, 978, 996-1001, 1040-1047, 1077-1078, 1104-1105, 1127-1128, 1344, 1348 |
+| src/mcp\_memory/server.py                            |      521 |       45 |     91% |54-55, 345, 442, 452, 490, 550-552, 556, 627-628, 654-655, 663, 671, 683-684, 746-747, 761-762, 951-952, 979, 997-1002, 1041-1048, 1078-1079, 1105-1106, 1128-1129, 1345, 1349 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
@@ -86,17 +86,17 @@
 | tests/test\_metrics.py                               |      194 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_path\_resolver.py                        |       70 |        2 |     97% |     59-60 |
-| tests/test\_payload.py                               |       58 |        0 |    100% |           |
+| tests/test\_payload.py                               |       68 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
-| tests/test\_server.py                                |      758 |        1 |     99% |      1358 |
+| tests/test\_server.py                                |      766 |        1 |     99% |      1374 |
 | tests/test\_server\_http.py                          |       59 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       17 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       50 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      558 |        0 |    100% |           |
-| **TOTAL**                                            | **13263** |  **455** | **97%** |           |
+| **TOTAL**                                            | **13283** |  **457** | **97%** |           |
 
 
 ## Setup coverage badge
