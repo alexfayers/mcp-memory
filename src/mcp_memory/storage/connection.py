@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
@@ -70,7 +70,7 @@ class Connection:
         return self._db.total_changes
 
     @contextmanager
-    def transaction(self, commit: bool = True) -> Iterator[None]:
+    def transaction(self, commit: bool = True) -> Generator[None, None, None]:
         with self._lock:
             yield from self._transaction(commit)
 

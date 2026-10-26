@@ -19,7 +19,7 @@ from mcp_memory.payload import payload_size
 from tests.eval.eval_fixture import _PROJECTS, _TOPICS
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Generator
 
     from tests.eval.eval_fixture import EvalFixture
 
@@ -62,7 +62,7 @@ def _get_entity_with_relations_probes(
 
 
 @contextmanager
-def _serving(fixture: EvalFixture) -> Iterator[None]:
+def _serving(fixture: EvalFixture) -> Generator[None, None, None]:
     """Point the server's module-level database handle at `fixture.db` for the duration."""
     original = server._db
     server._db = fixture.db
