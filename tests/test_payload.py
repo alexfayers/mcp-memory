@@ -6,11 +6,13 @@ a deterministic proxy for token cost. Coupled to no live state.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import TYPE_CHECKING
 
 import pytest
 
-from mcp_memory import payload
+from mcp_memory import payload, server
 from mcp_memory.models import Relation
 from mcp_memory.storage import open_writable
 
@@ -116,3 +118,15 @@ class TestObservationBudget:
         )
 
         assert budgeted < unlimited
+
+
+class TestToolResultWireFormat:
+    def test_tool_result_text_is_compact_json(self, store: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
+        seed_store(store, "proj", [SeedEntity("task/a", ["one", "two"])])
+        monkeypatch.setattr(server, "_db", store)
+
+        result = asyncio.run(server.mcp.call_tool("read_graph", {"project": "proj"}))
+
+        text = result.content[0].text  # type: ignore[union-attr]
+        assert "\n" not in text
+        assert len(text.encode("utf-8")) == payload.payload_size(json.loads(text))

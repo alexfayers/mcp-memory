@@ -18,12 +18,18 @@ def _json_default(obj: object) -> object:
     raise TypeError(msg)
 
 
+def compact_json(payload: object) -> str:
+    """Serialize an MCP-tool return value to compact JSON, the form sent on the wire.
+
+    Nested ``Entity``/``Relation`` dataclasses are handled structurally.
+    """
+    return json.dumps(payload, default=_json_default, ensure_ascii=False, separators=(",", ":"))
+
+
 def payload_size(payload: object) -> int:
-    """Serialize an MCP-tool return value to canonical JSON and return its UTF-8 byte size.
+    """Return the UTF-8 byte size of an MCP-tool return value's compact JSON.
 
     This is the proxy for token cost. ``ensure_ascii=False`` counts multibyte characters at
-    their real UTF-8 length, and ``sort_keys=True`` makes the size independent of dict
-    insertion order. Nested ``Entity``/``Relation`` dataclasses are handled structurally.
+    their real UTF-8 length.
     """
-    encoded = json.dumps(payload, default=_json_default, ensure_ascii=False, sort_keys=True)
-    return len(encoded.encode("utf-8"))
+    return len(compact_json(payload).encode("utf-8"))
