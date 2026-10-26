@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 import fcntl
 import json
@@ -32,7 +32,7 @@ _StateData = dict[str, float | str | list[str]]
 
 
 @contextmanager
-def _locked() -> Iterator[None]:
+def _locked() -> Generator[None, None, None]:
     """Hold an exclusive lock for the duration of a state read-modify-write cycle."""
     lock_path = _lock_path()
     lock_path.parent.mkdir(parents=True, exist_ok=True)

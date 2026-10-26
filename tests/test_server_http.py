@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Iterator
 import contextlib
 import socket
 from typing import TYPE_CHECKING
@@ -32,7 +32,7 @@ def server_db(tmp_path: Path) -> Iterator[Storage]:
 
 
 @contextlib.asynccontextmanager
-async def _serving() -> AsyncIterator[str]:
+async def _serving() -> AsyncGenerator[str, None]:
     """Serve the MCP app over HTTP on a free port exactly as production does; yield its URL."""
     app = server.mcp.streamable_http_app(stateless_http=True, json_response=True)
     sock = socket.socket()
