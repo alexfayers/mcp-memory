@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import getpass
 import json
 import os
@@ -18,7 +18,6 @@ import textwrap
 
 from .config import (
     _DEFAULT_PORT,
-    get_agent_port,
     get_db_path,
     get_default_db_path,
     get_surfaced_retention_days,
@@ -32,6 +31,13 @@ __all__ = ["Path", "argparse", "subprocess"]
 _LAUNCHD_LABEL = "com.mcp-memory"
 _LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{_LAUNCHD_LABEL}.plist"
 _SYSTEMD_UNIT = Path("/etc/systemd/system/mcp-memory.service")
+_LEGACY_AGENT_LABEL = "com.memory-agent"
+_LEGACY_AGENT_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{_LEGACY_AGENT_LABEL}.plist"
+_LEGACY_AGENT_UNIT = Path("/etc/systemd/system/memory-agent.service")
+_LEGACY_AGENT_SERVERS = ("memory-agent", "memory_agent")
+_PLIST_DREAM_ENV_RE = re.compile(r"<key>(MCP_DREAM_\w+)</key>\s*<string>([^<]*)</string>")
+_SYSTEMD_DREAM_ENV_RE = re.compile(r"^Environment=(MCP_DREAM_\w+)=(.*)$", re.MULTILINE)
+_PLIST_ENV_START_RE = re.compile(r"<key>EnvironmentVariables</key>\s*<dict>\n")
 
 
 @dataclass(frozen=True)
@@ -59,9 +65,10 @@ def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_GC_")})
     if "MCP_MEMORY_SURFACED_RETENTION_DAYS" in os.environ:
         env["MCP_MEMORY_SURFACED_RETENTION_DAYS"] = os.environ["MCP_MEMORY_SURFACED_RETENTION_DAYS"]
-    # Carry the agent locator through so the visualiser's dream-trigger proxy can reach
-    # a non-default memory-agent port (the server does not otherwise know it).
-    env.update({k: v for k, v in os.environ.items() if k in {"MCP_AGENT_URL", "MCP_AGENT_PORT"}})
+    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_DREAM_")})
+    path = os.environ.get("PATH")
+    if path:
+        env["PATH"] = path
     return _ServiceSpec(
         name="memory",
         binary_name="mcp-memory",
@@ -75,34 +82,6 @@ def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
     )
 
 
-def _agent_spec(port: str) -> _ServiceSpec:
-    """Service spec for the memory-agent recall server.
-
-    Bakes the installing user's PATH into the service env: recall spawns the
-    `claude` CLI, and launchd/systemd otherwise run with a minimal PATH that
-    would not find it.
-    """
-    label = "com.memory-agent"
-    env = {"MCP_AGENT_PORT": port}
-    path = os.environ.get("PATH")
-    if path:
-        env["PATH"] = path
-    # Carry any dream-curation settings through so `MCP_DREAM_* memory-agent
-    # setup-service` sticks in the installed service.
-    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_DREAM_")})
-    return _ServiceSpec(
-        name="memory-agent",
-        binary_name="memory-agent",
-        label=label,
-        description="memory-agent recall server",
-        port=port,
-        env=env,
-        log_path=get_default_db_path().parent / "memory-agent.log",
-        plist_path=Path.home() / "Library" / "LaunchAgents" / f"{label}.plist",
-        systemd_unit=Path("/etc/systemd/system/memory-agent.service"),
-    )
-
-
 def _find_binary(name: str) -> str:
     """Find a console-script binary path, or exit with an error."""
     path = shutil.which(name)
@@ -112,11 +91,21 @@ def _find_binary(name: str) -> str:
     return path
 
 
+def _plist_env_entries(env: dict[str, str]) -> str:
+    """Render env vars as launchd plist EnvironmentVariables entries."""
+    return "\n".join(
+        f"                <key>{key}</key>\n                <string>{value}</string>" for key, value in env.items()
+    )
+
+
+def _systemd_env_lines(env: dict[str, str]) -> str:
+    """Render env vars as systemd Environment= lines."""
+    return "\n".join(f"Environment={key}={value}" for key, value in env.items())
+
+
 def _render_plist(spec: _ServiceSpec, *, binary: str) -> str:
     """Render a macOS launchd plist for a service spec."""
-    env_entries = "\n".join(
-        f"                <key>{key}</key>\n                <string>{value}</string>" for key, value in spec.env.items()
-    )
+    env_entries = _plist_env_entries(spec.env)
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
@@ -148,7 +137,7 @@ def _render_plist(spec: _ServiceSpec, *, binary: str) -> str:
 
 def _render_systemd(spec: _ServiceSpec, *, binary: str, user: str) -> str:
     """Render a systemd unit for a service spec."""
-    env_lines = "\n".join(f"Environment={key}={value}" for key, value in spec.env.items())
+    env_lines = _systemd_env_lines(spec.env)
     return (
         "[Unit]\n"
         f"Description={spec.description}\n"
@@ -175,6 +164,14 @@ def _loaded_launchd_plist(uid: int, label: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def _reload_launchd(plist_path: Path, label: str) -> None:
+    """Reload a launchd job from its plist and start it."""
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}", str(plist_path)], capture_output=True, check=False)
+    subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)], check=True)
+    subprocess.run(["launchctl", "kickstart", f"gui/{uid}/{label}"], check=True)
+
+
 def _setup_launchd(spec: _ServiceSpec, binary: str) -> None:
     """Generate and install a macOS launchd plist from a service spec.
 
@@ -194,14 +191,7 @@ def _setup_launchd(spec: _ServiceSpec, binary: str) -> None:
     spec.plist_path.parent.mkdir(parents=True, exist_ok=True)
     spec.log_path.parent.mkdir(parents=True, exist_ok=True)
     spec.plist_path.write_text(_render_plist(spec, binary=binary))
-
-    subprocess.run(
-        ["launchctl", "bootout", f"gui/{uid}", str(spec.plist_path)],
-        capture_output=True,
-        check=False,
-    )
-    subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", str(spec.plist_path)], check=True)
-    subprocess.run(["launchctl", "kickstart", f"gui/{uid}/{spec.label}"], check=True)
+    _reload_launchd(spec.plist_path, spec.label)
     print(f"Installed launchd service: {spec.plist_path}")
     print(f"  Logs: {spec.log_path}")
 
@@ -251,9 +241,91 @@ def _setup_service_from_spec(spec: _ServiceSpec) -> None:
     print(f"Server running on http://localhost:{spec.port}/mcp")
 
 
+def _dream_env_files(system: str) -> tuple[Path, Path, re.Pattern[str]] | None:
+    """Return the retired-agent file, the mcp-memory service file and the MCP_DREAM_* pattern for a platform."""
+    if system == "Darwin":
+        return _LEGACY_AGENT_PLIST, _LAUNCHD_PLIST, _PLIST_DREAM_ENV_RE
+    if system == "Linux":
+        return _LEGACY_AGENT_UNIT, _SYSTEMD_UNIT, _SYSTEMD_DREAM_ENV_RE
+    return None
+
+
+def _read_dream_env(path: Path, pattern: re.Pattern[str]) -> dict[str, str]:
+    """Read the MCP_DREAM_* env from a service file, or {} when it is absent."""
+    return dict(pattern.findall(path.read_text(encoding="utf-8"))) if path.exists() else {}
+
+
+def _keep_installed_dream_env(spec: _ServiceSpec) -> _ServiceSpec:
+    """Keep MCP_DREAM_* already in the installed service unless the spec sets them."""
+    files = _dream_env_files(platform.system())
+    if not files:
+        return spec
+    env = dict(spec.env)
+    for key, value in _read_dream_env(files[1], files[2]).items():
+        env.setdefault(key, value)
+    return replace(spec, env=env)
+
+
+def _migrate_legacy_dream_env() -> None:
+    """Copy MCP_DREAM_* from the retired memory-agent service into the installed mcp-memory service.
+
+    Values already set on the mcp-memory service are kept. Reloads it only when something was added.
+    """
+    system = platform.system()
+    files = _dream_env_files(system)
+    if not files:
+        return
+    legacy, main, pattern = files
+    legacy_env = _read_dream_env(legacy, pattern)
+    if not legacy_env:
+        return
+    if not main.exists():
+        print(
+            f"Warning: no mcp-memory service for the retired {', '.join(legacy_env)}; set them, run setup-service",
+            file=sys.stderr,
+        )
+        return
+    content = main.read_text(encoding="utf-8")
+    current = dict(pattern.findall(content))
+    missing = {key: value for key, value in legacy_env.items() if key not in current}
+    if not missing:
+        return
+    if system == "Darwin":
+        main.write_text(
+            _PLIST_ENV_START_RE.sub(lambda m: f"{m.group(0)}{_plist_env_entries(missing)}\n", content, count=1)
+        )
+        _reload_launchd(main, _LAUNCHD_LABEL)
+    else:
+        updated = content.replace("[Service]\n", f"[Service]\n{_systemd_env_lines(missing)}\n", 1)
+        subprocess.run(["sudo", "tee", str(main)], input=updated.encode(), capture_output=True, check=True)
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+        subprocess.run(["sudo", "systemctl", "restart", main.name], check=True)
+    print(f"Moved {', '.join(missing)} from the retired memory-agent service to {main}")
+
+
+def _remove_legacy_agent_service() -> None:
+    """Stop and delete the retired memory-agent service, if one is installed."""
+    _migrate_legacy_dream_env()
+    system = platform.system()
+    if system == "Darwin" and _LEGACY_AGENT_PLIST.exists():
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{os.getuid()}", str(_LEGACY_AGENT_PLIST)],
+            capture_output=True,
+            check=False,
+        )
+        _LEGACY_AGENT_PLIST.unlink()
+        print(f"Removed retired memory-agent launchd service: {_LEGACY_AGENT_PLIST}")
+    elif system == "Linux" and _LEGACY_AGENT_UNIT.exists():
+        subprocess.run(["sudo", "systemctl", "disable", "--now", _LEGACY_AGENT_UNIT.name], check=False)
+        subprocess.run(["sudo", "rm", str(_LEGACY_AGENT_UNIT)], check=True)
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+        print(f"Removed retired memory-agent systemd service: {_LEGACY_AGENT_UNIT}")
+
+
 def _cmd_setup_service(args: argparse.Namespace) -> None:
     """Handle the setup-service subcommand."""
-    _setup_service_from_spec(_memory_spec(args.port, Path(args.db_path).expanduser()))
+    _setup_service_from_spec(_keep_installed_dream_env(_memory_spec(args.port, Path(args.db_path).expanduser())))
+    _remove_legacy_agent_service()
 
 
 def _detect_service_db_path() -> str | None:
@@ -461,6 +533,23 @@ def _cmd_import(args: argparse.Namespace) -> None:
     print(summary.render())
 
 
+def _remove_legacy_agent_servers(mcp_path: Path, servers_key: str) -> bool:
+    """Delete the retired memory-agent entries from an MCP config file, leaving all else intact."""
+    if not mcp_path.exists() or mcp_path.stat().st_size == 0:
+        return False
+    config = load_jsonc_object(mcp_path)
+    servers = config.get(servers_key)
+    if not isinstance(servers, dict):
+        return False
+    stale = [name for name in _LEGACY_AGENT_SERVERS if name in servers]
+    for name in stale:
+        del servers[name]
+    if stale:
+        mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        print(f"Removed retired {', '.join(stale)} MCP server from {mcp_path}.")
+    return bool(stale)
+
+
 def _cmd_install_kiro(args: argparse.Namespace) -> None:
     """Patch Kiro agent config with memory MCP server and allowedTools."""
     port = args.port
@@ -472,6 +561,18 @@ def _cmd_install_kiro(args: argparse.Namespace) -> None:
 
     agent = json.loads(agent_path.read_text(encoding="utf-8"))
     changed = False
+
+    removed = [name for name in _LEGACY_AGENT_SERVERS if name in agent.get("mcpServers", {})]
+    for name in removed:
+        del agent["mcpServers"][name]
+    stale_tools = {f"@{name}" for name in _LEGACY_AGENT_SERVERS}
+    for key in ("allowedTools", "tools"):
+        if stale_tools & set(agent.get(key, [])):
+            agent[key] = [tool for tool in agent[key] if tool not in stale_tools]
+            removed.append(key)
+    if removed:
+        changed = True
+        print(f"Removed retired memory-agent entries ({', '.join(removed)}) from {agent_path}.")
 
     # Check agent config and global mcp.json for existing memory entry.
     agent_servers: dict[str, object] = agent.get("mcpServers", {})
@@ -537,15 +638,35 @@ def _register_claude_code_server(claude_bin: str, name: str, url: str) -> None:
         print(f"Added {rule} to permissions.allow.")
 
 
+def _remove_legacy_claude_code_servers(claude_bin: str) -> None:
+    """Remove the retired memory-agent servers and their allow rules from Claude Code."""
+    for name in _LEGACY_AGENT_SERVERS:
+        registered = subprocess.run([claude_bin, "mcp", "get", name], capture_output=True, check=False)
+        if registered.returncode == 0:
+            subprocess.run([claude_bin, "mcp", "remove", "--scope", "user", name], check=False)
+            print(f"Removed retired {name} MCP server from Claude Code.")
+
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if not settings_path.exists():
+        return
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    allow = settings.get("permissions", {}).get("allow", [])
+    stale = {f"mcp__{name}__*" for name in _LEGACY_AGENT_SERVERS}
+    if stale & set(allow):
+        settings["permissions"]["allow"] = [rule for rule in allow if rule not in stale]
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+        print(f"Removed retired memory-agent rules from permissions.allow in {settings_path}.")
+
+
 def _cmd_install_claude_code() -> None:
-    """Register both the memory data server and the memory-agent recall server."""
+    """Register the memory data server in Claude Code."""
     claude_bin = shutil.which("claude")
     if not claude_bin:
         print("error: claude not found on PATH", file=sys.stderr)
         sys.exit(1)
 
+    _remove_legacy_claude_code_servers(claude_bin)
     _register_claude_code_server(claude_bin, "memory", f"http://localhost:{resolve_port()}/mcp")
-    _register_claude_code_server(claude_bin, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
 
 
 def _register_codex_server(codex_bin: str, name: str, url: str) -> None:
@@ -563,15 +684,24 @@ def _register_codex_server(codex_bin: str, name: str, url: str) -> None:
         print(f"Added {name} MCP server to Codex (url: {url}).")
 
 
+def _remove_legacy_codex_servers(codex_bin: str) -> None:
+    """Remove the retired memory-agent servers from Codex."""
+    for name in _LEGACY_AGENT_SERVERS:
+        registered = subprocess.run([codex_bin, "mcp", "get", name], capture_output=True, check=False)
+        if registered.returncode == 0:
+            subprocess.run([codex_bin, "mcp", "remove", name], check=False)
+            print(f"Removed retired {name} MCP server from Codex.")
+
+
 def _cmd_install_codex() -> None:
-    """Register both the memory data server and the memory-agent recall server."""
+    """Register the memory data server in Codex."""
     codex_bin = shutil.which("codex")
     if not codex_bin:
         print("error: codex not found on PATH", file=sys.stderr)
         sys.exit(1)
 
+    _remove_legacy_codex_servers(codex_bin)
     _register_codex_server(codex_bin, "memory", f"http://127.0.0.1:{resolve_port()}/mcp")
-    _register_codex_server(codex_bin, "memory-agent", f"http://127.0.0.1:{get_agent_port()}/mcp")
 
 
 def _register_antigravity_server(agy_bin: str, name: str, url: str) -> None:
@@ -593,10 +723,11 @@ def _cmd_install_antigravity() -> None:
     """Register the memory data server in Antigravity."""
     agy_bin = shutil.which("agy")
     url = f"http://localhost:{resolve_port()}/mcp"
+    mcp_path = Path.home() / ".gemini" / "config" / "mcp_config.json"
+    _remove_legacy_agent_servers(mcp_path, "mcpServers")
     if agy_bin:
         _register_antigravity_server(agy_bin, "memory", url)
     else:
-        mcp_path = Path.home() / ".gemini" / "config" / "mcp_config.json"
         mcp_path.parent.mkdir(parents=True, exist_ok=True)
         config: dict[str, object] = {}
         if mcp_path.exists() and mcp_path.stat().st_size > 0:
@@ -669,8 +800,8 @@ def _cmd_install_copilot(args: argparse.Namespace) -> None:
     """Register memory servers in VS Code Copilot MCP config."""
     mcp_path = Path(args.mcp_config).expanduser() if args.mcp_config else _default_copilot_mcp_config_path()
     try:
+        _remove_legacy_agent_servers(mcp_path, "servers")
         _register_copilot_server(mcp_path, "memory", f"http://localhost:{resolve_port()}/mcp")
-        _register_copilot_server(mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -714,8 +845,8 @@ def _cmd_install_pi() -> None:
     """Register memory servers in pi's global MCP config."""
     mcp_path = _pi_mcp_config_path()
     try:
+        _remove_legacy_agent_servers(mcp_path, "mcpServers")
         _register_pi_server(mcp_path, "memory", f"http://localhost:{resolve_port()}/mcp")
-        _register_pi_server(mcp_path, "memory-agent", f"http://localhost:{get_agent_port()}/mcp")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -846,6 +977,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _cmd_install(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """Dispatch the `install` subcommand to its target-specific handler."""
+    _remove_legacy_agent_service()
     if args.target == "claude-code":
         _cmd_install_claude_code()
     elif args.target == "codex":

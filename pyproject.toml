@@ -10,7 +10,6 @@ dependencies = ["mcp>=2.3,<3", "httpx", "better-profanity"]
 
 [project.scripts]
 mcp-memory = "mcp_memory.cli:main"
-memory-agent = "mcp_memory.agent:main"
 
 [project.entry-points."cline_hooks"]
 memory = "mcp_memory.hooks.plugin:MemoryPlugin"
@@ -90,7 +89,7 @@ extend-ignore = [
     "start-process-with-partial-path",
     "import-outside-top-level",
 ]
-"src/mcp_memory/agent.py" = [
+"src/mcp_memory/dream.py" = [
     "subprocess-without-shell-equals-true",
     "start-process-with-partial-path",
     "async-function-with-timeout",

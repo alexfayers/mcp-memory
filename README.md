@@ -64,7 +64,7 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_DREAM_ENABLED` | Run the autonomous light dream tier (downvotes stale/duplicate entities in idle windows) | off |
 | `MCP_DREAM_IDLE_SECONDS` | Genuine-idle window before the light dream pass fires (once per idle session) | `1800` |
 | `MCP_DREAM_POLL_SECONDS` | How often the coordinator checks whether the light pass is due | `300` |
-| `MCP_DREAM_MODEL` | Fully-qualified model id for light dream spawns | recall model |
+| `MCP_DREAM_MODEL` | Fully-qualified model id for light dream spawns | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
 | `MCP_DREAM_TIMEOUT` | Timeout for a single light dream spawn (seconds) | `300` |
 | `MCP_DREAM_MAX_VOTES` | Advisory cap on entities a light pass may demote | `15` |
 | `MCP_DREAM_HEAVY_ENABLED` | Run the heavy dream tier (also merges duplicate entities via reversible soft-delete) | off |
@@ -73,19 +73,14 @@ Then run `llm-prompts setup` to install everything.
 | `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id for heavy spawns (set a stronger model, e.g. a Sonnet id) | light dream model |
 | `MCP_DREAM_HEAVY_TIMEOUT` | Timeout for a single heavy dream spawn (seconds) | `600` |
 | `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges + demotions a heavy pass may do | `10` |
-| `MCP_AGENT_PORT` | Port of the memory-agent server | `8100` |
-| `MCP_AGENT_URL` | Explicit memory-agent base URL, overriding `MCP_AGENT_PORT` | (from port) |
-| `MCP_AGENT_PREFLIGHT_COMMAND` | Optional command run before spawning a recall agent | (none) |
-| `MCP_RECALL_MODEL` | Fully-qualified model id for recall spawns | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
-| `MCP_RECALL_MAX_TURNS` | Cap on tool-calling turns in a recall spawn, bounding its wall-time and cost | `12` |
-| `MCP_RECALL_TIMEOUT` | Timeout for a single recall spawn (seconds) | `180` |
+
+Dreaming is opt-in and runs inside the mcp-memory server. Set `MCP_DREAM_ENABLED=true`
+and/or `MCP_DREAM_HEAVY_ENABLED=true`, then run `mcp-memory setup-service` with them set.
+It needs the `claude` CLI on `PATH`.
 
 The visualiser's dream card has **Run light** / **Run heavy** buttons that trigger a
 pass on demand (regardless of the tier's enabled flag). A manual trigger obeys the same
-single-flight guard as the scheduler, so at most one dream runs at a time. The dream runs
-in the memory-agent process, so the mcp-memory server proxies the trigger to it: if the
-agent runs on a non-default port, set `MCP_AGENT_PORT` (or `MCP_AGENT_URL`) for the
-mcp-memory process too, otherwise the proxy cannot find it.
+single-flight guard as the scheduler, so at most one dream runs at a time.
 
 ### Contributing workspace markers
 

@@ -1,16 +1,13 @@
-"""MCPServer server exposing an LLM recall layer in front of mcp-memory.
+"""Opt-in idle-time dream curation of the memory graph, run inside the mcp-memory server.
 
-`recall` spawns an ephemeral headless ``claude -p`` agent locked to the
-mcp-memory read tools, absorbs the heavy graph traversal in that throwaway
-context, and returns distilled findings so the caller's own context stays clean.
-The data store (mcp-memory) is untouched by this server.
+While the server is idle, the scheduler spawns an ephemeral headless ``claude -p``
+agent that demotes (light tier) or merges and demotes (heavy tier) stale entities
+through the mcp-memory tools. It never deletes anything.
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
-import contextlib
 from dataclasses import dataclass, field
 import json
 import logging
@@ -22,16 +19,8 @@ import tempfile
 import time
 from typing import TYPE_CHECKING, TypedDict
 
-import anyio
-import httpx
-from mcp.server.mcpserver import MCPServer
-from mcp.types import ToolAnnotations
-from starlette.responses import JSONResponse
-
-from . import dream_status, recall_status
-from .cli import _agent_spec, _setup_service_from_spec
+from . import activity, dream_status
 from .config import (
-    get_agent_port,
     get_dream_enabled,
     get_dream_heavy_enabled,
     get_dream_heavy_idle_seconds,
@@ -45,21 +34,16 @@ from .config import (
     get_dream_poll_seconds,
     get_dream_timeout,
     get_memory_url,
-    get_preflight_command,
-    get_recall_max_turns,
-    get_recall_model,
 )
 from .storage.operations.maintenance import GC_DOWNVOTE_FLOOR
 from .tool_names import MUTATING_TOOLS
 
-__all__ = ["anyio", "dream_status", "shutil", "time"]
+__all__ = ["dream_status", "shutil", "time"]
 
-logger = logging.getLogger("memory-agent")
+logger = logging.getLogger("mcp-memory")
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-
-    from starlette.requests import Request
 
 
 class SpawnResult(TypedDict):
@@ -81,7 +65,7 @@ class SpawnResult(TypedDict):
 # ones so the agent cannot touch the filesystem or spawn processes, and the
 # read/web ones (Read/Grep/Glob/WebFetch/WebSearch) so it is forced onto the
 # mcp__memory__* graph tools - otherwise it answers from files on disk and cites
-# file paths instead of the [project/entity] slugs the recall contract requires.
+# file paths instead of the [project/entity] slugs the dream audit format requires.
 _DISALLOWED_BUILTINS = (
     "Bash",
     "Write",
@@ -96,11 +80,6 @@ _DISALLOWED_BUILTINS = (
 )
 
 # Deny rules override the inherited permissions.allow wildcard; an allow-list cannot.
-DISALLOWED_TOOLS: tuple[str, ...] = (
-    *(f"mcp__memory__{tool}" for tool in MUTATING_TOOLS),
-    *_DISALLOWED_BUILTINS,
-)
-
 # The dream curation pass may vote entities and observations (its only mutation),
 # so vote is the memory tool it is NOT denied; every other mutation and every
 # built-in stays denied, keeping grooming to demote-never-delete.
@@ -121,47 +100,22 @@ HEAVY_DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
     *_DISALLOWED_BUILTINS,
 )
 
-_RECALL_TIMEOUT_SECONDS = int(os.environ.get("MCP_RECALL_TIMEOUT", "180"))
-_PREFLIGHT_TIMEOUT_SECONDS = 30
-_IDLE_FETCH_TIMEOUT_SECONDS = 5.0
 # Startup wait for the spawned agent's mcp-memory HTTP connection (ms). Without
 # it, claude begins its first turn mid-handshake and the model reports the graph
 # unreachable.
 _MCP_STARTUP_TIMEOUT_MS = "30000"
 # The CLI defers MCP tools behind a ToolSearch discovery step by default. A small
-# recall model then wastes turns "loading schemas" and can wrongly report the
+# dream model then wastes turns "loading schemas" and can wrongly report the
 # graph empty, so force every mcp__memory__* tool to load upfront. CLI-internal
 # env var (no public flag); an unrecognised value is ignored, reverting to default.
 _ENABLE_TOOL_SEARCH = "false"
 
 # The spawned agent runs against an isolated CLAUDE_CONFIG_DIR so it never reads
 # the user's ~/.claude hooks or SessionStart skills - those inject reminders that
-# derail the small recall model into thinking the graph is unreachable. These
+# derail the small dream model into thinking the graph is unreachable. These
 # minimal settings pre-approve the memory tools (the deny-list still subtracts the
 # mutating ones) with no hooks of any kind.
 AGENT_SETTINGS: dict[str, object] = {"permissions": {"allow": ["mcp__memory__*"]}}
-
-RECALL_RITUAL = (
-    "You are a memory recall agent with read-only access to a knowledge graph "
-    "via the mcp__memory__* tools. "
-    "The mcp__memory server may report as 'still connecting' on your very first "
-    "turn; ignore that and CALL a memory tool anyway - the connection completes "
-    "before the call runs. NEVER conclude the tools are unavailable without "
-    "actually attempting at least one search_nodes or search_all_projects call. "
-    "Run one or two targeted searches (search_nodes / search_all_projects), then "
-    "traverse only the most promising hits with get_entity_with_relations to gather "
-    "linked context - do not exhaustively open every match. "
-    "When an entity is relevant, read the observations that answer the query and "
-    "pull out the SPECIFIC facts - concrete numbers, dates, names, and decisions - "
-    "rather than only the high-level theme. If two observations conflict, prefer the "
-    "newer one. "
-    "Return a compact bulleted list of the findings that answer the query - "
-    "answer it completely, but stay on topic and do not dump entire entities. "
-    "Tag every claim inline with its source entity slug as [project/entity-name], "
-    "copied VERBATIM from the tool results - never paraphrase or invent a slug. "
-    "If nothing relevant exists, say so plainly. Do not attempt to write, vote, "
-    "or otherwise mutate anything."
-)
 
 DREAM_RITUAL = (
     "You are a memory curation agent grooming a knowledge graph while it is idle, "
@@ -235,19 +189,6 @@ HEAVY_DREAM_RITUAL = (
     "candidates."
 )
 
-RECALL_DESC = (
-    "Delegate a HEAVY, multi-step memory recall to a throwaway agent and get back "
-    "distilled findings, each tagged with its source [project/entity] slug so you "
-    "can traverse or vote without re-searching. The agent reads the graph in its "
-    "own context, keeping yours clean. Each call spawns a billed model invocation "
-    "(~15-30s), so reserve it for broad questions that need several searches and "
-    "graph traversals - a single lookup you could do with one search_nodes call "
-    "must NOT go through recall. Use it instead of a second broad search on one question, "
-    "or when a result is too large to fit."
-)
-
-mcp = MCPServer("memory-agent")
-
 
 def _claude_bin() -> str | None:
     """Return the path to the claude CLI, or None if it is not on PATH."""
@@ -257,38 +198,6 @@ def _claude_bin() -> str | None:
 def build_mcp_config(memory_url: str) -> dict[str, object]:
     """Build the --mcp-config payload pointing the spawned agent at mcp-memory only."""
     return {"mcpServers": {"memory": {"type": "http", "url": memory_url}}}
-
-
-def build_recall_command(
-    query: str,
-    *,
-    claude_bin: str,
-    model: str,
-    mcp_config_path: str,
-    max_turns: int,
-) -> list[str]:
-    """Build the headless ``claude -p`` argv for a read-only recall spawn.
-
-    ``max_turns`` caps the tool-calling loop that dominates recall latency, keeping
-    a spawn inside the calling client's timeout window.
-    """
-    prompt = f"{RECALL_RITUAL}\n\nQuery: {query}"
-    return [
-        claude_bin,
-        "-p",
-        prompt,
-        "--model",
-        model,
-        "--mcp-config",
-        mcp_config_path,
-        "--strict-mcp-config",
-        "--max-turns",
-        str(max_turns),
-        "--disallowedTools",
-        *DISALLOWED_TOOLS,
-        "--output-format",
-        "json",
-    ]
 
 
 def _build_curation_command(
@@ -351,7 +260,7 @@ def build_heavy_dream_command(
 
 
 def build_spawn_env(config_dir: str, *, base_env: dict[str, str] | None = None) -> dict[str, str]:
-    """Return the subprocess env for a recall or dream spawn.
+    """Return the subprocess env for a dream spawn.
 
     Inherits the parent environment so AWS/Bedrock credentials still resolve, and
     overrides three keys: CLAUDE_CONFIG_DIR isolates the spawn from the user's
@@ -378,7 +287,7 @@ def _model_matches(model_id: str, usage_keys: list[str]) -> bool:
     return any(token in key.lower() for key in usage_keys)
 
 
-def parse_recall_result(stdout: str, *, expected_model: str) -> SpawnResult:
+def parse_dream_result(stdout: str, *, expected_model: str) -> SpawnResult:
     """Extract the distilled result and metrics from a ``claude -p`` JSON payload.
 
     Raises:
@@ -388,19 +297,19 @@ def parse_recall_result(stdout: str, *, expected_model: str) -> SpawnResult:
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("recall agent returned malformed output") from exc
+        raise RuntimeError("dream agent returned malformed output") from exc
 
     if not isinstance(payload, dict) or payload.get("is_error"):
-        raise RuntimeError("recall agent reported an error")
+        raise RuntimeError("dream agent reported an error")
 
     result = payload.get("result")
     if not isinstance(result, str) or not result.strip():
-        raise RuntimeError("recall agent returned no findings")
+        raise RuntimeError("dream agent returned no findings")
 
     usage = payload.get("modelUsage")
     usage_keys = list(usage) if isinstance(usage, dict) else []
     if not _model_matches(expected_model, usage_keys):
-        raise RuntimeError("recall ran on an unexpected model")
+        raise RuntimeError("dream ran on an unexpected model")
 
     return {
         "text": result,
@@ -421,39 +330,13 @@ def _as_float(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-async def run_preflight(
-    command: str | None,
-    *,
-    timeout: float = _PREFLIGHT_TIMEOUT_SECONDS,
-) -> None:
-    """Run the optional pre-flight readiness check before a spawn.
-
-    Raises:
-        RuntimeError: if the command exits non-zero or times out. The message is
-            generic; callers must not leak the command or its output.
-    """
-    if not command:
-        return
-    try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        returncode = await asyncio.wait_for(proc.wait(), timeout=timeout)
-    except (TimeoutError, OSError) as exc:
-        raise RuntimeError("recall unavailable: pre-flight check failed") from exc
-    if returncode != 0:
-        raise RuntimeError("recall unavailable: pre-flight check failed")
-
-
-async def _spawn_recall(
+async def _spawn_agent(
     command: list[str],
     *,
     env: dict[str, str] | None = None,
-    timeout: float = _RECALL_TIMEOUT_SECONDS,
+    timeout: float,
 ) -> str:
-    """Spawn the recall agent and return its stdout, killing it on timeout."""
+    """Spawn the dream agent and return its stdout, killing it on timeout."""
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.DEVNULL,
@@ -466,9 +349,9 @@ async def _spawn_recall(
     except TimeoutError as exc:
         proc.kill()
         await proc.wait()
-        raise RuntimeError("recall timed out") from exc
+        raise RuntimeError("dream timed out") from exc
     if proc.returncode != 0:
-        raise RuntimeError("recall agent exited with an error")
+        raise RuntimeError("dream agent exited with an error")
     return stdout.decode()
 
 
@@ -485,7 +368,7 @@ async def _run_isolated_agent(
 ) -> SpawnResult:
     """Spawn a hermetic headless agent and return its parsed result.
 
-    Resolves the claude CLI, runs the pre-flight gate, then spawns in a throwaway
+    Resolves the claude CLI, then spawns in a throwaway
     tempdir holding the mcp-config and an isolated CLAUDE_CONFIG_DIR (no user
     hooks). ``build_command`` receives the resolved claude binary and mcp-config
     path. All failures surface as an ``ok=False`` result whose message is in
@@ -493,14 +376,9 @@ async def _run_isolated_agent(
     """
     claude_bin = _claude_bin()
     if not claude_bin:
-        return _failed_spawn("recall unavailable: claude CLI not found")
+        return _failed_spawn("dream unavailable: claude CLI not found")
 
-    try:
-        await run_preflight(get_preflight_command())
-    except RuntimeError as exc:
-        return _failed_spawn(str(exc))
-
-    work_dir = tempfile.mkdtemp(prefix="memory-agent-")
+    work_dir = tempfile.mkdtemp(prefix="mcp-memory-dream-")
     work_path = Path(work_dir)
     config_path = work_path / "mcp-config.json"
     isolated_config_dir = work_path / "config"
@@ -509,64 +387,12 @@ async def _run_isolated_agent(
         isolated_config_dir.mkdir()
         (isolated_config_dir / "settings.json").write_text(json.dumps(AGENT_SETTINGS), encoding="utf-8")
         command = build_command(claude_bin, str(config_path))
-        stdout = await _spawn_recall(command, env=build_spawn_env(str(isolated_config_dir)), timeout=timeout)
-        return parse_recall_result(stdout, expected_model=model)
+        stdout = await _spawn_agent(command, env=build_spawn_env(str(isolated_config_dir)), timeout=timeout)
+        return parse_dream_result(stdout, expected_model=model)
     except RuntimeError as exc:
         return _failed_spawn(str(exc))
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
-
-
-async def recall(query: str) -> str:
-    """Run a heavy memory recall in a throwaway agent and return distilled findings.
-
-    Records the recall to the shared status marker for the visualiser: an in-flight
-    count while it runs and a finished-history entry after. The finish is in a
-    ``finally`` so the in-flight count never leaks on timeout or error.
-    """
-    model = get_recall_model()
-    max_turns = get_recall_max_turns()
-    recall_status.record_start()
-    result: SpawnResult | None = None
-    try:
-        result = await _run_isolated_agent(
-            lambda claude_bin, config_path: build_recall_command(
-                query,
-                claude_bin=claude_bin,
-                model=model,
-                mcp_config_path=config_path,
-                max_turns=max_turns,
-            ),
-            model=model,
-            timeout=_RECALL_TIMEOUT_SECONDS,
-        )
-        return result["text"]
-    finally:
-        recall_status.record_finish(
-            query,
-            ok=result["ok"] if result else False,
-            duration_ms=result["duration_ms"] if result else None,
-            num_turns=result["num_turns"] if result else None,
-            cost_usd=result["cost_usd"] if result else None,
-        )
-
-
-def _register_recall(server: MCPServer) -> None:
-    """Register the recall tool, but only when the claude CLI it depends on is present.
-
-    Without claude every recall would fail at spawn time, so the tool is hidden from
-    ``tools/list`` rather than advertised and then failing on every call.
-    """
-    if _claude_bin():
-        server.add_tool(
-            recall,
-            description=RECALL_DESC,
-            title="Recall from memory",
-            annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=False, open_world_hint=True),
-        )
-
-
-_register_recall(mcp)
 
 
 async def run_dream_pass() -> str:
@@ -601,25 +427,6 @@ async def run_heavy_dream_pass() -> str:
     return result["text"]
 
 
-async def fetch_idle_seconds() -> float | None:
-    """Return the mcp-memory server's idle seconds, or None if it cannot be reached.
-
-    Queries the server's ``/api/idle`` route, which is mounted at the app root -
-    not under the ``/mcp`` path that get_memory_url() returns - so the suffix is
-    stripped. A plain GET does not count as memory activity, so polling here does
-    not reset the idle timer.
-    """
-    url = get_memory_url().removesuffix("/mcp") + "/api/idle"
-    try:
-        async with httpx.AsyncClient(timeout=_IDLE_FETCH_TIMEOUT_SECONDS) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            idle = response.json()["idle_seconds"]
-    except (httpx.HTTPError, ValueError, KeyError, TypeError):
-        return None
-    return float(idle) if isinstance(idle, (int, float)) else None
-
-
 @dataclass(frozen=True)
 class TierSpec:
     """What varies between the light and heavy dream tiers.
@@ -639,15 +446,15 @@ class TierSpec:
 def _pass_succeeded(audit: str) -> bool:
     """Return whether a dream audit describes a real pass rather than a handled failure.
 
-    Every handled-failure return string from the spawn stack begins with "recall ",
+    Every handled-failure return string from the spawn stack begins with "dream ",
     which a genuine audit (demotion lines or "nothing demoted") never does.
     """
-    return not audit.startswith("recall ")
+    return not audit.startswith("dream ")
 
 
 # Global single-flight guard: at most one dream (light OR heavy, scheduled OR
 # manual) runs at a time. A plain bool suffices because every tier watcher and
-# every manual trigger runs in the one memory-agent event loop, so a check-and-set
+# every manual trigger runs in the one mcp-memory event loop, so a check-and-set
 # with no await in between is atomic - and unlike a module-level asyncio.Lock it
 # does not bind to a single event loop (tests each run on a fresh loop).
 _dream_running = False
@@ -679,7 +486,7 @@ class _SessionState:
     last_pass_end: float = 0.0
 
 
-# Single coordinator session state; reset in tests via ``agent._session = _SessionState()``.
+# Single coordinator session state; reset in tests via ``dream._session = _SessionState()``.
 _session = _SessionState()
 
 
@@ -757,9 +564,7 @@ async def _coordinator_tick() -> None:
     A tier is added to ``_session.fired`` only after a successful guard claim, so a
     tick blocked by the single-flight guard simply retries the tier next poll.
     """
-    idle = await fetch_idle_seconds()
-    if idle is None:
-        return
+    idle = activity.idle_seconds()
     now = time.monotonic()
     for spec in _due_tiers(_session, now, idle, _enabled_tiers()):
         if await _run_guarded(spec):
@@ -822,21 +627,6 @@ def trigger_dream(tier: str) -> dict[str, object]:
     return {"started": True}
 
 
-@mcp.custom_route("/api/dream/trigger", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
-async def _dream_trigger_route(request: Request) -> JSONResponse:
-    """Trigger a manual dream pass. Body: ``{"tier": "light"|"heavy"}``."""
-    try:
-        body = await request.json()
-    except (ValueError, TypeError):
-        return JSONResponse({"started": False, "reason": "invalid JSON body"}, status_code=400)
-    tier = body.get("tier") if isinstance(body, dict) else None
-    if not isinstance(tier, str):
-        return JSONResponse({"started": False, "reason": "tier is required"}, status_code=400)
-    result = trigger_dream(tier)
-    status = 200 if result["started"] else 409
-    return JSONResponse(result, status_code=status)
-
-
 async def _coordinator_loop() -> None:
     """Poll and coordinate dream passes for whichever tiers are enabled.
 
@@ -851,16 +641,14 @@ async def _coordinator_loop() -> None:
         await _coordinator_tick()
 
 
-async def _serve() -> None:
-    """Serve over streamable HTTP, running the single dream coordinator alongside.
+def start_coordinator() -> asyncio.Task[None] | None:
+    """Snapshot tier config for the visualiser and start the dream coordinator if it can run.
 
     The coordinator starts only when the claude CLI it would spawn is present AND at
     least one tier is enabled; otherwise it would poll forever with every pass
-    no-opping. It is an explicit background task rather than an MCPServer ``lifespan``:
-    in stateless_http mode the low-level server runs per request, so a lifespan task
-    would be spawned and cancelled on every request. Cancelled cleanly on shutdown.
+    no-opping, so None is returned. The caller owns the returned task and cancels it
+    on shutdown.
     """
-    recall_status.record_startup()
     # Snapshot tier config on every boot so the visualiser reflects current
     # enabled/disabled state even when autonomous dream scheduling is off.
     for spec in _ALL_TIERS:
@@ -870,33 +658,6 @@ async def _serve() -> None:
             idle_threshold_seconds=spec.idle_getter(),
             poll_seconds=spec.poll_getter(),
         )
-    run_coordinator = _claude_bin() is not None and bool(_enabled_tiers())
-    coordinator = asyncio.create_task(_coordinator_loop()) if run_coordinator else None
-    try:
-        await mcp.run_streamable_http_async(port=get_agent_port(), stateless_http=True, json_response=True)
-    finally:
-        if coordinator is not None:
-            coordinator.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await coordinator
-
-
-def main(argv: list[str] | None = None) -> None:
-    """Run the memory-agent server, or install it as a service.
-
-    Bare invocation serves over streamable HTTP (with the idle-triggered dream
-    curation pass when enabled); ``setup-service`` installs a persistent
-    background service.
-    """
-    parser = argparse.ArgumentParser(prog="memory-agent", description="Memory recall agent server")
-    parser.add_subparsers(dest="command").add_parser("setup-service", help="Install as a persistent background service")
-    args = parser.parse_args(argv)
-
-    if args.command == "setup-service":
-        _setup_service_from_spec(_agent_spec(str(get_agent_port())))
-    else:
-        anyio.run(_serve)
-
-
-if __name__ == "__main__":
-    main()
+    if _claude_bin() is None or not _enabled_tiers():
+        return None
+    return asyncio.create_task(_coordinator_loop())

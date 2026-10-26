@@ -3,8 +3,7 @@
 Each scenario seeds a small synthetic database and asserts a concrete, intended ranking
 or metric outcome - recall on a targeted query, resistance to a near-miss distractor,
 preference for fresher/higher-voted content over stale duplicates, and correct abstention
-(empty results, zero metrics) when nothing relevant exists. Scenario 5 measures the
-recall-vs-search payload/cost tradeoff on synthetic data.
+(empty results, zero metrics) when nothing relevant exists.
 """
 
 from __future__ import annotations
@@ -14,12 +13,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mcp_memory import eval as ranking_eval
-from mcp_memory.payload import payload_size
-from mcp_memory.recall_efficiency import recall_efficiency
 from tests import SeedEntity, rank_of, seed_store
 
 if TYPE_CHECKING:
-    from mcp_memory.recall_status import RecallRecord
     from mcp_memory.storage import Storage
 
 
@@ -159,45 +155,3 @@ class TestAbstentionControl:
         ranked = self._seed_noise_and_search(store)
 
         assert ranked == []
-
-
-class TestRecallVsSearchCostTradeoff:
-    def test_distilled_recall_output_is_smaller_than_raw_search_payload(self, store: Storage) -> None:
-        seed_store(
-            store,
-            "bench",
-            [
-                SeedEntity(
-                    f"task/note-{i}",
-                    [
-                        (
-                            f"deployment rollback runbook detail number {i} "
-                            "with substantial observation text to inflate payload"
-                        )
-                    ],
-                )
-                for i in range(8)
-            ],
-        )
-        search_payload = store.reads.search("bench", "deployment rollback runbook", limit=10)
-        raw_bytes = payload_size(search_payload)
-
-        distilled = "Rollback: revert deploy, run runbook step 3."
-        record: RecallRecord = {
-            "ts": 0.0,
-            "query": "deployment rollback runbook",
-            "ok": True,
-            "duration_ms": 4200,
-            "num_turns": 5,
-            "cost_usd": 0.0031,
-        }
-
-        efficiency = recall_efficiency(search_payload, distilled, record=record)
-
-        assert efficiency.output_bytes < raw_bytes
-        assert efficiency.input_bytes == raw_bytes
-        assert efficiency.saved_bytes > 0
-        assert 0.0 < efficiency.ratio < 1.0
-        assert efficiency.duration_ms == 4200
-        assert efficiency.num_turns == 5
-        assert efficiency.cost_usd == pytest.approx(0.0031)
