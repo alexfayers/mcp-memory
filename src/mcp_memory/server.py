@@ -16,7 +16,7 @@ import anyio
 from mcp.server.mcpserver import MCPServer
 from mcp.types import Tool, ToolAnnotations
 
-from . import metrics, usefulness
+from . import dream, metrics, usefulness
 from .activity import record_tool
 from .config import get_db_path, get_sweep_interval_seconds
 from .models import (
@@ -1316,14 +1316,15 @@ async def _sweep_loop() -> None:
 
 
 async def _serve() -> None:
-    """Serve over streamable HTTP, running the maintenance sweep loop alongside.
+    """Serve over streamable HTTP, running the maintenance sweep loop and dream coordinator alongside.
 
-    The sweep loop is an explicit background task rather than an MCPServer ``lifespan``:
+    The sweep loop and dream coordinator are explicit background tasks rather than an MCPServer ``lifespan``:
     this server runs with ``stateless_http=True``, where a lifespan-attached task is
     spawned and cancelled per client session rather than once globally, which is wrong
     for a singleton periodic job. Cancelled cleanly on shutdown.
     """
     sweeper = asyncio.create_task(_sweep_loop())
+    dreamer = dream.start_coordinator()
     try:
         await mcp.run_streamable_http_async(
             port=int(os.environ.get("MCP_MEMORY_PORT", "8000")),
@@ -1331,9 +1332,11 @@ async def _serve() -> None:
             json_response=True,
         )
     finally:
-        sweeper.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await sweeper
+        for task in (sweeper, dreamer):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
 
 def main() -> None:

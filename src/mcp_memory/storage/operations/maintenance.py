@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from mcp_memory.storage.repositories.entities import EntityRepository
     from mcp_memory.storage.repositories.telemetry import TelemetryRepository
 
-# Vote score at or below which an orphan becomes eligible for autonomous GC. agent.py imports
+# Vote score at or below which an orphan becomes eligible for autonomous GC. dream.py imports
 # this so the dream's saturation-floor prose and the GC reap threshold share one value.
 GC_DOWNVOTE_FLOOR = -10
 

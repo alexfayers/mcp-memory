@@ -94,20 +94,6 @@ svg { width: 100vw; height: 100vh; }
   overflow-y: auto; }
 #dream { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
   backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
-#recall { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
-  backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
-#recall-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
-#recall-head .pill { display: inline-flex; align-items: center; gap: 6px; color: #8b949e; }
-#recall-head .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #484f58; flex-shrink: 0; }
-#recall-head.on .pill .dot { background: #58a6ff; box-shadow: 0 0 6px #58a6ff; animation: glowpulse 1.6s ease-in-out infinite; }
-#recall-head .running { margin-left: auto; color: #58a6ff; font-variant-numeric: tabular-nums; }
-#recall-feed { max-height: 22vh; overflow-y: auto; }
-#recall-feed:empty::after { content: "No recalls yet"; display: block; padding: 8px 12px; color: #484f58; font-style: italic; }
-#recall-feed .rc { display: flex; flex-direction: column; gap: 1px; padding: 4px 12px; border-left: 3px solid var(--c); }
-#recall-feed .rc .top { display: flex; gap: 6px; align-items: baseline; }
-#recall-feed .rc .t { color: #484f58; font-variant-numeric: tabular-nums; flex-shrink: 0; }
-#recall-feed .rc .q { color: #c9d1d9; word-break: break-word; }
-#recall-feed .rc .meta { color: #6e7681; font-variant-numeric: tabular-nums; }
 #dream-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
 #dream-head .pill { display: inline-flex; align-items: center; gap: 6px; color: #8b949e; }
 #dream-head .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #484f58; flex-shrink: 0; }
@@ -155,13 +141,12 @@ svg { width: 100vw; height: 100vh; }
 #eval-body .em { display: flex; align-items: baseline; gap: 8px; padding: 3px 12px; }
 #eval-body .em .lbl { color: #8b949e; flex: 1; min-width: 0; }
 #eval-body .em .val { color: #56d364; font-variant-numeric: tabular-nums; flex-shrink: 0; }
-#usage-trend-head, #eval-head, #recall-head, #dream-head { cursor: pointer; }
+#usage-trend-head, #eval-head, #dream-head { cursor: pointer; }
 #usage-trend.collapsed #usage-trend-body, #eval.collapsed #eval-body,
-#recall.collapsed #recall-feed,
 #dream.collapsed #dream-body, #dream.collapsed #dream-operations, #dream.collapsed #dream-actions { display: none; }
-#usage-trend-head .caret, #eval-head .caret, #recall-head .caret, #dream-head .caret { color: #6e7681; font-size: 10px; transition: transform 0.15s; display: inline-block; }
+#usage-trend-head .caret, #eval-head .caret, #dream-head .caret { color: #6e7681; font-size: 10px; transition: transform 0.15s; display: inline-block; }
 #usage-trend:not(.collapsed) #usage-trend-head .caret, #eval:not(.collapsed) #eval-head .caret,
-#recall:not(.collapsed) #recall-head .caret, #dream:not(.collapsed) #dream-head .caret { transform: rotate(90deg); }
+#dream:not(.collapsed) #dream-head .caret { transform: rotate(90deg); }
 </style>
 </head>
 <body>
@@ -214,14 +199,6 @@ svg { width: 100vw; height: 100vh; }
       <span class="qc" id="eval-qc"></span>
     </div>
     <div id="eval-body"></div>
-  </div>
-  <div id="recall" class="collapsed">
-    <div id="recall-head">
-      <span class="caret">&#9656;</span>
-      <span class="pill"><span class="dot"></span><span id="recall-state">recall</span></span>
-      <span class="running" id="recall-active"></span>
-    </div>
-    <div id="recall-feed"></div>
   </div>
   <div id="dream" class="collapsed">
     <div id="dream-head">
@@ -803,13 +780,13 @@ function renderDream(d) {
   lightButton.title = d.available
     ? lightEnabled
       ? "Run a light dream pass now"
-      : "Enable with MCP_DREAM_ENABLED=true and restart memory-agent"
-    : "Dream status unavailable. Start memory-agent, set MCP_DREAM_ENABLED=true, then restart memory-agent";
+      : "Enable with MCP_DREAM_ENABLED=true and restart mcp-memory"
+    : "Dream status unavailable. Set MCP_DREAM_ENABLED=true, then restart mcp-memory";
   heavyButton.title = d.available
     ? heavyEnabled
       ? "Run a heavy dream pass now"
-      : "Enable with MCP_DREAM_HEAVY_ENABLED=true and restart memory-agent"
-    : "Dream status unavailable. Start memory-agent, set MCP_DREAM_HEAVY_ENABLED=true, then restart memory-agent";
+      : "Enable with MCP_DREAM_HEAVY_ENABLED=true and restart mcp-memory"
+    : "Dream status unavailable. Set MCP_DREAM_HEAVY_ENABLED=true, then restart mcp-memory";
   const tierLines = ["light", "heavy"].map(n => tierLine(n, tiers[n], d.idle_seconds)).join("");
   if (tierLines) {
     lines.push(tierLines);
@@ -881,34 +858,6 @@ dreamButtons.forEach(b => b.onclick = () => triggerDream(b.dataset.tier));
 
 fetchDream();
 setInterval(fetchDream, 5000);
-
-function renderRecall(d) {
-  const head = document.getElementById("recall-head");
-  head.classList.toggle("on", d.available && d.active > 0);
-  document.getElementById("recall-state").textContent = d.available && d.active > 0 ? "recall · on" : "recall · off";
-  document.getElementById("recall-active").textContent = d.active > 0 ? `${d.active} running` : "";
-  const feed = document.getElementById("recall-feed");
-  const rows = (d.recent || []).slice().reverse().map(r => {  // newest first
-    const time = new Date(r.ts * 1000).toLocaleTimeString();
-    const colour = r.ok ? "#3fb950" : "#f85149";
-    const bits = [];
-    if (r.duration_ms != null) bits.push(formatDuration(r.duration_ms / 1000));
-    if (r.num_turns != null) bits.push(`${r.num_turns} turns`);
-    if (r.cost_usd != null) bits.push(`$${r.cost_usd.toFixed(2)}`);
-    const meta = bits.join(" · ") || (r.ok ? "" : "failed");
-    return `<div class="rc" style="--c:${colour}"><div class="top">`
-      + `<span class="t">${time}</span><span class="q">${(r.query || "").replace(/</g, "&lt;")}</span></div>`
-      + (meta ? `<span class="meta">${meta}</span>` : "") + `</div>`;
-  });
-  feed.innerHTML = rows.join("");
-}
-
-async function fetchRecall() {
-  try { renderRecall(await (await dedupFetch("/api/recall", () => fetch("/api/recall"))).json()); }
-  catch (e) { /* transient poll failure; retry next tick */ }
-}
-fetchRecall();
-setInterval(fetchRecall, 3000);
 
 const SPARK_W = 120, SPARK_H = 24;
 function renderUsageTrend(d) {
@@ -998,7 +947,6 @@ function wireCollapse(cardId, headId, fetchFn) {
 }
 wireCollapse("usage-trend", "usage-trend-head", fetchUsageTrend);
 wireCollapse("eval", "eval-head", fetchEval);
-wireCollapse("recall", "recall-head", fetchRecall);
 wireCollapse("dream", "dream-head", fetchDream);
 
 loadProjects();

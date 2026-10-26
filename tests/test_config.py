@@ -31,30 +31,6 @@ class TestResolvePort:
         assert config.resolve_port() == expected
 
 
-class TestAgentUrl:
-    def test_explicit_url_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("MCP_AGENT_URL", "http://example:9")
-        assert config.get_agent_url() == "http://example:9"
-
-    def test_uses_agent_port_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MCP_AGENT_URL", raising=False)
-        monkeypatch.setenv("MCP_AGENT_PORT", "9100")
-        assert config.get_agent_url() == "http://localhost:9100"
-
-    def test_falls_back_to_default_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MCP_AGENT_URL", raising=False)
-        monkeypatch.delenv("MCP_AGENT_PORT", raising=False)
-        assert config.get_agent_url() == "http://localhost:8100"
-
-
-class TestRecallConfig:
-    def test_max_turns_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MCP_RECALL_MAX_TURNS", raising=False)
-        assert config.get_recall_max_turns() == 12
-        monkeypatch.setenv("MCP_RECALL_MAX_TURNS", "6")
-        assert config.get_recall_max_turns() == 6
-
-
 class TestDreamConfig:
     def test_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_ENABLED", raising=False)
@@ -82,9 +58,9 @@ class TestDreamConfig:
         monkeypatch.setenv("MCP_DREAM_POLL_SECONDS", "5")
         assert config.get_dream_poll_seconds() == 5.0
 
-    def test_model_defaults_to_recall_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_model_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_MODEL", raising=False)
-        assert config.get_dream_model() == config.get_recall_model()
+        assert config.get_dream_model() == config._DEFAULT_DREAM_MODEL
         monkeypatch.setenv("MCP_DREAM_MODEL", "some-model")
         assert config.get_dream_model() == "some-model"
 

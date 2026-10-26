@@ -8,9 +8,7 @@ import re
 
 _DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
 _DEFAULT_PORT = "8000"
-_DEFAULT_AGENT_PORT = "8100"
-_DEFAULT_RECALL_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-_DEFAULT_RECALL_MAX_TURNS = "12"
+_DEFAULT_DREAM_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 _DEFAULT_AUTO_VOTE_WINDOW_SECONDS = "1800"
 _DEFAULT_AUTO_VOTE_MAX_PER_DAY = "3"
 _DEFAULT_DREAM_IDLE_SECONDS = "1800"
@@ -74,52 +72,17 @@ def get_workspace_markers() -> tuple[str, ...]:
     return tuple(marker.strip() for marker in raw.split(",") if marker.strip())
 
 
-def get_agent_port() -> int:
-    """Return the HTTP port for the memory-agent server."""
-    return int(os.environ.get("MCP_AGENT_PORT", _DEFAULT_AGENT_PORT))
-
-
-def get_agent_url() -> str:
-    """Return the base URL of the memory-agent server that the visualiser proxies to.
-
-    Prefers an explicit MCP_AGENT_URL, then MCP_AGENT_PORT, then the default agent
-    port. The mcp-memory process does not otherwise know the agent's port, so a
-    non-default port must be set for the memory server too (see cli._memory_spec).
-    """
-    explicit = os.environ.get("MCP_AGENT_URL")
-    if explicit:
-        return explicit
-    return f"http://localhost:{get_agent_port()}"
-
-
 def resolve_port() -> str:
     """Return MCP_MEMORY_PORT, then the port of an installed service, then the default port."""
     return os.environ.get("MCP_MEMORY_PORT") or detect_service_port() or _DEFAULT_PORT
 
 
 def get_memory_url() -> str:
-    """Return the URL of the mcp-memory server that recall queries.
-
-    Prefers an explicit MCP_MEMORY_URL, then the resolved port.
-    """
+    """Return the mcp-memory server URL that dream spawns connect to."""
     explicit = os.environ.get("MCP_MEMORY_URL")
     if explicit:
         return explicit
     return f"http://localhost:{resolve_port()}/mcp"
-
-
-def get_recall_model() -> str:
-    """Return the fully-qualified model id used for recall spawns."""
-    return os.environ.get("MCP_RECALL_MODEL", _DEFAULT_RECALL_MODEL)
-
-
-def get_recall_max_turns() -> int:
-    """Return the cap on tool-calling turns for a recall spawn.
-
-    Bounds recall wall-time and cost below the calling client's timeout, since the
-    sequential multi-turn tool loop - not the model - dominates recall latency.
-    """
-    return int(os.environ.get("MCP_RECALL_MAX_TURNS", _DEFAULT_RECALL_MAX_TURNS))
 
 
 def get_auto_vote_window_seconds() -> float:
@@ -134,11 +97,6 @@ def get_auto_vote_window_seconds() -> float:
 def get_auto_vote_max_per_day() -> int:
     """Return the per-entity daily cap on deterministic auto-votes, bounding score growth."""
     return int(os.environ.get("MCP_AUTO_VOTE_MAX_PER_DAY", _DEFAULT_AUTO_VOTE_MAX_PER_DAY))
-
-
-def get_preflight_command() -> str | None:
-    """Return the optional pre-flight command run before spawning a recall agent."""
-    return os.environ.get("MCP_AGENT_PREFLIGHT_COMMAND") or None
 
 
 def get_dream_enabled() -> bool:
@@ -157,8 +115,8 @@ def get_dream_poll_seconds() -> float:
 
 
 def get_dream_model() -> str:
-    """Return the model id used for dream spawns, defaulting to the recall model."""
-    return os.environ.get("MCP_DREAM_MODEL") or get_recall_model()
+    """Return the model id used for dream spawns."""
+    return os.environ.get("MCP_DREAM_MODEL") or _DEFAULT_DREAM_MODEL
 
 
 def get_dream_timeout() -> float:

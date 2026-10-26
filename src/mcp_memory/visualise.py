@@ -6,12 +6,10 @@ from dataclasses import asdict
 import importlib.resources
 from typing import TYPE_CHECKING
 
-import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from . import activity, dream_status, recall_status
-from .config import get_agent_url
+from . import activity, dream, dream_status
 from .eval import evaluate_cached_async
 from .metrics import usage_over_time
 
@@ -23,13 +21,7 @@ if TYPE_CHECKING:
     from .models import Entity, Observation
     from .storage import NodeList, Storage
 
-__all__ = ["httpx"]
-
 _VISUALISE_HTML = importlib.resources.files("mcp_memory").joinpath("templates/visualise.html").read_text()
-
-# The trigger only kicks off a background pass on the agent and returns at once, so
-# a short timeout is enough; it bounds how long an unreachable agent blocks the UI.
-_TRIGGER_TIMEOUT_SECONDS = 5.0
 
 
 def get_projects(db: Storage) -> list[str]:
@@ -48,11 +40,10 @@ def get_project_paths(db: Storage) -> dict[str, list[str]]:
 def get_dream_state() -> dict[str, object]:
     """Compose the persisted dream status with live idle so the UI polls it in one call.
 
-    The dream runs in the separate memory-agent process and persists each tier's
-    config, the latest pass, and any in-flight pass (``running``) to a shared marker;
-    this reads that marker and pairs it with the server's own live idle time. When the
-    marker is absent (the dream never ran or is disabled), ``tiers`` is empty but live
-    idle is still included.
+    The dream persists each tier's config, the latest pass, and any in-flight pass
+    (``running``) to a marker file; this reads that marker and pairs it with the
+    server's own live idle time. When the marker is absent (the server never started
+    with dreaming configured), ``tiers`` is empty but live idle is still included.
     """
     status = dream_status.read_status()
     return {
@@ -62,22 +53,6 @@ def get_dream_state() -> dict[str, object]:
         "running": status["running"] if status else None,
         "idle_seconds": activity.idle_seconds(),
         "last_activity": activity.last_activity(),
-    }
-
-
-def get_recall_state() -> dict[str, object]:
-    """Return the memory-agent's recall activity for the UI: in-flight count and history.
-
-    Recall runs in the separate memory-agent process and persists its live count and
-    recent finished recalls to a shared marker; this reads that marker. There is no
-    server-side signal to compose (recall does not run in mcp-memory), so an absent
-    marker reports as unavailable with an empty history.
-    """
-    status = recall_status.read_status()
-    return {
-        "available": status is not None,
-        "active": status["active"] if status else 0,
-        "recent": status["recent"] if status else [],
     }
 
 
@@ -214,32 +189,16 @@ def register_visualise_routes(mcp: MCPServer, get_db: Callable[[], Storage]) -> 
 
     @mcp.custom_route("/api/dream/trigger", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_dream_trigger(request: Request) -> JSONResponse:
-        # The dream runs in the separate memory-agent process; the browser is
-        # same-origin only with mcp-memory, so this forwards the trigger there.
+        """Trigger a manual dream pass. Body: ``{"tier": "light"|"heavy"}``."""
         try:
-            body = await request.body()
-        except Exception:
-            return JSONResponse({"started": False, "reason": "invalid request"}, status_code=400)
-        try:
-            async with httpx.AsyncClient(timeout=_TRIGGER_TIMEOUT_SECONDS) as client:
-                agent_response = await client.post(
-                    get_agent_url() + "/api/dream/trigger",
-                    content=body,
-                    headers={"content-type": "application/json"},
-                )
-        except httpx.HTTPError:
-            return JSONResponse({"started": False, "reason": "agent unreachable"}, status_code=503)
-        try:
-            payload = agent_response.json()
-        except ValueError:
-            # The agent lacks the route (or something else answered): its body is not
-            # the JSON envelope we relay, so report a gateway error rather than 500.
-            return JSONResponse({"started": False, "reason": "agent error"}, status_code=502)
-        return JSONResponse(payload, status_code=agent_response.status_code)
-
-    @mcp.custom_route("/api/recall", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
-    async def api_recall(request: Request) -> JSONResponse:
-        return JSONResponse(get_recall_state())
+            body = await request.json()
+        except (ValueError, TypeError):
+            return JSONResponse({"started": False, "reason": "invalid JSON body"}, status_code=400)
+        tier = body.get("tier") if isinstance(body, dict) else None
+        if not isinstance(tier, str):
+            return JSONResponse({"started": False, "reason": "tier is required"}, status_code=400)
+        result = dream.trigger_dream(tier)
+        return JSONResponse(result, status_code=200 if result["started"] else 409)
 
     @mcp.custom_route("/api/usage-trend", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_usage_trend(request: Request) -> JSONResponse:

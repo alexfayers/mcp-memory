@@ -1,9 +1,8 @@
 """Persisted status of the autonomous dream curation pass, for the visualiser.
 
-The dream runs inside the memory-agent process; the visualiser is served by the
-separate mcp-memory process. The two share a data directory, so the agent writes
-the latest pass and its config to a small JSON marker here (next to the database),
-and mcp-memory reads it back to expose the dream's state over ``/api/dream``.
+The dream writes the latest pass and its config to a small JSON marker here (next
+to the database), and the visualiser reads it back to expose the dream's state over
+``/api/dream``.
 
 Only the most recent pass is kept - the current demoted state of the graph is the
 ground truth for what remains demoted, so no rolling history is needed.
@@ -136,7 +135,7 @@ def record_startup(
     second call accumulates into the shared ``_configs`` dict.
 
     Resets any ``running`` flag: on a fresh process nothing is truly in flight, so
-    this bounds a stale flag a crash may have left mid-pass (mirroring recall_status).
+    this bounds a stale flag a crash may have left mid-pass.
     """
     global _last_pass, _running  # ruff: ignore[global-statement]
     _configs[tier] = {
