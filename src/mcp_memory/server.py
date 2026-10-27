@@ -16,7 +16,7 @@ import anyio
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 
-from . import dream, metrics, usefulness
+from . import dream, metrics, telemetry, usefulness
 from .activity import record_tool
 from .config import get_db_path, get_sweep_interval_seconds
 from .models import (
@@ -46,11 +46,11 @@ def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> CallToolResult:
         result = fn(*args, **kwargs)
         try:
-            bound = inspect.signature(fn).bind_partial(*args, **kwargs)
-            arguments = dict(bound.arguments)
+            arguments = dict(inspect.signature(fn).bind_partial(*args, **kwargs).arguments)
             record_tool(fn.__name__, arguments, result)
             usefulness.observe(_get_db(), fn.__name__, arguments, result)
             metrics.record(_get_db(), fn.__name__, arguments, result)
+            telemetry.note_result(fn.__name__, result)
         except Exception:  # ruff: ignore[try-except-pass] - instrumentation must never break a tool call
             pass
         return CallToolResult(content=[TextContent(type="text", text=compact_json(result))], structured_content=result)
@@ -1311,9 +1311,21 @@ async def _sweep_loop() -> None:
     while True:
         try:
             _get_db().maintenance.run_sweeps()
-        except Exception:
+        except Exception as exc:
             logger.exception("Maintenance sweep failed")
+            telemetry.report_exception(exc, "sweep")
         await asyncio.sleep(get_sweep_interval_seconds())
+
+
+async def _telemetry_loop() -> None:
+    """Send an anonymous usage rollup every telemetry interval, forever."""
+    usage = telemetry.UsageTelemetry(_get_db())
+    while True:
+        await asyncio.sleep(telemetry.REPORT_INTERVAL_SECONDS)
+        try:
+            usage.report()
+        except Exception:
+            logger.exception("Usage telemetry failed")
 
 
 async def _serve() -> None:
@@ -1325,6 +1337,7 @@ async def _serve() -> None:
     for a singleton periodic job. Cancelled cleanly on shutdown.
     """
     sweeper = asyncio.create_task(_sweep_loop())
+    reporter = asyncio.create_task(_telemetry_loop())
     dreamer = dream.start_coordinator()
     try:
         await mcp.run_streamable_http_async(
@@ -1333,7 +1346,7 @@ async def _serve() -> None:
             json_response=True,
         )
     finally:
-        for task in (sweeper, dreamer):
+        for task in (sweeper, reporter, dreamer):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -1342,7 +1355,11 @@ async def _serve() -> None:
 
 def main() -> None:
     """Run the MCP server with streamable HTTP transport."""
-    anyio.run(_serve)
+    try:
+        anyio.run(_serve)
+    except Exception as exc:
+        telemetry.report_exception(exc, "serve")
+        raise
 
 
 if __name__ == "__main__":

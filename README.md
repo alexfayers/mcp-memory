@@ -330,6 +330,17 @@ mcp-memory import <input_path> --project name1 --dry-run
 
 The merge is additive and safe to re-run: new entities are inserted verbatim, an existing same-type entity keeps its own status and timestamps but takes the higher vote score and gains any missing observations, and a name that collides with a different entity type is skipped and reported. Relations and group memberships are deduplicated. Registered paths are never written locally - the summary instead prints the source path(s) so you can register the correct local one with `set_metadata`.
 
+## Telemetry
+
+When installed alongside [llm-prompts](https://github.com/alexfayers/llm-prompts), the server sends anonymous usage events to PostHog (EU) under llm-prompts' install id. It follows llm-prompts' opt-out and sends nothing without llm-prompts, or when no llm-prompts command has run in the last day. See the llm-prompts README for the opt-out settings.
+
+- Sent hourly while the server is in use, only if tools were called:
+  - per tool: the number of successful and failed calls, and the median input and output byte sizes
+  - the database size in MB, the entity count and the project count, each as a power-of-ten range
+  - the installed mcp-memory commit (`null` for a local install), OS and Python version
+- Sent on a crash of the server or its maintenance sweep: the exception types and the mcp-memory frames (file, function, line). Never the message.
+- Never sent: project names, tool options, queries, memory contents, paths or hostnames.
+
 ## Development
 
 ```bash
