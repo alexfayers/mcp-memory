@@ -70,7 +70,9 @@ extend-ignore = [
     "pytest-fixture-autouse",
     "too-many-locals",
     "non-empty-init-module",
+    "import-private-name",
 ]
+"tests/eval/eval_fixture.py" = ["too-many-positional-arguments", "too-many-locals"]
 "tests/eval/regen_baseline.py" = ["print"]
 "tests/eval/compare_baseline.py" = ["print"]
 "tests/eval/regen_eval_baseline.py" = ["print"]
@@ -116,6 +118,7 @@ relative_files = true
 [tool.uv.sources]
 fayers-configs = { git = "https://github.com/alexfayers/fayers-configs" }
 cline-hooks = { git = "https://github.com/alexfayers/cline-hooks" }
+llm-prompts = { git = "https://github.com/alexfayers/llm-prompts" }
 
 [dependency-groups]
-dev = ["ruff>=0.11", "mypy>=1.15", "pytest>=8", "pytest-cov>=6.1", "fayers-configs", "cline-hooks"]
+dev = ["ruff>=0.11", "mypy>=1.15", "pytest>=8", "pytest-cov>=6.1", "fayers-configs", "cline-hooks", "llm-prompts"]

@@ -9,6 +9,7 @@ observations and relations, all restorable until a grace-window purge.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from dataclasses import dataclass, field
 from itertools import zip_longest
 import json
@@ -22,7 +23,7 @@ import tempfile
 import time
 from typing import TYPE_CHECKING, TypedDict, cast
 
-from . import activity, backup, dream_status
+from . import activity, backup, dream_status, telemetry
 from .atomic_write import write_json_atomic
 from .audit import audit_graph, propose_plan
 from .config import (
@@ -1170,15 +1171,26 @@ async def _run_claimed(spec: TierSpec) -> None:
     global _dream_running, _pass_metrics  # ruff: ignore[global-statement]
     dream_status.record_pass_start(spec.name)
     _pass_metrics = {}
+    started = time.monotonic()
+    audit = ""
+    error_type: str | None = None
     try:
         audit = await spec.run_pass()
     except Exception as exc:
         logger.exception("%s dream pass failed", spec.name)
+        error_type = type(exc).__name__
         dream_status.record_pass(str(exc), ok=False, tier=spec.name, metrics=_pass_metrics)
     else:
         logger.info("%s dream: %s", spec.name, audit)
         dream_status.record_pass(audit, ok=_pass_succeeded(audit), tier=spec.name, metrics=_pass_metrics)
     finally:
+        telemetry.report_dream(
+            spec.name,
+            ok=error_type is None and _pass_succeeded(audit),
+            duration_ms=round((time.monotonic() - started) * 1000),
+            error_type=error_type,
+            operations=Counter(op["action"] for op in dream_status.parse_operations(audit)),
+        )
         _dream_running = False
         _session.last_pass_end = time.monotonic()
 

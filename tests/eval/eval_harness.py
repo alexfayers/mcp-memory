@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from mcp_memory.eval import evaluate
 from tests.eval.eval_baseline import RANKING_METRICS
+
+from .eval_fixture import _pinned, mark_used
 
 if TYPE_CHECKING:
     import pytest
@@ -20,7 +22,6 @@ if TYPE_CHECKING:
     from mcp_memory.eval import EvalReport
     from mcp_memory.storage import Storage
 
-_FIXTURE_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 _FIXTURE_LATER = datetime(2026, 6, 1, tzinfo=UTC)
 
 _GATE_METRICS = ("mean_recall_at_k", "mean_success_at_k", "mrr")
@@ -29,24 +30,9 @@ _LABEL_W = 20
 _COL_W = 10
 
 
-def _pinned(days: float) -> str:
-    """Return the SQLite timestamp `days` days before the pinned fixture instant."""
-    return (_FIXTURE_NOW - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-
-
 def _row(label: str, before: str, after: str, delta: str) -> str:
     """Format one fixed-width row of a before/after/delta table."""
     return f"{label:<{_LABEL_W}}{before:>{_COL_W}}{after:>{_COL_W}}{delta:>{_COL_W}}"
-
-
-def mark_used(db: Storage, retrieval_id: str, *names: str) -> None:
-    """Mark `names` used within `retrieval_id`, keyed by the (retrieval_id, name) pair."""
-    used_at = _pinned(0)
-    with db.connection.transaction():
-        db.connection.write_many(
-            "UPDATE surfaced_entities SET used_at = ? WHERE retrieval_id = ? AND entity_name = ?",
-            [(used_at, retrieval_id, name) for name in names],
-        )
 
 
 def _build_eval_fixture(db: Storage) -> None:

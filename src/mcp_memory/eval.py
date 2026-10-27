@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 import functools
 import math
 from pathlib import Path
@@ -181,7 +181,8 @@ def evaluate(
     surfaced on or after that instant are scored. When ``min_content_tokens`` is given,
     degenerate short queries are excluded from the labelled set (see ``iter_labelled_queries``).
     ``now`` is forwarded to every replayed search as the instant recency decay is measured
-    from, so a fixed graph yields identical metrics on any day. ``ranker``, when given, supplies
+    from, so a fixed graph yields identical metrics on any day. It defaults to the current time,
+    read once so every search of the run shares it. ``ranker``, when given, supplies
     each query's ranked names in place of the built-in replay, and ``now`` then does not apply.
     ``include``, when given, scores only the labelled queries it returns True for.
     """
@@ -190,7 +191,7 @@ def evaluate(
     recalls: list[float] = []
     ndcgs: list[float] = []
     successes: list[float] = []
-    rank = ranker or functools.partial(_replayed_names, db, k, now)
+    rank = ranker or functools.partial(_replayed_names, db, k, now or datetime.now(tz=UTC))
     for labelled in iter_labelled_queries(db, since, min_content_tokens):
         if not labelled.relevant or (include is not None and not include(labelled)):
             continue

@@ -21,9 +21,8 @@ from mcp_memory.eval import evaluate
 from mcp_memory.models import Relation
 from mcp_memory.storage import open_writable
 from mcp_memory.storage.operations import reads
-from tests.eval.eval_harness import _FIXTURE_NOW, _pinned
 
-from .eval_fixture import _K, _record_retrieval
+from .eval_fixture import _FIXTURE_NOW, _K, _pinned, _record_retrieval
 
 if TYPE_CHECKING:
     from collections.abc import Callable

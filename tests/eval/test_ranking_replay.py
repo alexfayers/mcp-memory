@@ -11,15 +11,16 @@ from mcp_memory.storage import open_writable
 from mcp_memory.storage.operations import reads
 from mcp_memory.storage.pure import ranking
 from mcp_memory.storage.pure.ranking import score_row
-from tests.eval.eval_fixture import _build_populated_fixture
 from tests.eval.eval_harness import _GATE_METRICS
 from tests.eval.ranking_replay import measure
+
+from .eval_fixture import _build_populated_fixture
 
 if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
-    from tests.eval.eval_fixture import EvalFixture
+    from .eval_fixture import EvalFixture
 
 
 def _inverted(*, rank: float, updated_at: str, entity_type: str, vote_score: int, now: datetime) -> float:

@@ -23,14 +23,13 @@ from mcp_memory import (
 from tests import backdate_store, rank_of
 from tests.eval.eval_harness import (
     _FIXTURE_LATER,
-    _FIXTURE_NOW,
     _build_eval_fixture,
-    _pinned,
     assert_no_regression,
     attach_eval_report,
-    mark_used,
     measure_change,
 )
+
+from .eval_fixture import _FIXTURE_NOW, _pinned, mark_used
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -576,6 +575,25 @@ class TestEvalDeterminism:
         assert report.mean_recall_at_k == pytest.approx(1.0)
         assert report.mean_ndcg_at_k == pytest.approx((1 / math.log2(3) + 1.0) / 2)
         assert report.mean_success_at_k == pytest.approx(1.0)
+
+    def test_every_replayed_search_of_one_run_shares_one_instant_by_default(
+        self, store: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _build_eval_fixture(store)
+        instants: list[object] = []
+        search = store.reads.search
+
+        def spy(*args: object, **kwargs: object) -> object:
+            instants.append(kwargs["now"])
+            return search(*args, **kwargs)
+
+        monkeypatch.setattr(store.reads, "search", spy)
+
+        ranking_eval.evaluate(store, k=10)
+
+        assert len(instants) == 2
+        assert instants[0] is instants[1]
+        assert instants[0] is not None
 
     def test_metrics_follow_the_injected_now(self, store: Storage) -> None:
         _build_eval_fixture(store)
