@@ -16,12 +16,13 @@ from typing import TYPE_CHECKING
 
 from mcp_memory import server
 from mcp_memory.payload import payload_size
-from tests.eval.eval_fixture import _PROJECTS, _TOPICS
+
+from .eval_fixture import _PROJECTS, _TOPICS
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
-    from tests.eval.eval_fixture import EvalFixture
+    from .eval_fixture import EvalFixture
 
 
 def _search_nodes_probes(fixture: EvalFixture, *, compact: bool = False) -> list[int]:

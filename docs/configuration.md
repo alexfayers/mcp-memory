@@ -2,7 +2,7 @@
 
 Environment variables. The server reads the first table. The hook plugin reads the second, from the agent's environment.
 
-`mcp-memory setup-service` stores these variables from your shell in the service: `MCP_MEMORY_PURGE_*`, `MCP_MEMORY_GC_*`, `MCP_MEMORY_SURFACED_RETENTION_DAYS` and `MCP_DREAM_*`. It keeps `MCP_DREAM_*` values already installed. To set any other variable, edit the plist or unit.
+`mcp-memory setup-service` stores these variables from your shell in the service: `MCP_MEMORY_PURGE_*`, `MCP_MEMORY_GC_*`, `MCP_MEMORY_SURFACED_RETENTION_DAYS`, `MCP_DREAM_*`, `DO_NOT_TRACK` and `LLM_PROMPTS_NO_TELEMETRY`. It keeps `MCP_DREAM_*`, `DO_NOT_TRACK` and `LLM_PROMPTS_NO_TELEMETRY` values already installed. To set any other variable, edit the plist or unit.
 
 ## Server
 

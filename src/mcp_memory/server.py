@@ -16,8 +16,9 @@ import anyio
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 from pydantic import WithJsonSchema
+from starlette.responses import Response
 
-from . import backup, dream, metrics, usefulness
+from . import activity, backup, dream, metrics, telemetry, usefulness
 from .activity import record_tool
 from .api import register_api_routes
 from .config import get_backup_enabled, get_backup_interval_seconds, get_db_path, get_sweep_interval_seconds
@@ -36,11 +37,22 @@ from .visualise import register_visualise_routes
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from starlette.requests import Request
+
     from .storage import Storage
 
 _READ_ONLY_ANNOTATIONS = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 _ALWAYS_LOAD_META = {"anthropic/alwaysLoad": True}
 logger = logging.getLogger(__name__)
+
+
+def _observe_call(name: str, arguments: dict[str, Any], result: dict[str, Any]) -> None:
+    """Feed one tool call to the activity log, usefulness, metrics and telemetry."""
+    _get_usage().note_call(activity.idle_seconds())
+    record_tool(name, arguments, result)
+    usefulness.observe(_get_db(), name, arguments, result)
+    metrics.record(_get_db(), name, arguments, result)
+    telemetry.note_result(name, result)
 
 
 def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
@@ -55,9 +67,7 @@ def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
         try:
             bound = inspect.signature(fn).bind_partial(*args, **kwargs).arguments
             arguments = {key: value for key, value in bound.items() if not isinstance(value, Context)}
-            record_tool(fn.__name__, arguments, result)
-            usefulness.observe(_get_db(), fn.__name__, arguments, result)
-            metrics.record(_get_db(), fn.__name__, arguments, result)
+            _observe_call(fn.__name__, arguments, result)
         except Exception:  # ruff: ignore[try-except-pass] - instrumentation must never break a tool call
             pass
         if "error" in result:
@@ -1442,8 +1452,9 @@ async def _sweep_loop() -> None:
     while True:
         try:
             _get_db().maintenance.run_sweeps()
-        except Exception:
+        except Exception as exc:
             logger.exception("Maintenance sweep failed")
+            telemetry.report_exception(exc, "sweep")
         await asyncio.sleep(get_sweep_interval_seconds())
 
 
@@ -1457,6 +1468,41 @@ async def _backup_loop() -> None:
         await asyncio.sleep(get_backup_interval_seconds())
 
 
+_usage: telemetry.UsageTelemetry | None = None
+
+
+def _get_usage() -> telemetry.UsageTelemetry:
+    """Lazily initialise and return the usage telemetry."""
+    global _usage  # ruff: ignore[global-statement]
+    if _usage is None:
+        _usage = telemetry.UsageTelemetry(_get_db())
+    return _usage
+
+
+@mcp.custom_route("/api/telemetry/flush", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
+async def _telemetry_flush(_request: Request) -> Response:
+    """Send the pending usage rollup now."""
+    await asyncio.to_thread(_get_usage().report)
+    return Response(status_code=204)
+
+
+async def _telemetry_loop() -> None:
+    """Send an anonymous usage rollup when use starts again after idle and each time the server goes idle, forever.
+
+    Also sends the ranking-quality report after new searches scored off the event loop.
+    """
+    await asyncio.to_thread(telemetry.tool_versions)
+    usage = _get_usage()
+    ranking = telemetry.EvalTelemetry(_get_db())
+    while True:
+        await asyncio.sleep(telemetry.POLL_SECONDS)
+        try:
+            await asyncio.to_thread(usage.report_when_due, activity.idle_seconds())
+            await ranking.report_when_due(activity.idle_seconds())
+        except Exception:
+            logger.exception("Usage telemetry failed")
+
+
 async def _serve() -> None:
     """Serve over streamable HTTP, running the maintenance sweep loop, backup loop and dream coordinator alongside.
 
@@ -1467,6 +1513,7 @@ async def _serve() -> None:
     """
     sweeper = asyncio.create_task(_sweep_loop())
     backer = asyncio.create_task(_backup_loop()) if get_backup_enabled() else None
+    reporter = asyncio.create_task(_telemetry_loop())
     dreamer = dream.start_coordinator()
     try:
         await mcp.run_streamable_http_async(
@@ -1475,7 +1522,7 @@ async def _serve() -> None:
             json_response=True,
         )
     finally:
-        for task in (sweeper, backer, dreamer):
+        for task in (sweeper, backer, reporter, dreamer):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -1484,7 +1531,11 @@ async def _serve() -> None:
 
 def main() -> None:
     """Run the MCP server with streamable HTTP transport."""
-    anyio.run(_serve)
+    try:
+        anyio.run(_serve)
+    except Exception as exc:
+        telemetry.report_exception(exc, "serve")
+        raise
 
 
 if __name__ == "__main__":

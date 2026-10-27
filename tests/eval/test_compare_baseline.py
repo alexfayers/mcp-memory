@@ -21,12 +21,15 @@ def _write(
     sizes: dict[str, int],
     ranking: dict[str, float] | None = None,
     unreachable: dict[str, float] | None = None,
+    latency: dict[str, float] | None = None,
 ) -> Path:
     tools = {name: {"probes": 1, "total_bytes": total} for name, total in sizes.items()}
     payload = {
         "ranking": {"k": 10, "query_count": 96, "metrics": ranking or _RANKING},
         "size": {"entity_count": 130, "tools": tools},
     }
+    if latency is not None:
+        payload["latency"] = {"tools": {name: {"median_ms": ms} for name, ms in latency.items()}}
     if unreachable is not None:
         payload["ranking"]["unreachable"] = {"query_count": 15, "metrics": unreachable}
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -56,6 +59,34 @@ def _compare(
         *cross_flags,
         *flags,
     ])
+
+
+class TestLatency:
+    @staticmethod
+    def _run(tmp_path: Path, base: dict[str, float] | None, head: dict[str, float] | None) -> int:
+        sizes = {"read_graph": 1000}
+        return main([
+            "--base",
+            str(_write(tmp_path / "base.json", sizes, latency=base)),
+            "--head",
+            str(_write(tmp_path / "head.json", sizes, latency=head)),
+        ])
+
+    def test_the_report_shows_the_latency_move_of_the_tools_both_artefacts_measured(
+        self, tmp_path: Path, capsys: _Capsys
+    ) -> None:
+        self._run(tmp_path, {"search_nodes": 2.0, "gone": 1.0}, {"search_nodes": 3.0, "added": 1.0})
+
+        out = capsys.readouterr().out
+        assert "**Latency** 🔴 2.000 -> 3.000 ms (+50.0%)" in out
+        assert "| 🔴 | search_nodes | 2.000 | 3.000 | +50.0% |" in out
+
+    def test_a_latency_rise_never_fails_the_comparison(self, tmp_path: Path) -> None:
+        assert self._run(tmp_path, {"search_nodes": 1.0}, {"search_nodes": 100.0}) == 0
+
+    def test_a_base_artefact_without_latency_still_compares(self, tmp_path: Path, capsys: _Capsys) -> None:
+        assert self._run(tmp_path, None, {"search_nodes": 3.0}) == 0
+        assert "**Latency**" not in capsys.readouterr().out
 
 
 class TestReport:

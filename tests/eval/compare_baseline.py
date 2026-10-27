@@ -7,6 +7,9 @@ unless `--allow-ranking-drop` is passed. New probes, removed probes and other ra
 The metrics of the queries labelled unreachable are listed but never gate, and a base artefact
 without them still compares.
 
+Latency, per tool in milliseconds, is reported for the tools both artefacts measured and never fails the
+comparison, since timings differ between runs; a base artefact without latency still compares.
+
 When the benchmark changed, `--head-on-base-data` gives the artefact of the head code on the base's
 benchmark. The report then says how the result size moved between the benchmarks under the head code,
 compares the base code with the head code on the old benchmark, and compares the old benchmark with the new
@@ -20,19 +23,22 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple
 
 from tests.eval.eval_harness import _GATE_METRICS
 from tests.eval.size_baseline import move_row
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 NO_CHANGES_TEXT = "No benchmark changes."
 NOT_MEASURED_TEXT = "Not measured."
 _CODE_SECTION = "Old benchmark"
 _DATA_SECTION = "New benchmark"
 _RANKING_DECIMALS = 4
+_LATENCY_DECIMALS = 3
+_LATENCY_NOISE_PERCENT = 25.0
 _EXIT_REGRESSION = 1
 _EXIT_UNREADABLE = 2
 _ABSENT = "-"
@@ -61,6 +67,7 @@ class Artefact(NamedTuple):
     ranking: dict[str, float]
     k: int
     unreachable: dict[str, float]
+    latency: Mapping[str, float] = MappingProxyType({})
 
 
 class Comparison(NamedTuple):
@@ -77,7 +84,8 @@ def load_artefact(path: Path) -> Artefact:
     sizes = {name: probe["total_bytes"] for name, probe in payload["size"]["tools"].items()}
     ranking = payload["ranking"]
     unreachable = ranking.get("unreachable", {"metrics": {}})["metrics"]
-    return Artefact(sizes, ranking["metrics"], ranking["k"], unreachable)
+    latency = {name: probe["median_ms"] for name, probe in payload.get("latency", {}).get("tools", {}).items()}
+    return Artefact(sizes, ranking["metrics"], ranking["k"], unreachable, latency)
 
 
 def _names(base: dict[str, object], head: dict[str, object]) -> list[str]:
@@ -119,6 +127,38 @@ def _ranking_headline(base: dict[str, float], head: dict[str, float], dropped: d
     percent = (new - old) / old * 100 if old else 0.0
     falls = "".join(f", {_short_name(name, k)} fell {_metric(base[name])} -> {_metric(head[name])}" for name in dropped)
     return f"**Ranking** {status} {_metric(old)} -> {_metric(new)} ({percent:+.1f}%){falls}"
+
+
+def _latency_status(old: float, new: float) -> str:
+    """Return the emoji for a latency that went from `old` to `new`, grey while the move is within run-to-run noise."""
+    if old == 0 or abs(new - old) / old * 100 <= _LATENCY_NOISE_PERCENT:
+        return _UNCHANGED
+    return _LARGER if new > old else _SMALLER
+
+
+def _latency_headline(base: Mapping[str, float], head: Mapping[str, float]) -> str | None:
+    """Summarise the summed latency of the tools both artefacts measured, or None where there are none."""
+    shared = base.keys() & head.keys()
+    if not shared:
+        return None
+    old, new = sum(base[name] for name in shared), sum(head[name] for name in shared)
+    percent = (new - old) / old * 100 if old else 0.0
+    return (
+        f"**Latency** {_latency_status(old, new)} "
+        f"{old:.{_LATENCY_DECIMALS}f} -> {new:.{_LATENCY_DECIMALS}f} ms ({percent:+.1f}%)"
+    )
+
+
+def _latency_table(base: Mapping[str, float], head: Mapping[str, float]) -> list[str]:
+    """Render one markdown row per tool both artefacts measured, with its latency move."""
+    lines = ["| | tool call | before ms | after ms | % |", "| :-: | --- | ---: | ---: | ---: |"]
+    for name in _names(dict(base), dict(head)):
+        if name in base and name in head:
+            percent = (head[name] - base[name]) / base[name] * 100 if base[name] else 0.0
+            status = _latency_status(base[name], head[name])
+            before, after = (f"{value[name]:.{_LATENCY_DECIMALS}f}" for value in (base, head))
+            lines.append(f"| {status} | {name} | {before} | {after} | {percent:+.1f}% |")
+    return lines
 
 
 def _badge(label: str, message: str, colour: str) -> str:
@@ -223,6 +263,9 @@ def _compare_artefacts(base: Artefact, head: Artefact) -> Comparison:
     ranking_headline = _ranking_headline(base.ranking, head.ranking, dropped, head.k)
     if ranking_headline:
         report += ["", ranking_headline]
+    latency_headline = _latency_headline(base.latency, head.latency)
+    if latency_headline:
+        report += ["", latency_headline]
     size_table = _moved_table(base.sizes, head.sizes)
     if len(size_table) == _TABLE_HEADER_LINES and all(
         base.ranking.get(m) == head.ranking.get(m) for m in _GATE_METRICS
@@ -232,6 +275,7 @@ def _compare_artefacts(base: Artefact, head: Artefact) -> Comparison:
         ("Size details", size_table),
         ("Ranking details", _ranking_table(base.ranking, head.ranking)),
         ("Unreachable queries", _ranking_table(base.unreachable, head.unreachable, gated=False)),
+        ("Latency details", _latency_table(base.latency, head.latency)),
     )
     for summary, table in blocks:
         if len(table) > _TABLE_HEADER_LINES:

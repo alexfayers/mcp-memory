@@ -66,7 +66,7 @@ class TestSetupServiceDispatch:
 class TestSetupServiceKeepsInstalledDreamEnv:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        for name in [k for k in os.environ if k.startswith("MCP_DREAM_")]:
+        for name in [k for k in os.environ if k.startswith("MCP_DREAM_") or k in cli._TELEMETRY_OPT_OUT_ENV]:
             monkeypatch.delenv(name)
         monkeypatch.setattr(cli, "_LAUNCHD_PLIST", tmp_path / "com.mcp-memory.plist")
         monkeypatch.setattr(cli, "_SYSTEMD_UNIT", tmp_path / "mcp-memory.service")
@@ -103,6 +103,71 @@ class TestSetupServiceKeepsInstalledDreamEnv:
         render = cli._render_plist if system == "Darwin" else functools.partial(cli._render_systemd, user="u")
         (cli._LAUNCHD_PLIST if system == "Darwin" else cli._SYSTEMD_UNIT).write_text(render(spec, binary="/bin/m"))
         assert self._setup(monkeypatch, system).env == spec.env
+
+    @pytest.mark.parametrize("system", ["Darwin", "Linux"])
+    def test_keeps_installed_telemetry_opt_out_unless_the_shell_sets_it(
+        self, monkeypatch: pytest.MonkeyPatch, system: str
+    ) -> None:
+        installed = {"DO_NOT_TRACK": "1", "LLM_PROMPTS_NO_TELEMETRY": "1"}
+        monkeypatch.setenv("LLM_PROMPTS_NO_TELEMETRY", "0")
+
+        spec = self._setup(monkeypatch, system, installed)
+
+        assert {k: v for k, v in spec.env.items() if k in installed} == {
+            "DO_NOT_TRACK": "1",
+            "LLM_PROMPTS_NO_TELEMETRY": "0",
+        }
+
+    def test_keeps_telemetry_opt_out_from_quoted_systemd_assignments(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._setup(monkeypatch, "Linux")
+        cli._SYSTEMD_UNIT.write_text(
+            "[Service]\nEnvironment=\"DO_NOT_TRACK=1\"\nEnvironment='MCP_DREAM_ENABLED=true'\n"
+        )
+
+        spec = self._setup(monkeypatch, "Linux")
+
+        assert {k: v for k, v in spec.env.items() if k in ("DO_NOT_TRACK", "MCP_DREAM_ENABLED")} == {
+            "DO_NOT_TRACK": "1",
+            "MCP_DREAM_ENABLED": "true",
+        }
+
+    def test_keeps_kept_env_from_multi_assignment_systemd_lines(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._setup(monkeypatch, "Linux")
+        assignments = '"PATH=/usr/bin" "DO_NOT_TRACK=1" LLM_PROMPTS_NO_TELEMETRY=1 \'MCP_DREAM_IDLE_SECONDS=60\''
+        cli._SYSTEMD_UNIT.write_text(f"[Service]\nEnvironment={assignments}\n")
+
+        spec = self._setup(monkeypatch, "Linux")
+
+        assert {k: v for k, v in spec.env.items() if k != "PATH" and k.startswith(("MCP_DREAM_", "DO_", "LLM_"))} == {
+            "DO_NOT_TRACK": "1",
+            "LLM_PROMPTS_NO_TELEMETRY": "1",
+            "MCP_DREAM_IDLE_SECONDS": "60",
+        }
+        assert spec.env.get("PATH") != "/usr/bin"
+
+    def test_keeps_kept_env_from_continued_systemd_lines(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._setup(monkeypatch, "Linux")
+        lines = ["[Service]", 'Environment="PATH=/usr/bin" \\', "# note", "  ; note", '  "DO_NOT_TRACK=1"']
+        cli._SYSTEMD_UNIT.write_text("\n".join(lines) + "\n")
+
+        assert self._setup(monkeypatch, "Linux").env["DO_NOT_TRACK"] == "1"
+
+    def test_keeps_kept_env_from_indented_systemd_lines_with_spaces_around_equals(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup(monkeypatch, "Linux")
+        cli._SYSTEMD_UNIT.write_text('[Service]\n  Environment = "DO_NOT_TRACK=1"\n')
+
+        assert self._setup(monkeypatch, "Linux").env["DO_NOT_TRACK"] == "1"
+
+    def test_skips_malformed_systemd_environment_lines(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._setup(monkeypatch, "Linux")
+        cli._SYSTEMD_UNIT.write_text('[Service]\nEnvironment="DO_NOT_TRACK=1\nEnvironment=MCP_DREAM_ENABLED=true\n')
+
+        spec = self._setup(monkeypatch, "Linux")
+
+        assert spec.env["MCP_DREAM_ENABLED"] == "true"
+        assert "DO_NOT_TRACK" not in spec.env
 
     @pytest.mark.parametrize("system", ["Darwin", "Linux"])
     @pytest.mark.parametrize("installed", [None, {}, {"MCP_AGENT_PORT": "1"}], ids=["absent", "no-env", "non-dream"])
@@ -628,6 +693,13 @@ class TestMemorySpec:
         assert spec.env["MCP_DREAM_HEAVY_ENABLED"] == "true"
         assert spec.env["MCP_DREAM_HEAVY_INTERVAL_SECONDS"] == "90"
 
+    def test_propagates_telemetry_opt_out_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DO_NOT_TRACK", "1")
+        monkeypatch.setenv("LLM_PROMPTS_NO_TELEMETRY", "1")
+        spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
+        assert spec.env["DO_NOT_TRACK"] == "1"
+        assert spec.env["LLM_PROMPTS_NO_TELEMETRY"] == "1"
+
 
 def _make_bin_dir(parent: Path, name: str, *, venv: bool) -> Path:
     """Create `<parent>/<name>/bin/tool`, with a `pyvenv.cfg` beside `bin` where venv is set."""
@@ -891,6 +963,37 @@ class TestCmdRestore:
         assert "restore failed" in err
         assert "not a valid" not in err
         assert config.get_db_path().read_bytes() == b"damaged"
+
+
+class TestCmdTelemetryFlush:
+    def test_posts_to_the_configured_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_PORT", "4321")
+        requests: list[cli.urllib.request.Request] = []
+
+        class Response:
+            def close(self) -> None:
+                return None
+
+        def fake_urlopen(request: cli.urllib.request.Request, timeout: float) -> Response:
+            requests.append(request)
+            return Response()
+
+        monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+        cli._cmd_telemetry_flush(argparse.Namespace())
+
+        assert requests[0].full_url == "http://127.0.0.1:4321/api/telemetry/flush"
+        assert requests[0].get_method() == "POST"
+
+    def test_is_silent_when_the_server_is_not_running(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def refuse(request: object, timeout: float) -> None:
+            raise cli.urllib.error.URLError("refused")
+
+        monkeypatch.setattr(cli.urllib.request, "urlopen", refuse)
+        cli._cmd_telemetry_flush(argparse.Namespace())
+
+        assert capsys.readouterr() == ("", "")
 
 
 class TestCmdRestart:

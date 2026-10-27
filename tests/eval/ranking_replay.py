@@ -21,7 +21,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from mcp_memory.eval import EvalReport, LabelledQuery
-    from tests.eval.eval_fixture import EvalFixture
+
+    from .eval_fixture import EvalFixture
 
 
 def _tool_ranking(query: LabelledQuery) -> list[str]:

@@ -6,7 +6,9 @@ import asyncio
 from collections.abc import AsyncGenerator, Iterator
 import contextlib
 import socket
+import threading
 from typing import TYPE_CHECKING
+import urllib.request
 
 from mcp import Client
 from mcp.types import CallToolResult, TextContent
@@ -26,10 +28,10 @@ if TYPE_CHECKING:
 def server_db(tmp_path: Path) -> Iterator[Storage]:
     """Point the server's module-level db singleton at a fresh database."""
     manager = open_writable(tmp_path / "server.db")
-    original = server._db
-    server._db = manager
+    original, original_usage = server._db, server._usage
+    server._db, server._usage = manager, None
     yield manager
-    server._db = original
+    server._db, server._usage = original, original_usage
 
 
 def _text(result: CallToolResult) -> str:
@@ -116,3 +118,51 @@ def test_concurrent_sync_tools_work_over_streamable_http() -> None:
 
     errors = [_text(r) for r in asyncio.run(scenario()) if r.is_error]
     assert not errors
+
+
+@pytest.mark.usefixtures("server_db")
+def test_telemetry_flush_route_reports_pending_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    reports: list[int | None] = []
+    threads: list[int] = []
+
+    def report(_self: server.telemetry.UsageTelemetry, up_to: int | None = None) -> None:
+        reports.append(up_to)
+        threads.append(threading.get_ident())
+
+    monkeypatch.setattr(server.telemetry.UsageTelemetry, "report", report)
+
+    async def scenario() -> int:
+        async with _serving() as url:
+            request = urllib.request.Request(url.removesuffix("/mcp") + "/api/telemetry/flush", method="POST")  # ruff: ignore[suspicious-url-open-usage]
+            with await asyncio.to_thread(urllib.request.urlopen, request) as response:  # ruff: ignore[suspicious-url-open-usage]
+                return int(response.status)
+
+    assert asyncio.run(scenario()) == 204
+    assert reports == [None]
+    assert threads != [threading.get_ident()]
+
+
+@pytest.mark.usefixtures("server_db")
+def test_telemetry_loop_reports_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    threads: list[int] = []
+    reported = threading.Event()
+
+    def report_when_due(_self: server.telemetry.UsageTelemetry, _idle_seconds: float) -> None:
+        threads.append(threading.get_ident())
+        reported.set()
+
+    async def no_ranking(_self: server.telemetry.EvalTelemetry, _idle_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(server.telemetry, "POLL_SECONDS", 0)
+    monkeypatch.setattr(server.telemetry, "tool_versions", dict)
+    monkeypatch.setattr(server.telemetry.UsageTelemetry, "report_when_due", report_when_due)
+    monkeypatch.setattr(server.telemetry.EvalTelemetry, "report_when_due", no_ranking)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(server._telemetry_loop())
+        await asyncio.to_thread(reported.wait)
+        task.cancel()
+
+    asyncio.run(scenario())
+    assert threads[0] != threading.get_ident()

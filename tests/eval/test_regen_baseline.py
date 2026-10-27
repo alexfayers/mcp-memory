@@ -13,20 +13,26 @@ from tests.eval.eval_baseline import (
     Baseline,
     section as section_ranking,
 )
-from tests.eval.eval_fixture import _build_populated_fixture
+from tests.eval.latency_baseline import (
+    LatencyBaseline,
+    section as section_latency,
+)
 from tests.eval.ranking_replay import measure as measure_ranking
-from tests.eval.regen_baseline import _measure_both, main
+from tests.eval.regen_baseline import _measure_all, main
 from tests.eval.size_baseline import (
     TOOLS,
     SizeBaseline,
     section as section_size,
 )
 
+from .eval_fixture import _build_populated_fixture
+
 if TYPE_CHECKING:
     from pathlib import Path
 
     from mcp_memory.storage import Storage
-    from tests.eval.eval_fixture import EvalFixture
+
+    from .eval_fixture import EvalFixture
 
 
 def _ranking(**overrides: float) -> Baseline:
@@ -50,7 +56,12 @@ def _size(**overrides: int) -> SizeBaseline:
     return SizeBaseline(entity_count=130, probe_counts=probe_counts, total_bytes=total_bytes)
 
 
-class TestMeasureBoth:
+def _latency() -> LatencyBaseline:
+    """Build a valid `LatencyBaseline`."""
+    return LatencyBaseline(median_ms=dict.fromkeys(TOOLS, 1.25))
+
+
+class TestMeasureAll:
     """The shared fixture must be built exactly once per regeneration, not once per section."""
 
     def test_builds_the_fixture_exactly_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -62,15 +73,16 @@ class TestMeasureBoth:
             return original(db)
 
         monkeypatch.setattr(regen_baseline, "_build_populated_fixture", counting)
-        ranking, size = _measure_both()
+        ranking, size, latency = _measure_all()
         assert len(calls) == 1
         assert isinstance(ranking, Baseline)
         assert isinstance(size, SizeBaseline)
+        assert set(latency.median_ms) == set(TOOLS)
         assert size.entity_count > 0
         assert ranking.query_count > 0
 
     def test_ranking_is_the_real_tool_replay_of_the_fixture(self, tmp_path: Path) -> None:
-        ranking, _ = _measure_both()
+        ranking, *_ = _measure_all()
 
         db = open_writable(tmp_path / "replay.db")
         assert ranking == measure_ranking(_build_populated_fixture(db))
@@ -81,15 +93,19 @@ class TestWrite:
 
     def test_writes_both_sections_to_a_missing_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         path = tmp_path / "baseline.json"
-        assert main(path=path, measure=lambda: (_ranking(), _size())) == 0
+        assert main(path=path, measure=lambda: (_ranking(), _size(), _latency())) == 0
         assert f"wrote {path}" in capsys.readouterr().out
         payload = json.loads(path.read_text())
-        assert payload == {"ranking": section_ranking(_ranking()), "size": section_size(_size())}
+        assert payload == {
+            "ranking": section_ranking(_ranking()),
+            "size": section_size(_size()),
+            "latency": section_latency(_latency()),
+        }
 
     def test_overwrites_an_existing_artefact_with_the_measurement(self, tmp_path: Path) -> None:
         path = tmp_path / "baseline.json"
         path.write_text("not json", encoding="utf-8")
-        assert main(path=path, measure=lambda: (_ranking(mrr=0.6), _size(read_graph=9530))) == 0
+        assert main(path=path, measure=lambda: (_ranking(mrr=0.6), _size(read_graph=9530), _latency())) == 0
         payload = json.loads(path.read_text())
         assert payload["ranking"]["metrics"]["mrr"] == pytest.approx(0.6)
         assert payload["size"]["tools"]["read_graph"]["total_bytes"] == 9530
