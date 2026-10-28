@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from mcp.server.mcpserver import MCPServer
 
-    from .models import Entity, Observation
+    from .models import Entity, Observation, Relation
     from .storage import NodeList, Storage
 
 _VISUALISE_HTML = importlib.resources.files("mcp_memory").joinpath("templates/visualise.html").read_text()
@@ -65,7 +65,7 @@ def _serialise_observation(observation: Observation) -> dict[str, object]:
     }
 
 
-def _serialise_entity(entity: Entity, rank: int | None = None) -> dict[str, object]:
+def _serialise_entity(entity: Entity, rank: int | None = None, *, observations: bool = True) -> dict[str, object]:
     serialised: dict[str, object] = {
         "name": entity.name,
         "entity_type": entity.entity_type,
@@ -74,28 +74,56 @@ def _serialise_entity(entity: Entity, rank: int | None = None) -> dict[str, obje
         "created_at": entity.created_at,
         "updated_at": entity.updated_at,
         "vote_score": entity.vote_score,
-        "observations": [_serialise_observation(o) for o in entity.observations],
     }
+    if observations:
+        serialised["observations"] = [_serialise_observation(o) for o in entity.observations]
     if rank is None:
         return serialised
     return {"rank": rank, **serialised}
 
 
-def _serialise_graph(result: NodeList, *, ranked: bool = False) -> dict[str, list[dict[str, object]]]:
+def _serialise_relations(result: NodeList) -> list[dict[str, object]]:
+    by_project = result.get("relations_by_project")
+    if by_project is None:
+        return [_serialise_relation(r) for r in result["relations"]]
+    return [_serialise_relation(r, project) for project, group in by_project.items() for r in group]
+
+
+def _serialise_relation(relation: Relation, project: str | None = None) -> dict[str, object]:
+    serialised: dict[str, object] = {
+        "source": relation.source,
+        "target": relation.target,
+        "relation_type": relation.relation_type,
+    }
+    if project is not None:
+        serialised["project"] = project
+    return serialised
+
+
+def _serialise_graph(
+    result: NodeList, *, ranked: bool = False, observations: bool = True
+) -> dict[str, list[dict[str, object]]]:
     return {
         "entities": [
-            _serialise_entity(entity, position if ranked else None)
+            _serialise_entity(entity, position if ranked else None, observations=observations)
             for position, entity in enumerate(result["entities"], start=1)
         ],
-        "relations": [
-            {"source": r.source, "target": r.target, "relation_type": r.relation_type} for r in result["relations"]
-        ],
+        "relations": _serialise_relations(result),
     }
 
 
 def get_all_graph_data(db: Storage, project: str | None = None) -> dict[str, list[dict[str, object]]]:
-    """Return all entities and relations for a project (or all projects) as serialisable dicts."""
-    return _serialise_graph(db.reads.all_entities(project))
+    """Return all entities and relations for a project (or all projects) as serialisable dicts.
+
+    Observations are left out - fetch them per entity with ``get_entity_observations``.
+    """
+    return _serialise_graph(db.reads.all_entities(project, compact=True), observations=False)
+
+
+def get_entity_observations(db: Storage, project: str, name: str) -> list[dict[str, object]]:
+    """Return one entity's full observations as serialisable dicts."""
+    entity = db.reads.get_entity(project, name, max_observation_chars=-1)
+    return [_serialise_observation(o) for o in entity.observations]
 
 
 def search_graph(
@@ -162,6 +190,16 @@ def register_visualise_routes(mcp: MCPServer, get_db: Callable[[], Storage]) -> 
     async def api_graph(request: Request) -> JSONResponse:
         project = request.query_params.get("project") or None
         return JSONResponse(get_all_graph_data(get_db(), project))
+
+    @mcp.custom_route("/api/entity", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def api_entity(request: Request) -> JSONResponse:
+        project = request.query_params.get("project") or ""
+        name = request.query_params.get("name") or ""
+        try:
+            observations = get_entity_observations(get_db(), project, name)
+        except ValueError:
+            return JSONResponse({"error": "entity not found"}, status_code=404)
+        return JSONResponse({"observations": observations})
 
     @mcp.custom_route("/api/search", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def api_search(request: Request) -> JSONResponse:

@@ -30,10 +30,15 @@ select:hover, button:hover { border-color: #58a6ff; }
 #panel .obs-merge-btn.armed { color: #58a6ff; border-color: #58a6ff; }
 #panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #484f58; cursor: pointer; font-size: 18px; }
 svg { width: 100vw; height: 100vh; }
-.link { stroke-opacity: 0.4; }
+#graph-canvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; }
+svg.canvas-mode g { visibility: hidden; }
+svg.labels-off .link-label, svg.gradual-labels .node:not(.labelled) text:not(.search-badge) { display: none; }
+svg.gradual-labels .node.labelled text:not(.search-badge) { font-size: var(--label-px); }
+.link { stroke-width: var(--link-px, 1px); }
 .link-label { font-size: 9px; fill: #484f58; pointer-events: none; }
 .node circle { stroke-width: 1.5; cursor: pointer; }
 .node text { font-size: 10px; fill: #8b949e; pointer-events: none; }
+svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-weight: 600; fill: #c9d1d9; }
 .node.selected circle { stroke: #f0f6fc !important; stroke-width: 3; }
 .node.orphan circle { stroke: #f85149; stroke-dasharray: 4 2; }
 #legend { position: fixed; bottom: 12px; left: 12px; z-index: 10; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; font-size: 11px; }
@@ -229,6 +234,7 @@ svg { width: 100vw; height: 100vh; }
   <div id="p-obs"></div>
 </div>
 <svg></svg>
+<canvas id="graph-canvas" hidden></canvas>
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script>
 const TYPE_COLOURS = {
@@ -251,17 +257,51 @@ const linkLayer = g.append("g");
 const labelLayer = g.append("g");
 const nodeLayer = g.append("g");
 
-let lastUserInteract = 0;
-const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, ZOOM_MIN = 0.2, ZOOM_MAX = 4;
-const zoom = d3.zoom().scaleExtent([ZOOM_MIN, ZOOM_MAX]).on("zoom", e => {
+let lastUserInteract = 0, refitView = false, refitTicks = 0;
+const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, FIT_MS = 600, REFIT_TICKS = 10, ZOOM_MIN = 0.2, ZOOM_MAX = 4, ZOOM_FIT_MARGIN = 0.9, ZOOM_FLOOR = 0.01;
+const LARGE_GRAPH_NODES = 500, LINK_LABEL_MIN_ZOOM = FOLLOW_SCALE, NODE_LABELS_MIN = 12, NODE_LABELS_MAX = 300, NODE_LABELS_HARD_MAX = 1000, PROJECT_LABELS_MAX = 60, LABEL_ALL_ZOOM = 2.5, LABEL_CELL_WIDTHS = 16, LABEL_CELL_HEIGHTS = 1.4, LABEL_CHAR_EM = 0.56;
+const LINK_DISTANCE = 80, LINK_STRENGTH = 1, GRAVITY = 0.005, COMPONENT_GAP = 40;
+const DRAG_TICK_SHARE = 0.6, HIT_SLACK_PX = 4, NODE_RADIUS_MAX = 30;
+const LINK_COLOUR = "#6e7681", LINK_OPACITY = 0.55, LINK_SCREEN_PX = 1.25;
+const linkPx = () => LINK_SCREEN_PX / viewTransform.k;
+const canvas = document.getElementById("graph-canvas"), ctx = canvas.getContext("2d");
+let canvasMode = false, viewTransform = d3.zoomIdentity, zoomMin = ZOOM_MIN;
+const largeGraph = () => nodes.length > LARGE_GRAPH_NODES;
+const linkLabelsHidden = () => largeGraph() && viewTransform.k < LINK_LABEL_MIN_ZOOM;
+let labelOrder = [], labelledIds = new Set(), heldLabels = new Set();
+const nodeClass = d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : "") + (d.entity_type === "project" ? " project-node" : "") + (labelledIds.has(d.id) ? " labelled" : "");
+const nodeAt = (x, y) => {
+  if (!simulation) return null;
+  const slack = HIT_SLACK_PX / viewTransform.k, d = simulation.find(x, y, NODE_RADIUS_MAX + slack);
+  return d && Math.hypot(d.x - x, d.y - y) <= nodeRadius(d) + slack ? d : null;
+};
+const nodeUnder = e => nodeAt(...d3.pointer(e.changedTouches ? e.changedTouches[0] : e, g.node()));
+const onNodeGestureStart = e => (e.type === "mousedown" || e.type === "touchstart") && nodeUnder(e);
+const zoom = d3.zoom().scaleExtent([ZOOM_MIN, ZOOM_MAX]).filter(e => !e.button && (!e.ctrlKey || e.type === "wheel") && !onNodeGestureStart(e)).on("zoom", e => {
+  viewTransform = e.transform;
   g.attr("transform", e.transform);
-  if (e.sourceEvent) lastUserInteract = Date.now();
+  if (canvasMode) drawCanvas(); else updateSvgLabels();
+  if (e.sourceEvent) { lastUserInteract = Date.now(); refitView = false; }
 });
 svg.call(zoom);
+
+function updateZoomExtent() {
+  const placed = nodes.filter(d => Number.isFinite(d.x) && Number.isFinite(d.y));
+  if (!placed.length) return;
+  if (simulation && simulation.alpha() > simulation.alphaMin()) zoomMin = ZOOM_FLOOR;
+  else {
+    const xs = placed.map(d => d.x), ys = placed.map(d => d.y), pad = 2 * (nodeRadius(placed[0]) + 40);
+    const fit = Math.min(width() / (Math.max(...xs) - Math.min(...xs) + pad), height() / (Math.max(...ys) - Math.min(...ys) + pad));
+    zoomMin = Math.max(ZOOM_FLOOR, Math.min(ZOOM_MIN, fit * ZOOM_FIT_MARGIN));
+  }
+  zoom.scaleExtent([zoomMin, ZOOM_MAX]);
+}
 
 let simulation = null, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, panelDatum = null, orphans = new Set();
 let mergeSource = null;
 let nodes = [], links = [], relCount = new Map();
+const nodeKey = (project, name) => project + "\u0000" + name;
+const connectedIds = relations => new Set(relations.flatMap(r => [nodeKey(r.project, r.source), nodeKey(r.project, r.target)]));
 
 const panel = document.getElementById("panel");
 document.getElementById("panel-close").onclick = () => { panel.classList.remove("open"); selectedNode = null; updateSelection(); };
@@ -280,7 +320,7 @@ async function castVote(vote) {
     const data = await postVote("/api/vote", { project, name, vote });
     if (!data) return;
     panelDatum.vote_score = data.vote_score;
-    const live = nodes.find(n => n.id === name && n.project === project);
+    const live = nodes.find(n => n.id === nodeKey(project, name));
     if (live) live.vote_score = data.vote_score;
     renderVotes(data.vote_score);
   } catch (e) { /* transient; leave display unchanged */ }
@@ -289,30 +329,33 @@ async function castVote(vote) {
 document.getElementById("vote-up").onclick = () => castVote(1);
 document.getElementById("vote-down").onclick = () => castVote(-1);
 
+const touchObservations = d => d.obsVersion = (d.obsVersion || 0) + 1;
+
 async function castObservationVote(hash, vote, btns) {
   if (!panelDatum) return;
-  const { project, name } = panelDatum;
+  const d = panelDatum, { project, name } = d;
   btns.forEach(b => b.disabled = true);
   try {
     const data = await postVote("/api/vote-observation", { project, name, observationHash: hash, vote });
     if (!data) return;
-    (panelDatum.observations || []).forEach(o => { if (o.content_hash === hash) o.vote_score = data.vote_score; });
-    renderObservations(panelDatum);
+    touchObservations(d);
+    (d.observations || []).forEach(o => { if (o.content_hash === hash) o.vote_score = data.vote_score; });
+    if (panelDatum === d) renderObservations(d);
   } catch (e) { /* transient; leave display unchanged */ }
   finally { btns.forEach(b => b.disabled = false); }
 }
 
 async function castObservationMerge(targetHash, btns) {
   if (!panelDatum || !mergeSource) return;
-  const { project, name } = panelDatum;
+  const d = panelDatum, { project, name } = d;
   const sourceHash = mergeSource;
   btns.forEach(b => b.disabled = true);
   try {
     const data = await postVote("/api/merge-observation", { project, name, sourceHash, targetHash });
     if (!data) return;
-    panelDatum.observations = (panelDatum.observations || []).filter(o => o.content_hash !== sourceHash);
-    mergeSource = null;
-    renderObservations(panelDatum);
+    touchObservations(d);
+    d.observations = (d.observations || []).filter(o => o.content_hash !== sourceHash);
+    if (panelDatum === d) { mergeSource = null; renderObservations(d); }
   } catch (e) { /* transient; leave display unchanged */ }
   finally { btns.forEach(b => b.disabled = false); }
 }
@@ -365,9 +408,8 @@ async function fetchGraph() {
     const res = await fetch(url);
     const data = await res.json();
     document.getElementById("status").textContent = `${data.entities.length} nodes, ${data.relations.length} edges`;
-    const connected = new Set();
-    data.relations.forEach(r => { connected.add(r.source); connected.add(r.target); });
-    const orphanCount = data.entities.filter(e => !connected.has(e.name) && e.entity_type !== "project").length;
+    const connected = connectedIds(data.relations);
+    const orphanCount = data.entities.filter(e => !connected.has(nodeKey(e.project, e.name)) && e.entity_type !== "project").length;
     if (orphanCount) document.getElementById("status").textContent += `, ${orphanCount} orphan${orphanCount > 1 ? "s" : ""}`;
     const demotedCount = data.entities.filter(e => (e.vote_score || 0) < 0).length;
     if (demotedCount) document.getElementById("status").textContent += `, ${demotedCount} demoted`;
@@ -375,22 +417,76 @@ async function fetchGraph() {
   } catch (e) { document.getElementById("status").textContent = "error: " + e.message; }
 }
 
-const nodeRadius = d => 5 + Math.min((relCount.get(d.id) || 0) * 2, 25);
+const nodeRadius = d => 5 + Math.min((relCount.get(d.id) || 0) * 2, NODE_RADIUS_MAX - 5);
+
+// Collision force that also keeps unconnected components COMPONENT_GAP apart (not while dragging): those pairs push the whole component.
+function forceCollideApart(componentGap) {
+  let nodes, radius, radii = new Float64Array(0), push = new Float64Array(0), size = new Float64Array(0);
+  const prepare = q => {
+    if (q.data) return q.r = radii[q.data.index];
+    q.r = 0;
+    for (let i = 0; i < 4; ++i) if (q[i] && q[i].r > q.r) q.r = q[i].r;
+  };
+  function force() {
+    const gap = simulation.alphaTarget() ? 0 : componentGap;
+    radii = Float64Array.from(nodes, radius);
+    const tree = d3.quadtree(nodes, d => d.x + d.vx, d => d.y + d.vy).visitAfter(prepare);
+    push.fill(0);
+    for (const node of nodes) {
+      const ri = radii[node.index], xi = node.x + node.vx, yi = node.y + node.vy;
+      tree.visit((q, x0, y0, x1, y1) => {
+        const r = ri + q.r + gap;
+        if (!q.data) return x0 > xi + r || x1 < xi - r || y0 > yi + r || y1 < yi - r;
+        for (let d = q; d; d = d.next) {
+          const other = d.data;
+          if (other.index <= node.index) continue;
+          const apart = other.component !== node.component, rj = radii[other.index], reach = ri + rj + (apart ? gap : 0);
+          let dx = xi - other.x - other.vx, dy = yi - other.y - other.vy, dist = dx * dx + dy * dy;
+          if (dist >= reach * reach) continue;
+          dist = Math.sqrt(dist) || 1e-6;
+          dx *= (reach - dist) / dist; dy *= (reach - dist) / dist;
+          if (apart) {
+            push[2 * node.component] += dx; push[2 * node.component + 1] += dy;
+            push[2 * other.component] -= dx; push[2 * other.component + 1] -= dy;
+          } else {
+            const weight = rj * rj / (ri * ri + rj * rj);
+            node.vx += dx * weight; node.vy += dy * weight; other.vx -= dx * (1 - weight); other.vy -= dy * (1 - weight);
+          }
+        }
+        return true;
+      });
+    }
+    for (const node of nodes) { node.vx += push[2 * node.component] / size[node.component]; node.vy += push[2 * node.component + 1] / size[node.component]; }
+  }
+  force.initialize = n => { nodes = n; };
+  force.radius = f => (radius = f, force);
+  force.components = (ns, ls) => {
+    const index = new Map(ns.map((d, i) => [d.id, i])), parent = ns.map((_, i) => i);
+    const root = i => { while (parent[i] !== i) i = parent[i] = parent[parent[i]]; return i; };
+    ls.forEach(l => { parent[root(index.get(l.source.id ?? l.source))] = root(index.get(l.target.id ?? l.target)); });
+    const ids = new Map();
+    ns.forEach((d, i) => { const r = root(i); if (!ids.has(r)) ids.set(r, ids.size); d.component = ids.get(r); });
+    size = new Float64Array(ids.size); ns.forEach(d => size[d.component]++);
+    push = new Float64Array(2 * ids.size);
+    return force;
+  };
+  return force;
+}
 
 function render(data) {
-  const incoming = data.entities.map(e => ({ id: e.name, ...e }));
+  const incoming = data.entities.map(e => ({ ...e, id: nodeKey(e.project, e.name) }));
   const nodeSet = new Set(incoming.map(n => n.id));
-  const newLinks = data.relations.filter(r => nodeSet.has(r.source) && nodeSet.has(r.target))
-    .map(r => ({ source: r.source, target: r.target, type: r.relation_type }));
+  const newLinks = data.relations.map(r => ({ source: nodeKey(r.project, r.source), target: nodeKey(r.project, r.target), type: r.relation_type }))
+    .filter(l => nodeSet.has(l.source) && nodeSet.has(l.target));
 
-  const connected = new Set();
-  data.relations.forEach(r => { connected.add(r.source); connected.add(r.target); });
+  const connected = connectedIds(data.relations);
   orphans = new Set(incoming.filter(n => !connected.has(n.id) && n.entity_type !== "project").map(n => n.id));
 
   relCount = new Map(incoming.map(n => [n.id, 0]));
   data.relations.forEach(r => {
-    if (relCount.has(r.source)) relCount.set(r.source, relCount.get(r.source) + 1);
-    if (relCount.has(r.target)) relCount.set(r.target, relCount.get(r.target) + 1);
+    const source = nodeKey(r.project, r.source), target = nodeKey(r.project, r.target);
+    if (relCount.has(source)) relCount.set(source, relCount.get(source) + 1);
+    if (relCount.has(target)) relCount.set(target, relCount.get(target) + 1);
   });
 
   const oldNodeIds = new Set(nodes.map(n => n.id));
@@ -404,18 +500,18 @@ function render(data) {
   const oldMap = new Map(nodes.map(n => [n.id, n]));
   nodes = incoming.map(n => {
     const old = oldMap.get(n.id);
-    if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, observations: n.observations, vote_score: n.vote_score }); return old; }
+    if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, vote_score: n.vote_score }); return old; }
     return n;
   });
   // Only swap in the freshly-built (unresolved source/target string) link array when topology
-  // actually changed - it only gets resolved into real node object refs once handed to the force
-  // simulation below. Reusing it on a no-topology-change render (e.g. a vote/observation update)
+  // changed or the simulation restarted - it only gets resolved into real node object refs once
+  // handed to the force simulation below. Reusing it on a no-topology-change render (e.g. a vote/observation update)
   // would rebind linkSel/labelSel to unresolved links, making d.source.x/d.target.x undefined -
   // NaN link-label positions and vanished lines.
-  if (topologyChanged) links = newLinks;
+  if (topologyChanged || !simulation) links = newLinks;
 
   linkSel = linkLayer.selectAll(".link").data(links, d => d.source.id || d.source + "-" + (d.target.id || d.target) + "-" + d.type)
-    .join("line").attr("class", "link").attr("stroke", "#30363d").attr("stroke-width", 1);
+    .join("line").attr("class", "link").attr("stroke", LINK_COLOUR).attr("stroke-opacity", LINK_OPACITY);
 
   labelSel = labelLayer.selectAll(".link-label").data(links, d => d.source.id || d.source + "-" + (d.target.id || d.target) + "-" + d.type)
     .join("text").attr("class", "link-label").text(d => d.type);
@@ -432,9 +528,8 @@ function render(data) {
   );
 
   nodeSel
-    .attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""))
-    .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd))
-    .on("click", (e, d) => { selectedNode = d.id; showPanel(d); updateSelection(); });
+    .attr("class", nodeClass)
+    .on("click", (e, d) => selectNode(d));
 
   nodeSel.select("circle")
     .attr("r", nodeRadius)
@@ -446,32 +541,205 @@ function render(data) {
 
   if (!simulation) {
     simulation = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(links).id(d => d.id).distance(80))
+      .force("link", d3.forceLink(links).id(d => d.id).distance(LINK_DISTANCE).strength(LINK_STRENGTH))
       .force("charge", d3.forceManyBody().strength(-120))
       .force("center", d3.forceCenter(width() / 2, height() / 2))
-      .force("collision", d3.forceCollide().radius(d => 5 + nodeRadius(d)))
-      .on("tick", ticked);
+      .force("x", d3.forceX(width() / 2).strength(GRAVITY))
+      .force("y", d3.forceY(height() / 2).strength(GRAVITY))
+      .force("collision", forceCollideApart(COMPONENT_GAP).radius(d => 5 + nodeRadius(d)))
+      .on("tick", ticked)
+      .on("end", settled);
+    simulation.force("collision").components(nodes, links);
+    if (refitView) fitView(nodes, 0);
   } else if (topologyChanged) {
     simulation.nodes(nodes);
     simulation.force("link").links(links);
-    simulation.force("collision").radius(d => 5 + nodeRadius(d));
-    simulation.alpha(0.05).restart();
+    simulation.force("collision").radius(d => 5 + nodeRadius(d)).components(nodes, links);
+    simulation.alpha(0.05);
+    if (!tickLoop) simulation.restart();
   }
 
+  updateZoomExtent();
+  labelOrder = nodes.slice().sort((a, b) => (relCount.get(b.id) || 0) - (relCount.get(a.id) || 0));
+  updateSvgLabels();
   applySearchRings();  // nodeSel was just rebuilt; reapply persistent search rings
   applyDemotedRings();  // flag nodes the dream (or a manual vote) demoted
 }
 
+function selectNode(d) { selectedNode = d.id; showPanel(d); updateSelection(); }
+
+const SLOW_DRAW_MS = 20, SLOW_DRAW_SKIP = 2;
+let lastDrawAt = 0, drawGap = 0, drewLastTick = false;
 function ticked() {
+  if (refitView && ++refitTicks % REFIT_TICKS === 0) fitView(nodes, 0);
+  const now = performance.now(), useCanvas = nodes.length > LARGE_GRAPH_NODES;
+  if (drewLastTick) drawGap = now - lastDrawAt > SLOW_DRAW_MS ? SLOW_DRAW_SKIP * (now - lastDrawAt) : 0;
+  drewLastTick = false;
+  setCanvasMode(useCanvas);
+  if (!useCanvas) syncSvg();
+  else if (now - lastDrawAt >= drawGap) { drawCanvas(); lastDrawAt = now; drewLastTick = true; }
+}
+
+function viewOutcode() {
+  const w = width(), h = height(), t = viewTransform, pad = 40 + 2 * 25;
+  const x0 = -t.x / t.k - pad, y0 = -t.y / t.k - pad, x1 = (w - t.x) / t.k + pad, y1 = (h - t.y) / t.k + pad;
+  return (x, y) => (x < x0 ? 1 : x > x1 ? 2 : 0) | (y < y0 ? 4 : y > y1 ? 8 : 0);
+}
+
+function labelledNodes(outcode) {
+  const t = Math.max(0, Math.log(viewTransform.k / ZOOM_MIN)) / Math.log(ZOOM_MAX / ZOOM_MIN);
+  const limit = Math.round(NODE_LABELS_MIN * Math.pow(NODE_LABELS_MAX / NODE_LABELS_MIN, t));
+  const k = viewTransform.k, scale = Math.max(k, 1), cellW = LABEL_CELL_WIDTHS * 10 * scale / k, cellH = LABEL_CELL_HEIGHTS * 10 * scale / k;
+  const u = 10 / Math.min(k, 1), placed = new Map(), bucket = (x, y) => Math.floor(x / cellW) * 65536 + Math.floor(y / cellH);
+  const labelWidth = d => nodeRadius(d) + 3 + Math.min(d.name.length, 40) * LABEL_CHAR_EM * u;
+  const fits = d => {
+    for (let dx = -2; dx <= 2; dx++) for (let dy = -1; dy <= 1; dy++) {
+      if ((placed.get(bucket(d.x + dx * cellW, d.y + dy * cellH)) || []).some(e => Math.abs(e.y - d.y) < cellH && e.x < d.x + labelWidth(d) && d.x < e.x + labelWidth(e))) return false;
+    }
+    return true;
+  };
+  const pick = (candidates, max) => {
+    const out = [];
+    [true, false].forEach(wasHeld => candidates.forEach(d => {
+      if (heldLabels.has(d.id) !== wasHeld || out.length >= max || !fits(d)) return;
+      const key = bucket(d.x, d.y);
+      placed.set(key, (placed.get(key) || []).concat(d)); out.push(d);
+    }));
+    return out;
+  };
+  const inView = labelOrder.filter(d => !outcode(d.x, d.y)), isProject = d => d.entity_type === "project";
+  const projects = pick(inView.filter(isProject), PROJECT_LABELS_MAX), others = inView.filter(d => !isProject(d));
+  const extra = k > 1 ? Math.ceil(Math.min(1, (k - 1) / (LABEL_ALL_ZOOM - 1)) * Math.max(0, others.length - limit)) : 0;
+  const all = pick(others, Math.min(limit + extra, NODE_LABELS_HARD_MAX)).concat(projects);
+  heldLabels = new Set(all.map(d => d.id));
+  return all;
+}
+
+function updateSvgLabels() {
+  svg.classed("labels-off", linkLabelsHidden()).classed("gradual-labels", largeGraph())
+    .style("--label-px", largeGraph() ? `${10 / Math.min(viewTransform.k, 1)}px` : null)
+    .style("--link-px", `${linkPx()}px`);
+  if (!nodeSel || canvasMode) return;
+  const outcode = viewOutcode();
+  const next = new Set(largeGraph() ? labelledNodes(outcode).map(d => d.id) : []);
+  const changed = new Set([...labelledIds].filter(id => !next.has(id)).concat([...next].filter(id => !labelledIds.has(id))));
+  labelledIds = next;
+  if (changed.size) nodeSel.filter(d => changed.has(d.id)).attr("class", nodeClass);
+}
+
+function setCanvasMode(on) {
+  if (on === canvasMode) return;
+  canvasMode = on;
+  canvas.hidden = !on;
+  svg.classed("canvas-mode", on);
+}
+
+svg.on("click.canvas", e => {
+  const d = canvasMode && nodeUnder(e);
+  if (d) selectNode(d);
+});
+
+const CANVAS_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+function drawNodeRing(d, r, colour, lineWidth, dash) {
+  ctx.beginPath(); ctx.arc(d.x, d.y, r, 0, 2 * Math.PI);
+  ctx.strokeStyle = colour; ctx.lineWidth = lineWidth; ctx.setLineDash(dash); ctx.stroke();
+}
+
+function drawCanvas() {
+  const w = width(), h = height(), dpr = window.devicePixelRatio || 1, t = viewTransform;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.translate(t.x, t.y); ctx.scale(t.k, t.k);
+  const outcode = viewOutcode();
+  ctx.globalAlpha = LINK_OPACITY; ctx.strokeStyle = LINK_COLOUR; ctx.lineWidth = linkPx(); ctx.setLineDash([]);
+  ctx.beginPath();
+  links.forEach(l => {
+    if (outcode(l.source.x, l.source.y) & outcode(l.target.x, l.target.y)) return;
+    ctx.moveTo(l.source.x, l.source.y); ctx.lineTo(l.target.x, l.target.y);
+  });
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.textBaseline = "alphabetic";
+  if (!linkLabelsHidden()) {
+    ctx.font = `9px ${CANVAS_FONT}`; ctx.fillStyle = "#484f58";
+    links.forEach(l => {
+      if (outcode(l.source.x, l.source.y) & outcode(l.target.x, l.target.y)) return;
+      ctx.fillText(l.type, (l.source.x + l.target.x) / 2, (l.source.y + l.target.y) / 2);
+    });
+  }
+  const visible = nodes.filter(d => !outcode(d.x, d.y));
+  visible.forEach(d => {
+    const r = nodeRadius(d);
+    ctx.beginPath(); ctx.arc(d.x, d.y, r, 0, 2 * Math.PI);
+    ctx.fillStyle = TYPE_COLOURS[d.entity_type] || fallbackColour; ctx.fill();
+    const demoted = (d.vote_score || 0) < 0;
+    if (d.id === selectedNode) drawNodeRing(d, r, "#f0f6fc", 3, []);
+    else if (demoted) drawNodeRing(d, r, "#d29922", 1.5, [2, 2]);
+    else if (orphans.has(d.id)) drawNodeRing(d, r, "#f85149", 1.5, [4, 2]);
+    else drawNodeRing(d, r, d.status ? statusColours[d.status] || "#30363d" : "#30363d", 1.5, []);
+    if (demoted) drawNodeRing(d, r + 3, "#d29922", 1.5, [2, 2]);
+    if (searchRankByName.has(d.id)) drawNodeRing(d, r + 6, "#58a6ff", 1.5, []);
+  });
+  labelledNodes(outcode).forEach(d => {
+    const project = d.entity_type === "project";
+    ctx.font = `${project ? "600 " : ""}${10 / Math.min(t.k, 1)}px ${CANVAS_FONT}`; ctx.fillStyle = project ? "#c9d1d9" : "#8b949e";
+    ctx.fillText(d.name.length > 40 ? d.name.slice(0, 37) + "..." : d.name, d.x + 3 + nodeRadius(d), d.y + 4);
+  });
+  drawCanvasPulses();
+  ctx.font = `bold 9px ${CANVAS_FONT}`; ctx.fillStyle = "#58a6ff";
+  visible.forEach(d => {
+    if (searchRankByName.has(d.id)) ctx.fillText(searchRankByName.get(d.id), d.x - (nodeRadius(d) + 14), d.y - (nodeRadius(d) + 6));
+  });
+}
+
+function syncSvg() {
   linkSel.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
     .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
   labelSel.attr("x", d => (d.source.x + d.target.x) / 2).attr("y", d => (d.source.y + d.target.y) / 2);
   nodeSel.attr("transform", d => `translate(${d.x},${d.y})`);
 }
 
-function dragStart(e, d) { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
-function dragged(e, d) { d.fx = e.x; d.fy = e.y; }
-function dragEnd(e, d) { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
+function settled() {
+  updateZoomExtent();
+  if (refitView) { refitView = false; fitView(nodes, FIT_MS); }
+  if (largeGraph()) drawCanvas();
+  else { syncSvg(); updateSvgLabels(); }
+}
+
+let tickLoop = false, tickFrameId = 0, tickCost = 0, tickAt = 0;
+function stopTickLoop() { cancelAnimationFrame(tickFrameId); tickLoop = false; }
+function tickFrame() {
+  if (!simulation) return;
+  const start = performance.now();
+  if (start - tickAt >= tickCost / DRAG_TICK_SHARE) {
+    simulation.tick();
+    tickAt = start; tickCost = performance.now() - start;
+  }
+  if (simulation.alpha() < simulation.alphaMin()) { tickLoop = false; settled(); return; }
+  drawCanvas();
+  tickFrameId = requestAnimationFrame(tickFrame);
+}
+function dragStart(e) {
+  refitView = false;
+  if (!e.active) {
+    simulation.alphaTarget(0.3);
+    if (!largeGraph()) simulation.restart();
+    else if (!tickLoop) { simulation.stop(); tickLoop = true; tickFrameId = requestAnimationFrame(tickFrame); }
+  }
+  e.subject.fx = e.subject.x; e.subject.fy = e.subject.y;
+}
+function dragged(e) { e.subject.fx = e.subject.x = e.x; e.subject.fy = e.subject.y = e.y; }
+function dragEnd(e) {
+  if (!e.active && simulation) {
+    simulation.alphaTarget(0);
+    if (!tickLoop) simulation.restart();
+  }
+  e.subject.fx = null; e.subject.fy = null;
+}
+svg.call(d3.drag().container(g.node()).subject(e => nodeAt(e.x, e.y)).on("start", dragStart).on("drag", dragged).on("end", dragEnd));
 
 function renderVotes(score) {
   const v = score || 0;
@@ -493,8 +761,21 @@ function showPanel(d) {
     ? `<h4>On disk (${d.project})</h4>` + paths.map(p => `<div class="path">${p.replace(/</g,"&lt;")}</div>`).join("")
     : "";
   renderObservations(d);
+  loadObservations(d);
   document.getElementById("results").classList.remove("open");
   panel.classList.add("open");
+}
+
+async function loadObservations(d) {
+  const version = touchObservations(d);
+  try {
+    const res = await fetch(`/api/entity?project=${encodeURIComponent(d.project)}&name=${encodeURIComponent(d.name)}`);
+    if (!res.ok) return;
+    const { observations } = await res.json();
+    if (d.obsVersion !== version) return;
+    d.observations = observations;
+    if (panelDatum === d) renderObservations(d);
+  } catch (e) { /* transient; keep what is shown */ }
 }
 
 function renderObservations(d) {
@@ -552,10 +833,11 @@ function renderObservations(d) {
 }
 
 function updateSelection() {
-  if (nodeSel) nodeSel.attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""));
+  if (nodeSel) nodeSel.attr("class", nodeClass);
+  if (canvasMode) drawCanvas();
 }
 
-document.getElementById("project").onchange = () => { currentData = null; if (simulation) { simulation.stop(); simulation = null; } updateControlsPath(); fetchGraph(); runSearch(); };
+document.getElementById("project").onchange = () => { refitView = true; currentData = null; stopTickLoop(); canvasPulses = []; if (simulation) { simulation.stop(); simulation = null; } setCanvasMode(false); updateControlsPath(); fetchGraph(); runSearch(); };
 document.getElementById("refresh").onclick = fetchGraph;
 
 let timer = setInterval(fetchGraph, 2000);
@@ -572,14 +854,38 @@ function renderTally() {
 renderTally();
 
 function eventMatchesNode(d, ev, name) {
-  if (d.id !== name) return false;
+  if (d.name !== name) return false;
   if (ev.project && d.project) return d.project === ev.project;
   return true;
+}
+
+const PULSE_MS = 1500, RIPPLE_GROW_PX = 55;
+let canvasPulses = [], pulseFrameId = 0;
+function pulseFrame() {
+  const now = performance.now();
+  canvasPulses = canvasPulses.filter(p => now - p.start < PULSE_MS);
+  drawCanvas();
+  pulseFrameId = canvasPulses.length && canvasMode ? requestAnimationFrame(pulseFrame) : 0;
+}
+
+function drawCanvasPulses() {
+  const now = performance.now();
+  canvasPulses.forEach(p => {
+    const fade = d3.easeCubicOut(Math.min(1, (now - p.start) / PULSE_MS));
+    ctx.globalAlpha = 0.7 * (1 - fade); ctx.lineWidth = 2 - 1.5 * fade;
+    drawNodeRing(p.d, nodeRadius(p.d) + RIPPLE_GROW_PX * fade, p.colour, ctx.lineWidth, []);
+  });
+  ctx.globalAlpha = 1;
 }
 
 function pulseNode(name, ev) {
   const colour = KIND_COLOURS[ev.kind] || fallbackColour;
   if (!nodeSel) return;
+  if (canvasMode) {
+    nodes.filter(d => eventMatchesNode(d, ev, name)).forEach(d => canvasPulses.push({ d, colour, start: performance.now() }));
+    if (!pulseFrameId) pulseFrameId = requestAnimationFrame(pulseFrame);
+    return;
+  }
   nodeSel.filter(d => eventMatchesNode(d, ev, name)).each(function(d) {
     const grp = d3.select(this);
     grp.style("--glow", colour).classed("activity", false);
@@ -599,18 +905,23 @@ function focusOn(events) {
   if (Date.now() - lastUserInteract < FOLLOW_COOLDOWN) return;
   const hits = nodes.filter(d => Number.isFinite(d.x) && Number.isFinite(d.y)
     && events.some(ev => ev.entities.some(name => eventMatchesNode(d, ev, name))));
-  if (!hits.length) return;
+  if (hits.length) fitView(hits, FIT_MS);
+}
+
+function fitView(ds, duration) {
+  if (!ds.length) return;
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  hits.forEach(d => {
+  ds.forEach(d => {
     const r = nodeRadius(d) + 30;
     minX = Math.min(minX, d.x - r); maxX = Math.max(maxX, d.x + r);
     minY = Math.min(minY, d.y - r); maxY = Math.max(maxY, d.y + r);
   });
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   const fit = Math.min(width() / Math.max(maxX - minX, 1), height() / Math.max(maxY - minY, 1));
-  const k = Math.max(ZOOM_MIN, Math.min(FOLLOW_SCALE, fit));
+  const k = Math.max(zoomMin, Math.min(FOLLOW_SCALE, fit));
   const t = d3.zoomIdentity.translate(width() / 2, height() / 2).scale(k).translate(-cx, -cy);
-  svg.transition().duration(600).ease(d3.easeCubicOut).call(zoom.transform, t);
+  if (duration) svg.transition().duration(duration).ease(d3.easeCubicOut).call(zoom.transform, t);
+  else svg.call(zoom.transform, t);
 }
 
 const feed = document.getElementById("feed");
@@ -664,6 +975,7 @@ let searchRankByName = new Map();
 function clearSearchRings() {
   if (nodeSel) nodeSel.classed("search-hit", false);
   nodeLayer.selectAll(".search-ring, .search-badge").remove();
+  if (canvasMode) drawCanvas();
 }
 
 function applySearchRings() {
@@ -691,13 +1003,13 @@ function applyDemotedRings() {
 
 function renderResults(hits) {
   searchHits = hits;
-  searchRankByName = new Map(hits.map(h => [h.name, h.rank]));
+  searchRankByName = new Map(hits.map(h => [nodeKey(h.project, h.name), h.rank]));
   document.getElementById("results-count").textContent = hits.length + (hits.length === 1 ? " match" : " matches");
   document.getElementById("results-list").innerHTML = hits.map(h => {
     const snip = ((h.observations[0] && h.observations[0].content) || "").replace(/</g, "&lt;");
     const votes = h.vote_score ? `${h.vote_score > 0 ? "+" : ""}${h.vote_score} votes` : null;
     const sub = [h.entity_type, h.project, h.status, votes].filter(Boolean).join(" · ");
-    return `<div class="hit" data-name="${h.name.replace(/"/g, "&quot;")}">`
+    return `<div class="hit" data-project="${h.project.replace(/"/g, "&quot;")}" data-name="${h.name.replace(/"/g, "&quot;")}">`
       + `<span class="rank">${h.rank}</span>`
       + `<span class="meta"><span class="nm">${h.name.replace(/</g, "&lt;")}</span>`
       + `<span class="sub"> ${sub}</span><span class="snip">${snip}</span></span></div>`;
@@ -722,9 +1034,9 @@ document.getElementById("search-all").onchange = runSearch;
 document.getElementById("results-list").onclick = (e) => {
   const row = e.target.closest(".hit");
   if (!row) return;
-  const node = nodes.find(n => n.id === row.dataset.name);
+  const node = nodes.find(n => n.id === nodeKey(row.dataset.project, row.dataset.name));
   if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
-  else { showPanel(searchHits.find(h => h.name === row.dataset.name)); }
+  else { showPanel(searchHits.find(h => h.project === row.dataset.project && h.name === row.dataset.name)); }
   document.getElementById("results").classList.remove("open");
 };
 
@@ -837,7 +1149,7 @@ async function fetchDream() {
 document.getElementById("dream-body").onclick = (e) => {
   const row = e.target.closest(".dm");
   if (!row) return;
-  const node = nodes.find(n => n.id === row.dataset.name && n.project === row.dataset.project);
+  const node = nodes.find(n => n.id === nodeKey(row.dataset.project, row.dataset.name));
   if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
 };
 

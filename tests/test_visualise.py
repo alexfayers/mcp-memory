@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -19,6 +19,7 @@ from mcp_memory.models import Relation
 from mcp_memory.storage.pure.rows import hash_observation
 from mcp_memory.visualise import (
     get_all_graph_data,
+    get_entity_observations,
     get_project_paths,
     get_projects,
     register_visualise_routes,
@@ -80,9 +81,7 @@ class TestGetAllGraphData:
         entity = result["entities"][0]
         assert entity["name"] == "e1"
         assert entity["entity_type"] == "task"
-        observations = cast("list[dict[str, object]]", entity["observations"])
-        assert [o["content"] for o in observations] == ["obs1", "obs2"]
-        assert all("content_hash" in o and "vote_score" in o for o in observations)
+        assert "observations" not in entity
         assert entity["status"] == "planned"
         assert entity["vote_score"] == 1
 
@@ -101,7 +100,21 @@ class TestGetAllGraphData:
             "source": "e1",
             "target": "e2",
             "relation_type": "relates-to",
+            "project": "proj",
         }
+
+    def test_all_projects_tag_same_named_relations_with_their_project(self, store: Storage) -> None:
+        for project in ("p1", "p2"):
+            store.entities.create(
+                project,
+                [
+                    {"name": "a", "entityType": "pattern", "observations": ["o"]},
+                    {"name": "b", "entityType": "pattern", "observations": ["o"]},
+                ],
+            )
+            store.relations.create(project, [Relation(source="a", target="b", relation_type="related-to")])
+        result = get_all_graph_data(store)
+        assert sorted(r["project"] for r in result["relations"]) == ["p1", "p2"]
 
     def test_project_isolation(self, store: Storage) -> None:
         store.entities.create("p1", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
@@ -119,8 +132,7 @@ class TestGetAllGraphData:
     def test_observation_votes_align_with_ordered_observations(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}])
         store.observations.vote("proj", "e1", 1, content="c")
-        entity = get_all_graph_data(store, "proj")["entities"][0]
-        observations = cast("list[dict[str, object]]", entity["observations"])
+        observations = get_entity_observations(store, "proj", "e1")
         assert [(o["content"], o["vote_score"]) for o in observations] == [
             ("c", 1),
             ("a", 0),
@@ -158,6 +170,120 @@ class TestVisualisePage:
         assert "MCP_DREAM_HEAVY_ENABLED=true" in resp.text
         assert "lightButton.disabled = !lightEnabled" in resp.text
         assert "heavyButton.disabled = !heavyEnabled" in resp.text
+
+    @pytest.mark.anyio
+    async def test_reveals_node_labels_gradually_with_zoom(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "labelledNodes" in resp.text
+        assert "NODE_LABELS_MAX" in resp.text
+        assert "labelsHidden" not in resp.text
+        assert "NODE_LABELS_HARD_MAX" in resp.text
+
+    @pytest.mark.anyio
+    async def test_always_labels_project_nodes(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "PROJECT_LABELS_MAX" in resp.text
+        assert 'd.entity_type === "project"' in resp.text
+
+    @pytest.mark.anyio
+    async def test_keeps_the_label_set_stable_while_panning_and_zooming(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "heldLabels.has(d.id)" in resp.text
+        assert "!fits(d)" in resp.text
+
+    @pytest.mark.anyio
+    async def test_zoom_out_limit_follows_the_graph_extent(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "updateZoomExtent" in resp.text
+        assert "scaleExtent([zoomMin, ZOOM_MAX])" in resp.text
+
+    @pytest.mark.anyio
+    async def test_zoom_out_is_unrestricted_while_the_layout_settles(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "simulation.alpha() > simulation.alphaMin()) zoomMin = ZOOM_FLOOR" in resp.text
+
+    @pytest.mark.anyio
+    async def test_drags_nodes_by_hit_testing_so_large_graphs_stay_on_canvas(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert ".subject(e => nodeAt(e.x, e.y))" in resp.text
+        assert "setCanvasMode(false); updateSvgLabels()" not in resp.text
+
+    @pytest.mark.anyio
+    async def test_settles_large_graphs_after_a_drag_with_time_sliced_ticks(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "if (!tickLoop) simulation.restart()" in resp.text
+        assert "alphaTarget(0).restart()" not in resp.text
+
+    @pytest.mark.anyio
+    async def test_project_change_cancels_the_drag_animation_loop(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "cancelAnimationFrame(tickFrameId)" in resp.text
+        assert "if (!simulation) return;" in resp.text
+
+    @pytest.mark.anyio
+    async def test_pulses_activity_on_the_canvas_for_large_graphs(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "canvasPulses.push" in resp.text
+        assert "drawCanvasPulses" in resp.text
+
+    @pytest.mark.anyio
+    async def test_pulls_every_link_with_equal_strength_and_gravity_keeps_components_near(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        resp = await client.get("/visualise")
+        assert ".strength(LINK_STRENGTH)" in resp.text
+        assert 'force("x", d3.forceX(width() / 2).strength(GRAVITY))' in resp.text
+
+    @pytest.mark.anyio
+    async def test_keeps_unconnected_components_apart(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert 'force("collision", forceCollideApart(COMPONENT_GAP)' in resp.text
+        assert ".components(nodes, links)" in resp.text
+
+    @pytest.mark.anyio
+    async def test_zooms_to_the_filtered_nodes_when_the_project_changes(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert 'getElementById("project").onchange = () => { refitView = true;' in resp.text
+        assert "fitView(nodes, 0)" in resp.text
+        assert "if (refitView) { refitView = false; fitView(nodes, FIT_MS); }" in resp.text
+
+    @pytest.mark.anyio
+    async def test_dragging_a_node_stops_the_project_refit(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "function dragStart(e) {\n  refitView = false;" in resp.text
+
+    @pytest.mark.anyio
+    async def test_ignores_stale_observation_responses(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "if (d.obsVersion !== version) return;" in resp.text
+        assert resp.text.count("touchObservations(d)") == 3
+        assert resp.text.count("const d = panelDatum, { project, name } = d;") == 2
+        assert "if (panelDatum === d) renderObservations(d);" in resp.text
+
+    @pytest.mark.anyio
+    async def test_hit_tests_touch_gestures_at_the_first_changed_touch(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "d3.pointer(e.changedTouches ? e.changedTouches[0] : e, g.node())" in resp.text
+
+    @pytest.mark.anyio
+    async def test_keys_nodes_and_links_by_project_and_name(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "const incoming = data.entities.map(e => ({ ...e, id: nodeKey(e.project, e.name) }));" in resp.text
+        assert "source: nodeKey(r.project, r.source), target: nodeKey(r.project, r.target)" in resp.text
+        assert "searchRankByName = new Map(hits.map(h => [nodeKey(h.project, h.name), h.rank]));" in resp.text
+        assert "nodes.find(n => n.id === nodeKey(row.dataset.project, row.dataset.name))" in resp.text
+        assert "if (d.name !== name) return false;" in resp.text
+
+    @pytest.mark.anyio
+    async def test_rebuilds_links_whenever_the_simulation_restarts(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "if (topologyChanged || !simulation) links = newLinks;" in resp.text
+
+    @pytest.mark.anyio
+    async def test_draws_links_in_a_visible_colour(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "LINK_COLOUR" in resp.text
+        assert '"#30363d").attr("stroke-width", 1)' not in resp.text
 
     @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
@@ -228,6 +354,22 @@ class TestApiGraph:
         store.entities.create("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
         result = get_all_graph_data(store, "proj")
         assert result["entities"][0]["project"] == "proj"
+
+
+class TestApiEntity:
+    @pytest.mark.anyio
+    async def test_returns_observations(self, client: httpx.AsyncClient, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2"]}])
+        resp = await client.get("/api/entity", params={"project": "proj", "name": "e1"})
+        assert resp.status_code == 200
+        observations = resp.json()["observations"]
+        assert [o["content"] for o in observations] == ["obs1", "obs2"]
+        assert all("content_hash" in o and "vote_score" in o for o in observations)
+
+    @pytest.mark.anyio
+    async def test_unknown_entity_returns_404(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/api/entity", params={"project": "proj", "name": "ghost"})
+        assert resp.status_code == 404
 
 
 class TestApiActivity:
@@ -836,9 +978,7 @@ class TestApiMergeObservation:
         assert resp.status_code == 200
         assert resp.json() == {"name": "e1", "project": "proj", "merged": 1}
 
-        entity = get_all_graph_data(store, "proj")["entities"][0]
-        observations = cast("list[dict[str, object]]", entity["observations"])
-        hashes = {o["content_hash"] for o in observations}
+        hashes = {o["content_hash"] for o in get_entity_observations(store, "proj", "e1")}
         assert hash_observation("src") not in hashes
         assert hash_observation("dst") in hashes
 
