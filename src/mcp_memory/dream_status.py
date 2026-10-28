@@ -10,7 +10,9 @@ ground truth for what remains demoted, so no rolling history is needed.
 
 from __future__ import annotations
 
+from collections.abc import Generator
 import contextlib
+import fcntl
 import json
 from pathlib import Path
 import re
@@ -263,21 +265,40 @@ def _status_path() -> Path:
     return get_data_dir() / "dream-status.json"
 
 
+@contextlib.contextmanager
+def _locked() -> Generator[None, None, None]:
+    """Hold an exclusive lock for a read-merge-write cycle, as the dream and the visualiser are separate processes.
+
+    Yields:
+        Nothing, while the lock is held.
+    """
+    lock_path = _status_path().with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
 def _write() -> None:
     """Persist the current config, last pass, and running flag atomically (temp file + replace).
 
     The running flag is written on every pass boundary and read by the separate
     mcp-memory process, so a plain write could expose a torn file; ``replace`` swaps
-    it in atomically.
+    it in atomically. Configs already on disk for tiers this process has not recorded
+    are kept, so a separate process (with empty ``_configs``) cannot wipe them.
     """
-    status: DreamStatus = {
-        "schema": _SCHEMA,
-        "configs": _configs,
-        "last_pass": _last_pass,
-        "running": _running,
-        "progress": _progress,
-    }
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError), _locked():
+        on_disk = _read_file()
+        status: DreamStatus = {
+            "schema": _SCHEMA,
+            "configs": {**(on_disk["configs"] if on_disk else {}), **_configs},
+            "last_pass": _last_pass,
+            "running": _running,
+            "progress": _progress,
+        }
         write_json_atomic(_status_path(), status)
 
 
