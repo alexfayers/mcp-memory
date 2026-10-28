@@ -8,6 +8,7 @@ import fcntl
 import json
 import logging
 from pathlib import Path
+import uuid
 
 from mcp_memory.config import get_data_dir
 
@@ -97,6 +98,20 @@ def clear(task_id: str) -> None:
             for key in keys_to_remove:
                 del data[key]
             _write(data)
+
+
+def tick_turn(task_id: str, amount: int = 1) -> int:
+    """Add to the task's context-window turn counter and return it."""
+    return int(increment(f"{task_id}:turn", amount))
+
+
+def get_window(task_id: str) -> str:
+    """Return the task's context window id, minting it on first use."""
+    with _locked():
+        data = _read()
+        window_id = data.setdefault(f"{task_id}:window", uuid.uuid4().hex)
+        _write(data)
+        return str(window_id)
 
 
 def has_scope_blocked(task_id: str, project: str) -> bool:

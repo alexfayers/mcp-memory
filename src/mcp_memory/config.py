@@ -206,6 +206,11 @@ def get_max_observation_chars() -> int:
     return int(os.environ.get("MCP_MEMORY_MAX_OBSERVATION_CHARS", _DEFAULT_MAX_OBSERVATION_CHARS))
 
 
+def get_dedupe_turns() -> int:
+    """Return how many tool calls a sent observation stays deduplicated in a context window; 0 disables."""
+    return int(os.environ.get("MCP_MEMORY_DEDUPE_TURNS", "40"))
+
+
 def get_call_metrics_enabled() -> bool:
     """Return whether per-call usage metrics (byte sizes + option usage) are recorded."""
     return os.environ.get("MCP_MEMORY_CALL_METRICS_ENABLED", "true").strip().lower() in _TRUTHY

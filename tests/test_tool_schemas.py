@@ -75,3 +75,10 @@ class TestValidationUnchanged:
     def test_wrong_type_argument_is_rejected(self) -> None:
         with pytest.raises(ToolError):
             asyncio.run(server.mcp.call_tool("read_graph", {"project": "p", "compact": "notabool"}))
+
+    def test_context_window_arguments_are_accepted_but_hidden_and_include_seen_is_advertised(self) -> None:
+        asyncio.run(server.mcp.call_tool("read_graph", {"project": "p", "context_window_id": "w", "context_turn": 1}))
+        tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+        properties = tools["read_graph"].input_schema["properties"]
+        assert "include_seen" in properties
+        assert not {"context_window_id", "context_turn"} & properties.keys()
