@@ -1345,6 +1345,33 @@ class TestObservations:
         assert trimmed == [hash_observation("gamma")]
         assert obs_contents(store.reads.get_entity("proj", "e1")) == ["alpha", "Correction: beta"]
 
+    def test_trim_protecting_corrections_keeps_user_observations_unless_superseded(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["alpha", "beta"]}])
+        store.observations.add("proj", "e1", ["old ask"], provenance="user")
+        store.observations.add("proj", "e1", ["new ask"], provenance="user")
+        keep = [hash_observation("alpha")]
+        assert store.observations.trim_to_outcome("proj", "e1", keep, protect_corrections=True) == [
+            hash_observation("beta")
+        ]
+        trimmed = store.observations.trim_to_outcome(
+            "proj", "e1", keep, protect_corrections=True, superseded_by=hash_observation("new ask")
+        )
+        assert trimmed == [hash_observation("old ask")]
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["alpha", "new ask"]
+
+    def test_refusal_of_user_observations_needs_a_newer_user_superseder(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["plain"]}])
+        store.observations.add("proj", "e1", ["first"], provenance="user")
+        store.observations.add("proj", "e1", ["second"], provenance="user")
+        first, second = hash_observation("first"), hash_observation("second")
+        refuse = store.observations.refuse_unsuperseded_user
+
+        refuse("proj", "e1", None, hashes=[hash_observation("plain")])
+        refuse("proj", "e1", second, hashes=[first])
+        for superseder in (None, first, hash_observation("plain"), "missing"):
+            with pytest.raises(ValueError, match=r"superseded_by|user-provenance"):
+                refuse("proj", "e1", superseder, hashes=[first] if superseder != first else [second])
+
     def test_trim_observations_to_outcome_empty_keep_raises(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         with pytest.raises(ValueError, match="at least one"):

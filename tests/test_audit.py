@@ -372,6 +372,30 @@ class TestProposePlan:
         keep = set(self._plan(store, "proj")[0]["arguments"]["keep_hashes"])  # type: ignore[index]
         assert by_content["Resolved: done"] in keep
 
+    def test_trim_keeps_user_provenance_observations_and_skips_a_trim_that_would_drop_nothing(
+        self, store: Storage
+    ) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {
+                    "name": "task/big",
+                    "entityType": "task",
+                    "observations": ["filler", "RESOLVED: done"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        store.observations.add("proj", "task/big", ["ask one", "ask two"], provenance="user")
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "task/big"))}
+        keep = set(self._plan(store, "proj")[0]["arguments"]["keep_hashes"])  # type: ignore[index]
+        assert {by_content["ask one"], by_content["ask two"]} <= keep
+        assert by_content["filler"] not in keep
+
+        store.observations.delete("proj", "task/big", ["filler", "RESOLVED: done"])
+        store.observations.add("proj", "task/big", ["ask three", "ask four"], provenance="user")
+        assert [s for s in self._plan(store, "proj") if s["tool"] == "trim_observations_to_outcome"] == []
+
     def test_trim_uses_full_observation_list_not_budgeted(self, store: Storage) -> None:
         store.entities.create(
             "proj",

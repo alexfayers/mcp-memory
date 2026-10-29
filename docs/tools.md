@@ -23,19 +23,19 @@ Read results order observations best-first by vote and trim them to the characte
 | `create_entities` | Create entities with observations. Fails if a name exists. Every type except `project` needs at least one relation. An entity dict may carry `provenance`, applied to its observations |
 | `add_observations` | Append to an existing entity. Duplicates are skipped. Pass `provenance` (`user`, `observed` or `inferred`) once per call to record where the claims come from. A duplicate add raises a less trusted observation to the higher-ranked provenance and never lowers it. Reads show a set provenance as `from` |
 | `edit_observation` | Edit one observation by `content_hash`, keeping its votes and timestamp. Use `oldText`/`newText` for a partial edit. An edit keeps the provenance unless `provenance` is passed |
-| `delete_observations` | Soft-delete by exact `observations` text and/or `observationHashes`. Returns the count and hashes deleted. Restorable with `restore_observations` until a purge |
+| `delete_observations` | Soft-delete by exact `observations` text and/or `observationHashes`. Returns the count and hashes deleted. Restorable with `restore_observations` until a purge. A dream-spawned call may delete a `user` observation only when `superseded_by` names a newer `user` observation on the same entity, or once another entity holds it as `user` |
 | `restore_observations` | Undo a soft delete of observations by `observationHashes` and/or exact `observations` text. A hash with a live copy is skipped. Returns the restored count and hashes |
-| `trim_observations_to_outcome` | Soft-delete every observation except those in `keep_hashes` (at least one). Returns the count and hashes trimmed. Restorable with `restore_observations` until a purge |
-| `merge_observations` | Fold a duplicate observation (`sourceHash`) into another (`targetHash`) in the same entity. The target keeps the higher vote score. The source is soft-deleted and its hash returned. `restore_observations` brings it back until a purge, and the target keeps the higher score |
+| `trim_observations_to_outcome` | Soft-delete every observation except those in `keep_hashes` (at least one). Returns the count and hashes trimmed. Restorable with `restore_observations` until a purge. A dream-spawned call also keeps `user` observations, except those older than the `user` observation `superseded_by` names |
+| `merge_observations` | Fold a duplicate observation (`sourceHash`) into another (`targetHash`) in the same entity. The target keeps the higher vote score. The source is soft-deleted and its hash returned. `restore_observations` brings it back until a purge, and the target keeps the higher score. A dream-spawned call may not merge away a `user` observation that no other entity holds |
 | `create_relations` | Create relations. Duplicates are ignored |
 | `delete_relation` | Soft-delete one relation. Restorable with `restore_relation` until a purge. Creating it again also brings it back |
 | `restore_relation` | Undo a soft delete of a relation (`source`, `target`, `type`) between two live entities. Fails if the relation never existed |
 | `set_entity_status` | Set or clear a status. A resolved entity untouched for 56 days auto-archives, see `MCP_MEMORY_ARCHIVE_ENABLED` |
-| `vote` | Vote on an entity, or on one observation (`observation` or `observationHash`). A nonzero integer from -3 to 3, returns the new net `vote_score`. Votes shift ranking within bounds but never hide anything |
+| `vote` | Vote on an entity, or on one observation (`observation` or `observationHash`). A nonzero integer from -3 to 3, returns the new net `vote_score`. Votes shift ranking within bounds but never hide anything. A dream-spawned downvote of a `user` observation needs `superseded_by`, the `content_hash` of a newer `user` observation on the same entity |
 | `rename_entity` | Rename in place. Relations and observations are kept. A different type prefix changes the type |
 | `merge_entities` | Fold a duplicate entity (`source`) into `target` in one project. Observations are copied, relations repointed, the higher vote score kept. The source is soft-deleted |
 | `restore_entity` | Undo a soft delete, until a purge removes it. Observations and relations deleted separately before the entity was deleted stay deleted |
-| `delete_entity` | Soft-delete an entity, hiding it and its observations and relations. Restorable with `restore_entity` until a purge. Refuses while other live entities relate to it or if it would orphan one |
+| `delete_entity` | Soft-delete an entity, hiding it and its observations and relations. Restorable with `restore_entity` until a purge. Refuses while other live entities relate to it or if it would orphan one. A dream-spawned call also refuses while it holds a `user` observation that no other entity holds |
 
 ## Projects
 

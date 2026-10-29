@@ -690,6 +690,115 @@ class TestAddObservationsTool:
         assert entity_schema["provenance"]["enum"] == ["user", "observed", "inferred"]
 
 
+_DREAM = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+
+
+class TestDreamUserObservationGuards:
+    @pytest.fixture
+    def entity(self, server_db: Storage) -> str:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["plain"]}])
+        server_db.observations.add("proj", "e1", ["old ask"], provenance="user")
+        server_db.observations.add("proj", "e1", ["new ask"], provenance="user")
+        return "e1"
+
+    def test_dream_delete_of_a_user_observation_needs_a_newer_user_superseder(
+        self, server_db: Storage, entity: str
+    ) -> None:
+        old, new = hash_observation("old ask"), hash_observation("new ask")
+        assert "error" in tools.delete_observations("proj", entity, observationHashes=[old], ctx=_DREAM)
+        assert "error" in tools.delete_observations(
+            "proj", entity, observationHashes=[new], superseded_by=old, ctx=_DREAM
+        )
+        assert tools.delete_observations("proj", entity, observationHashes=[old], superseded_by=new, ctx=_DREAM)[
+            "hashes"
+        ] == [old]
+        assert tools.delete_observations("proj", entity, ["new ask"])["count"] == 1
+        assert tools.delete_observations("proj", entity, ["plain"], ctx=_DREAM)["count"] == 1
+
+    def test_dream_downvote_of_a_user_observation_needs_a_newer_user_superseder(
+        self, server_db: Storage, entity: str
+    ) -> None:
+        old, new = hash_observation("old ask"), hash_observation("new ask")
+        assert "error" in tools.vote("proj", entity, -1, observationHash=old, ctx=_DREAM)
+        assert tools.vote("proj", entity, -1, observationHash=old, superseded_by=new, ctx=_DREAM)["vote_score"] == -1
+        assert tools.vote("proj", entity, -1, observationHash=old)["vote_score"] == -2
+        assert tools.vote("proj", entity, -1, observationHash=hash_observation("plain"), ctx=_DREAM)["vote_score"] == -1
+
+    def test_dream_trim_drops_older_user_observations_only_with_a_superseder(
+        self, server_db: Storage, entity: str
+    ) -> None:
+        keep = [hash_observation("plain")]
+        assert tools.trim_observations_to_outcome("proj", entity, keep, ctx=_DREAM)["hashes"] == []
+        result = tools.trim_observations_to_outcome(
+            "proj", entity, keep, superseded_by=hash_observation("new ask"), ctx=_DREAM
+        )
+        assert result["hashes"] == [hash_observation("old ask")]
+
+    def test_dream_writes_inherit_provenance_from_the_same_text_in_the_project(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "task/big", "entityType": "task", "observations": ["x"]}])
+        server_db.observations.add("proj", "task/big", ["said"], provenance="user")
+        created = tools.create_entities(
+            "proj",
+            [
+                {
+                    "name": "task/split",
+                    "entityType": "task",
+                    "observations": ["said", "fresh"],
+                    "provenance": "observed",
+                    "relations": [{"target": "task/big", "type": "relates-to"}],
+                }
+            ],
+            ctx=_DREAM,
+        )
+        assert "error" not in created, created
+        assert "error" not in tools.add_observations("proj", "task/split", ["x"], provenance="user", ctx=_DREAM)
+        split = {o.content: o.provenance for o in server_db.reads.get_entity("proj", "task/split").observations}
+        assert split == {"said": "user", "fresh": None, "x": None}
+
+    def test_dream_writes_never_clear_an_inferred_observation(self, server_db: Storage) -> None:
+        server_db.entities.create(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["guess"], "provenance": "inferred"}]
+        )
+        assert "error" not in tools.add_observations("proj", "e1", ["more"], ctx=_DREAM)
+        provenances = {o.content: o.provenance for o in server_db.reads.get_entity("proj", "e1").observations}
+        assert provenances == {"guess": "inferred", "more": None}
+
+    def test_dream_split_may_delete_a_user_observation_once_another_entity_holds_it(
+        self, server_db: Storage, entity: str
+    ) -> None:
+        split = {
+            "name": "task/split",
+            "entityType": "task",
+            "observations": ["old ask"],
+            "relations": [{"target": entity, "type": "relates-to"}],
+        }
+        assert "error" not in tools.create_entities("proj", [split], ctx=_DREAM)
+        assert "error" in tools.vote("proj", entity, -1, observationHash=hash_observation("old ask"), ctx=_DREAM)
+        assert tools.delete_observations("proj", entity, ["old ask"], ctx=_DREAM)["count"] == 1
+        assert "error" in tools.delete_observations("proj", entity, ["new ask"], ctx=_DREAM)
+
+    def test_dream_cannot_merge_away_or_delete_with_its_entity_a_user_observation(
+        self, server_db: Storage, entity: str
+    ) -> None:
+        old, plain = hash_observation("old ask"), hash_observation("plain")
+        assert "error" in tools.merge_observations("proj", entity, old, plain, ctx=_DREAM)
+        assert "error" not in tools.merge_observations("proj", entity, plain, old, ctx=_DREAM)
+        assert "error" in tools.delete_entity("proj", entity, ctx=_DREAM)
+        assert "error" not in tools.delete_entity("proj", entity)
+
+    def test_superseded_by_never_releases_a_user_correction_and_is_ignored_outside_a_dream(
+        self, server_db: Storage, entity: str
+    ) -> None:
+        server_db.observations.add("proj", entity, ["User corrected the port"], provenance="user")
+        server_db.observations.add("proj", entity, ["newest ask"], provenance="user")
+        keep = [hash_observation("plain")]
+        result = tools.trim_observations_to_outcome(
+            "proj", entity, keep, superseded_by=hash_observation("newest ask"), ctx=_DREAM
+        )
+        assert set(result["hashes"]) == {hash_observation("old ask"), hash_observation("new ask")}
+        assert "error" not in tools.trim_observations_to_outcome("proj", entity, keep, superseded_by="nope")
+
+
 class TestStatusObservationsRejected:
     _REJECTED: ClassVar[list[str]] = ["status: in-progress", "  Status: resolved", "STATUS:x"]
 
@@ -851,7 +960,7 @@ class TestTrimObservationsToOutcomeTool:
 
     def test_context_is_not_part_of_the_trim_schema(self) -> None:
         tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "trim_observations_to_outcome")
-        assert set(tool.input_schema["properties"]) == {"project", "name", "keep_hashes"}
+        assert set(tool.input_schema["properties"]) == {"project", "name", "keep_hashes", "superseded_by"}
 
     def test_empty_keep_hashes_returns_error(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])

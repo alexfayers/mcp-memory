@@ -222,7 +222,7 @@ def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
 
 def _keep_hashes(observations: list[Observation], ceiling: int) -> list[str]:
     """Deterministically pick which observations to keep when trimming, never dropping a protected one."""
-    protected = {o.content_hash for o in observations if is_protected_observation(o.content)}
+    protected = {o.content_hash for o in observations if o.provenance == "user" or is_protected_observation(o.content)}
     keep = protected | {o.content_hash for o in observations if any(k in o.content for k in _OUTCOME_KEYWORDS)}
     top = min(observations, key=lambda o: (-o.vote_score, o.content_hash))
     keep.add(top.content_hash)
@@ -392,6 +392,8 @@ def _oversized_step(entity: Finding, observations: list[Observation]) -> dict[st
     outcome_count = _outcome_obs_count(observations)
     if outcome_count > ceiling:
         return _split_step(entity, ceiling, outcome_count)
+    if len(_keep_hashes(observations, ceiling)) >= len(observations):
+        return None
     return _trim_step(entity, observations)
 
 

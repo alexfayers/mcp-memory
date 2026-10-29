@@ -249,7 +249,8 @@ DELETE_ENTITY_DESC = (
     "Soft-delete an entity with its observations and relations (restorable with restore_entity until a "
     "grace-window purge). Use sparingly for stale, incorrect or misleading memory - prefer marking it deprecated "
     "or a downvote unless it would mislead. Refused while it has live incoming relations or live implements or "
-    "depends-on relations - delete or retarget those first, then retry."
+    "depends-on relations - delete or retarget those first, then retry. "
+    "A dream may not delete an entity holding a user observation that no other entity holds."
 )
 DELETE_RELATION_DESC = (
     "Soft-delete a relation (restorable with restore_relation until a grace-window purge). "
@@ -291,6 +292,8 @@ DELETE_OBSERVATIONS_DESC = (
     "Soft-delete observations by exact content (observations) and/or content_hash (observationHashes - cheaper). "
     "Returns the count and hashes deleted (restorable with restore_observations until a grace-window purge). "
     "Throws if the entity does not exist. "
+    "superseded_by: the content_hash of a newer user observation on the same entity that contradicts "
+    "the deleted one. A dream may delete a user observation only with it, or once another entity holds it. "
     "For a stale but not wrong observation, prefer vote (downvote). "
     "Use this, not a downvote, for an outright wrong one. To correct one, use edit_observation."
 )
@@ -305,7 +308,9 @@ TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
     "Soft-delete all observations on an entity except those in keep_hashes (content_hash). "
     "Use to trim an oversized resolved entity down to its ask, a decision and why, and any outcome line. "
     "keep_hashes must be non-empty. Returns the count and hashes trimmed (restorable with restore_observations "
-    "until a grace-window purge)."
+    "until a grace-window purge). "
+    "A dream keeps user observations unless superseded_by names a newer user observation on the same "
+    "entity, which releases only the user observations older than it."
 )
 RENAME_ENTITY_DESC = (
     "Rename a single entity in place within a project scope. "
@@ -345,7 +350,9 @@ VOTE_DESC = (
     "must be a nonzero integer from -3 to 3; returns the new net vote_score. "
     "Vote as you retrieve - up for a helpful observation, down for a stale or misleading one. "
     "Prefer a downvote over deleting an entity. "
-    "Show vote_score to the user as stars (e.g. \u26053), not the raw number."
+    "Show vote_score to the user as stars (e.g. \u26053), not the raw number. "
+    "superseded_by: the content_hash of a newer user observation on the same entity that contradicts "
+    "the voted observation. A dream may downvote a user observation only with it."
 )
 GET_PROJECT_FOR_PATH_DESC = (
     "Return the project whose registered path contains the given filesystem path, "
@@ -396,7 +403,8 @@ MERGE_OBSERVATIONS_DESC = (
     "The target keeps the higher vote score and its own timestamp. The source is soft-deleted (its hash is "
     "returned, restorable with restore_observations until a grace-window purge, without lowering the target's "
     "vote score). Never merges across entities. Raises if either hash matches no observation or the hashes are "
-    "equal. Only for genuine duplicates: for a merely more useful one, use `vote`."
+    "equal. Only for genuine duplicates: for a merely more useful one, use `vote`. "
+    "A dream may not merge away a user observation that no other entity holds."
 )
 
 SEARCH_ALL_PROJECTS_DESC = (
@@ -683,10 +691,19 @@ def _create_entities(
 def create_entities(
     project: str,
     entities: _ENTITY_INPUTS,
+    ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Create or update entities with observations, enforcing relation requirements."""
+    """Create or update entities with observations, enforcing relation requirements.
+
+    A dream-spawned call ignores the passed provenance and copies it from the same text elsewhere in the project.
+    """
     try:
-        return _create_entities(project, entities)
+        if not dream.is_dream_request(ctx):
+            return _create_entities(project, entities)
+        result = _create_entities(project, [{k: v for k, v in e.items() if k != "provenance"} for e in entities])
+        for entity in entities:
+            _get_db().observations.inherit_provenance(project, str(entity["name"]))
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -921,10 +938,17 @@ def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
     title="Merge observations",
 )
 @_track
-def merge_observations(project: str, entityName: str, sourceHash: str, targetHash: str) -> dict[str, object]:
-    """Fold one observation into another within an entity, addressed by content_hash."""
+def merge_observations(
+    project: str, entityName: str, sourceHash: str, targetHash: str, ctx: Context | None = None
+) -> dict[str, object]:
+    """Fold one observation into another within an entity, addressed by content_hash.
+
+    A dream-spawned call may not merge away a user observation that no other entity holds.
+    """
     try:
         db = _get_db()
+        if dream.is_dream_request(ctx):
+            db.observations.refuse_unsuperseded_user(project, entityName, None, hashes=[sourceHash])
         result = db.observations.merge(project, entityName, sourceHash, targetHash)
         return {
             "message": f"Merged observation into target in '{entityName}'.",
@@ -1104,13 +1128,17 @@ def create_relations(
 def delete_entity(
     project: str,
     name: str,
+    ctx: Context | None = None,
 ) -> dict[str, str]:
     """Soft-delete an entity, hiding it and its observations and relations.
 
-    Refused while the entity has live incoming relations or live implements or depends-on relations.
+    Refused while the entity has live incoming relations or live implements or depends-on relations,
+    and for a dream-spawned call while it holds a user observation that no other entity holds.
     """
     try:
         db = _get_db()
+        if dream.is_dream_request(ctx):
+            db.observations.refuse_unsuperseded_user(project, name, None, every=True)
         db.entities.delete(project, name)
         return {"message": f"Deleted entity '{name}' from project '{project}'."}
     except Exception as e:
@@ -1267,12 +1295,19 @@ def add_observations(
     entityName: str,
     observations: list[str],
     provenance: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, object]:
-    """Append deduplicated observations to an existing entity."""
+    """Append deduplicated observations to an existing entity.
+
+    A dream-spawned call ignores the passed provenance and copies it from the same text elsewhere in the project.
+    """
+    is_dream = dream.is_dream_request(ctx)
     try:
         _reject_status_observations(observations)
         db = _get_db()
-        hashes = db.observations.add(project, entityName, observations, provenance)
+        hashes = db.observations.add(project, entityName, observations, None if is_dream else provenance)
+        if is_dream:
+            db.observations.inherit_provenance(project, entityName)
         return {
             "message": f"Added {len(hashes)} observations to '{entityName}'.",
             "count": len(hashes),
@@ -1295,10 +1330,20 @@ def delete_observations(
     entityName: str,
     observations: list[str] | None = None,
     observationHashes: list[str] | None = None,
+    *,
+    superseded_by: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, str | int | list[str]]:
-    """Soft-delete observations by exact content match and/or by content_hash."""
+    """Soft-delete observations by exact content match and/or by content_hash.
+
+    A dream-spawned call may delete a user observation only when superseded_by names a newer user observation.
+    """
     try:
         db = _get_db()
+        if dream.is_dream_request(ctx):
+            db.observations.refuse_unsuperseded_user(
+                project, entityName, superseded_by, hashes=observationHashes or (), contents=observations or ()
+            )
         hashes = db.observations.delete(project, entityName, observations=observations, hashes=observationHashes)
         return {
             "message": f"Deleted {len(hashes)} observations from '{entityName}'.",
@@ -1345,16 +1390,17 @@ def edit_observation(
 )
 @_track
 def trim_observations_to_outcome(
-    project: str, name: str, keep_hashes: list[str], ctx: Context | None = None
+    project: str, name: str, keep_hashes: list[str], superseded_by: str | None = None, ctx: Context | None = None
 ) -> dict[str, object]:
     """Soft-delete all observations on an entity except those in keep_hashes.
 
-    A dream-spawned call also keeps user corrections, decisions and lessons.
+    A dream-spawned call also keeps user corrections, decisions, lessons and user observations,
+    except those older than the user observation superseded_by names.
     """
     try:
         db = _get_db()
         hashes = db.observations.trim_to_outcome(
-            project, name, keep_hashes, protect_corrections=dream.is_dream_request(ctx)
+            project, name, keep_hashes, protect_corrections=dream.is_dream_request(ctx), superseded_by=superseded_by
         )
         return {
             "message": f"Trimmed {len(hashes)} observation(s) from '{name}'.",
@@ -1471,10 +1517,25 @@ def vote(
     vote: int,
     observation: str | None = None,
     observationHash: str | None = None,
+    *,
+    superseded_by: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, object]:
-    """Apply a usefulness vote to an entity or one of its observations."""
+    """Apply a usefulness vote to an entity or one of its observations.
+
+    A dream-spawned downvote of a user observation needs superseded_by naming a newer user observation.
+    """
     try:
         db = _get_db()
+        if vote < 0 and (observation is not None or observationHash is not None) and dream.is_dream_request(ctx):
+            db.observations.refuse_unsuperseded_user(
+                project,
+                name,
+                superseded_by,
+                hashes=[observationHash] if observationHash else (),
+                contents=[observation] if observation else (),
+                spare_copies=False,
+            )
         if observation is None and observationHash is None:
             return {
                 "name": name,

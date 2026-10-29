@@ -171,12 +171,104 @@ class ObservationRepository:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
         return entity_id
 
+    def _superseded_user_hashes(self, entity_id: int, superseded_by: str | None) -> set[str]:
+        """Return the hashes of user observations older than the user observation superseded_by names.
+
+        Raises ValueError unless superseded_by is None or names a live user observation on the entity.
+        """
+        if superseded_by is None:
+            return set()
+        rows = self._conn.query_all(
+            "SELECT content_hash, provenance, created_at, id FROM observations "
+            "WHERE entity_id = ? AND deleted_at IS NULL",
+            (entity_id,),
+        )
+        newer = next((row for row in rows if row["content_hash"] == superseded_by), None)
+        if newer is None or newer["provenance"] != "user":
+            raise ValueError("superseded_by must name a live user observation on the same entity")
+        return {
+            row["content_hash"]
+            for row in rows
+            if row["provenance"] == "user" and (row["created_at"], row["id"]) < (newer["created_at"], newer["id"])
+        }
+
+    def refuse_unsuperseded_user(
+        self,
+        project: str,
+        entity_name: str,
+        superseded_by: str | None,
+        *,
+        hashes: Sequence[str] = (),
+        contents: Sequence[str] = (),
+        every: bool = False,
+        spare_copies: bool = True,
+    ) -> None:
+        """Raise ValueError if an addressed user observation would be lost.
+
+        every addresses all the entity's observations. A user observation is spared when it is older than
+        the user observation superseded_by names, or, with spare_copies, when another live entity in the project
+        holds it as user.
+        """
+        entity_id = self._require_entity_id(project, entity_name)
+        superseded = self._superseded_user_hashes(entity_id, superseded_by)
+        own = self.for_entity(entity_id)
+        copied = self._provenance_elsewhere(entity_id, own) if spare_copies else {}
+        refused = [
+            o
+            for o in own
+            if o.provenance == "user"
+            and o.content_hash not in superseded
+            and copied.get(o.content_hash) != "user"
+            and (every or o.content_hash in hashes or o.content in contents)
+        ]
+        if refused:
+            raise ValueError(
+                f"Refused: {len(refused)} user-provenance observation(s) would be lost. Copy them to another "
+                "entity first, or pass superseded_by naming a newer user observation on the same entity."
+            )
+
+    def _provenance_elsewhere(self, entity_id: int, own: Sequence[Observation]) -> dict[str, str | None]:
+        """Return the highest known provenance each of own's hashes has on other live entities in the project."""
+        others = self._conn.query_all(
+            "SELECT o.content_hash, o.provenance FROM observations o JOIN entities e ON e.id = o.entity_id "
+            "WHERE e.project_id = (SELECT project_id FROM entities WHERE id = ?) AND e.id != ? "
+            f"AND e.deleted_at IS NULL AND o.deleted_at IS NULL AND o.content_hash IN ({placeholders(len(own))})",
+            [entity_id, entity_id, *(o.content_hash for o in own)],
+        )
+        best: dict[str, str | None] = {}
+        for row in others:
+            if raises_provenance(row["provenance"], best.get(row["content_hash"])):
+                best[row["content_hash"]] = row["provenance"]
+        return best
+
+    def inherit_provenance(self, project: str, entity_name: str) -> None:
+        """Raise each observation on an entity to the highest provenance its text has elsewhere in the project."""
+        entity_id = self._require_entity_id(project, entity_name)
+        own = self.for_entity(entity_id)
+        best = self._provenance_elsewhere(entity_id, own)
+        with self._conn.transaction():
+            for obs in own:
+                inherited = best.get(obs.content_hash)
+                if raises_provenance(inherited, obs.provenance):
+                    self._conn.write(
+                        "UPDATE observations SET provenance = ? "
+                        "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
+                        (inherited, entity_id, obs.content_hash),
+                    )
+
     def trim_to_outcome(
-        self, project: str, entity_name: str, keep_hashes: list[str], *, protect_corrections: bool = False
+        self,
+        project: str,
+        entity_name: str,
+        keep_hashes: list[str],
+        *,
+        protect_corrections: bool = False,
+        superseded_by: str | None = None,
     ) -> list[str]:
         """Soft-delete all observations on an entity except those with a content_hash in keep_hashes.
 
-        With protect_corrections, user corrections, decisions and lessons are kept too.
+        With protect_corrections, user corrections, decisions, lessons and user-provenance observations
+        are kept too, except user observations older than the user observation superseded_by names.
         Returns the content hashes of the trimmed observations.
         """
         if not keep_hashes:
@@ -184,9 +276,15 @@ class ObservationRepository:
 
         entity_id = self._require_entity_id(project, entity_name)
         if protect_corrections:
+            superseded = self._superseded_user_hashes(entity_id, superseded_by)
             keep_hashes = [
                 *keep_hashes,
-                *(o.content_hash for o in self.for_entity(entity_id) if is_protected_observation(o.content)),
+                *(
+                    o.content_hash
+                    for o in self.for_entity(entity_id)
+                    if is_protected_observation(o.content)
+                    or (o.provenance == "user" and o.content_hash not in superseded)
+                ),
             ]
         with self._conn.transaction():
             return self._soft_delete(entity_id, f"content_hash NOT IN ({placeholders(len(keep_hashes))})", keep_hashes)
