@@ -12,7 +12,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from .migrations.schema import MIGRATIONS
-from .models import Relation
+from .models import Relation, validate_provenance
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -97,6 +97,10 @@ def validate_export(data: dict[str, Any]) -> dict[str, Any]:
             f"Export schema_version {data.get('schema_version')} is newer than this build "
             f"supports (max {max_schema}); upgrade mcp-memory before importing"
         )
+    for block in data.get("projects", {}).values():
+        for entity in block.get("entities", []):
+            for obs in entity.get("observations", []):
+                validate_provenance(obs.get("provenance"))
     return data
 
 

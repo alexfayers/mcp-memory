@@ -20,9 +20,9 @@ Read results order observations best-first by vote and trim them to the characte
 
 | Tool | What it does |
 |---|---|
-| `create_entities` | Create entities with observations. Fails if a name exists. Every type except `project` needs at least one relation |
-| `add_observations` | Append to an existing entity. Duplicates are skipped |
-| `edit_observation` | Edit one observation by `content_hash`, keeping its votes and timestamp. Use `oldText`/`newText` for a partial edit |
+| `create_entities` | Create entities with observations. Fails if a name exists. Every type except `project` needs at least one relation. An entity dict may carry `provenance`, applied to its observations |
+| `add_observations` | Append to an existing entity. Duplicates are skipped. Pass `provenance` (`user`, `observed` or `inferred`) once per call to record where the claims come from. A duplicate add raises a less trusted observation to the higher-ranked provenance and never lowers it. Reads show a set provenance as `from` |
+| `edit_observation` | Edit one observation by `content_hash`, keeping its votes and timestamp. Use `oldText`/`newText` for a partial edit. An edit keeps the provenance unless `provenance` is passed |
 | `delete_observations` | Soft-delete by exact `observations` text and/or `observationHashes`. Returns the count and hashes deleted. Restorable with `restore_observations` until a purge |
 | `restore_observations` | Undo a soft delete of observations by `observationHashes` and/or exact `observations` text. A hash with a live copy is skipped. Returns the restored count and hashes |
 | `trim_observations_to_outcome` | Soft-delete every observation except those in `keep_hashes` (at least one). Returns the count and hashes trimmed. Restorable with `restore_observations` until a purge |

@@ -100,7 +100,7 @@ _NAME_SQL = (
 
 _OBSERVATION_SQL = (
     "SELECT e.id AS entity_id, e.name, p.name AS project, "
-    "o.content, o.content_hash, o.vote_score, o.created_at "
+    "o.content, o.content_hash, o.vote_score, o.created_at, o.provenance "
     "FROM observations o "
     "JOIN entities e ON o.entity_id = e.id "
     "JOIN projects p ON e.project_id = p.id "
