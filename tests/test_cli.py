@@ -314,39 +314,6 @@ class TestRegisterCodexServer:
         assert not any("add" in c for c in calls)
 
 
-class TestRegisterCopilotServer:
-    def test_adds_memory_server_to_empty_config(self, tmp_path: cli.Path) -> None:
-        mcp_path = tmp_path / "mcp.json"
-        cli._register_copilot_server(mcp_path, "memory", "http://localhost:8000/mcp")
-
-        data = json.loads(mcp_path.read_text(encoding="utf-8"))
-        assert data["servers"]["memory"]["url"] == "http://localhost:8000/mcp"
-
-    def test_keeps_existing_jsonc_config(self, tmp_path: cli.Path) -> None:
-        mcp_path = tmp_path / "mcp.json"
-        mcp_path.write_text(
-            """
-{
-    // existing server
-    "servers": {
-        "github": {
-            "type": "http",
-            "url": "https://api.githubcopilot.com/mcp/",
-        },
-    },
-}
-""".strip()
-            + "\n",
-            encoding="utf-8",
-        )
-
-        cli._register_copilot_server(mcp_path, "memory", "http://localhost:8000/mcp")
-        data = json.loads(mcp_path.read_text(encoding="utf-8"))
-
-        assert "github" in data["servers"]
-        assert data["servers"]["memory"]["url"] == "http://localhost:8000/mcp"
-
-
 class TestRegisterPiServer:
     def test_adds_url_only_servers(self, tmp_path: cli.Path) -> None:
         mcp_path = tmp_path / "agent" / "mcp.json"
@@ -539,20 +506,25 @@ class TestInstallKiroRemovesRetiredAgent:
         assert data["name"] == "a"
 
 
-class TestInstallCopilotRemovesRetiredAgent:
-    def test_drops_only_memory_agent_servers_from_jsonc_config(
-        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(cli, "resolve_port", lambda: "8000")
+class TestUninstallCopilot:
+    def test_removes_memory_servers_and_keeps_the_rest_of_the_jsonc_config(self, tmp_path: cli.Path) -> None:
         mcp_path = tmp_path / "mcp.json"
-        servers = {"memory": {"type": "http", "url": "u"}, "memory-agent": {"url": "x"}, "memory_agent": {"url": "y"}}
+        servers = {
+            "memory": {"type": "http", "url": "u"},
+            "memory-agent": {"url": "x"},
+            "memory_agent": {"url": "y"},
+            "github": {"type": "http", "url": "g"},
+        }
         mcp_path.write_text("// c\n" + json.dumps({"inputs": [1], "servers": servers}), encoding="utf-8")
 
-        cli._cmd_install_copilot(argparse.Namespace(mcp_config=str(mcp_path)))
+        cli._cmd_uninstall_copilot(argparse.Namespace(mcp_config=str(mcp_path)))
         data = json.loads(mcp_path.read_text(encoding="utf-8"))
 
-        assert data["servers"] == {"memory": servers["memory"]}
+        assert data["servers"] == {"github": servers["github"]}
         assert data["inputs"] == [1]
+
+    def test_missing_config_is_not_an_error(self, tmp_path: cli.Path) -> None:
+        cli._cmd_uninstall_copilot(argparse.Namespace(mcp_config=str(tmp_path / "mcp.json")))
 
 
 class TestCopilotPathSelection:

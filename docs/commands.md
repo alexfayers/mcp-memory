@@ -7,6 +7,7 @@
 | `setup-service [--port] [--db-path]` | Install the background service |
 | `restart` | Restart the service |
 | `install <target>` | Register the server with an agent |
+| `uninstall copilot [--mcp-config]` | Remove the server from VS Code's `mcp.json` |
 | `audit` | Hygiene report on the graph |
 | `eval` | Search ranking quality |
 | `metrics` | Tool usage report |
@@ -22,7 +23,6 @@
 | `claude-code` | runs `claude mcp add` |
 | `codex` | runs `codex mcp add` |
 | `antigravity` | runs `agy mcp add` |
-| `copilot` | patches the VS Code user `mcp.json` (`--mcp-config <path>` to override) |
 | `pi` | patches `mcp.json` in `~/.pi/agent` (or `$PI_CODING_AGENT_DIR`) |
 | `kiro <agent-config.json>` | patches the given Kiro agent JSON |
 
