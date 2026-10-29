@@ -3,346 +3,59 @@
 ![tool output](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/alexfayers/mcp-memory/benchmark-badge/size.json)
 ![recall@10](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/alexfayers/mcp-memory/benchmark-badge/ranking.json)
 
-SQLite-backed persistent memory MCP server with FTS5 search and project scoping.
+An MCP server that gives coding agents a persistent, per-project memory. It stores a knowledge graph in SQLite and serves it over HTTP on localhost.
 
-## Features
+## Install
 
-- **Project-scoped data** - all tools take a `project` parameter to isolate data per project
-- **FTS5 full-text search** - recency-weighted BM25 ranking with porter stemming, time-range filtering
-- **Implicit-usefulness ranking** - an entity edited soon after a search surfaced it earns an automatic upvote, so ranking self-tunes from observed use without relying on explicit votes
-- **Graph traversal** - explore entity relationships with filtering by type
-- **Safe observation updates** - append or delete individual observations without overwriting
-- **Observation-level voting** - up/down-vote individual observations (addressable by a content-derived `content_hash`) so an entity's most useful lines surface first and stale ones sink, not just whole-entity votes
-- **Entity status tracking** - track entity lifecycle with status fields
-- **Migration framework** - automatic schema upgrades
-- **HTTP transport** - single server instance shared across all clients via streamable-http
-
-## Installation
+Needs Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv tool install "git+https://github.com/alexfayers/mcp-memory.git"
 ```
 
-### As an overlay
+## Quick start
 
-mcp-memory ships prompt rules and skills for [llm-prompts](https://github.com/alexfayers/llm-prompts) and a hook plugin for [cline-hooks](https://github.com/alexfayers/cline-hooks). Add it to your `~/.config/llm-prompts/config.toml`:
+```bash
+mcp-memory setup-service          # run the server in the background
+mcp-memory install claude-code    # point an agent at it
+```
+
+`install` also supports `codex`, `antigravity`, `copilot`, `pi` and `kiro`. For any other client, use the URL `http://localhost:8000/mcp`.
+
+Other commands:
+
+```bash
+mcp-memory restart                # restart the service
+mcp-memory audit --all-projects   # graph hygiene report
+mcp-memory export <file>          # back up to JSON
+mcp-memory import <file>          # merge projects from an export
+```
+
+`mcp-memory --help` lists the rest. With no arguments it runs the server in the foreground.
+
+## Config
+
+Set with environment variables. The common ones:
+
+- `MCP_MEMORY_DB_PATH`: database file, default `~/.local/share/mcp-memory/memory.db`
+- `MCP_MEMORY_PORT`: HTTP port, default `8000`
+- `MCP_DREAM_ENABLED`, `MCP_DREAM_HEAVY_ENABLED`: let the server curate memory while idle, off by default
+
+Re-run `mcp-memory setup-service` after changing them so the service picks them up.
+
+## As an llm-prompts overlay
+
+mcp-memory ships rules and skills for [llm-prompts](https://github.com/alexfayers/llm-prompts) and a hook plugin for [cline-hooks](https://github.com/alexfayers/cline-hooks). Add this to `~/.config/llm-prompts/config.toml`, then run `llm-prompts setup`:
 
 ```toml
 [[tools]]
 name = "mcp-memory"
 source = "git+https://github.com/alexfayers/mcp-memory.git"
-standalone = true
-overlays_for = ["llm-prompts", "cline-hooks"]
 ```
 
-Then run `llm-prompts setup` to install everything.
-
-### Configuration
-
-| Environment variable | Description | Default |
-|---|---|---|
-| `MCP_MEMORY_DB_PATH` | Database file path | `~/.local/share/mcp-memory/memory.db` |
-| `MCP_MEMORY_PORT` | HTTP server port | `8000` |
-| `MCP_MEMORY_URL` | Explicit base URL of the mcp-memory server, overriding `MCP_MEMORY_PORT` and any installed service's port | (from port) |
-| `MCP_MEMORY_WORKSPACE_MARKERS` | Directory names marking a multi-package workspace root, so sibling packages share one project scope (comma-separated); markers contributed by other cline-hooks plugins are used after these | (none) |
-| `MCP_MEMORY_READONLY_AGENTS` | Extra agent types exempt from the memory-update gate (comma-separated) | `Explore`, `Plan` |
-| `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names counted at reduced weight toward the gate, the first of which starts the gate (comma-separated) | `replace_in_file`, `write_to_file` |
-| `MCP_MEMORY_WRAPPER_TOOLS` | Extra wrapper tool names (tools that run other tool calls), counted and gated as one call unless their input names a memory write tool (comma-separated) | `codemode` |
-| `MCP_MEMORY_UNCOUNTED_TOOLS` | Extra bookkeeping tool names that are not counted toward the gate but can still be gated (comma-separated) | The frontend's bookkeeping, skill and message tools |
-| `MCP_MEMORY_MAX_OBSERVATION_CHARS` | Per-entity observation-content character budget for reads, applied highest-voted first; negative means unlimited | `2000` |
-| `MCP_MEMORY_CALL_METRICS_ENABLED` | Record per-call usage metrics (byte-size proxies and option usage). | `true` |
-| `MCP_MEMORY_CALL_METRICS_RETENTION_DAYS` | Days of tool-call usage telemetry retained before pruning. | `90` |
-| `MCP_MEMORY_SURFACED_RETENTION_DAYS` | Days of retrieval telemetry retained before pruning; negative means unlimited, since its `used_at` labels are the ranking eval's only ground truth | `-1` |
-| `MCP_MEMORY_EVAL_CACHE_TTL_SECONDS` | How long a computed retrieval-quality report stays cached | `300` |
-| `MCP_MEMORY_ARCHIVE_ENABLED` | On startup, auto-archive resolved entities untouched for 56+ days that were never acted on after being surfaced. | `true` |
-| `MCP_MEMORY_GC_ENABLED` | On startup, soft-delete downvoted orphan entities (score at/below `-10` with no live incoming relation). Reversible; the purge below is the only permanent removal. | off |
-| `MCP_MEMORY_PURGE_ENABLED` | On startup, hard-delete soft-deleted entities older than the grace window | off |
-| `MCP_MEMORY_PURGE_GRACE_DAYS` | How long a soft-deleted entity is retained before it may be purged | `30` |
-| `MCP_MEMORY_STRICT_POLICY` | Reject stricter write-time policy violations such as project-scoped `user-preferences` and any direct `task -> project` relation | off |
-| `MCP_AUTO_VOTE_WINDOW_SECONDS` | How long after a search an edit still counts as an implicit-usefulness `+1` | `1800` |
-| `MCP_AUTO_VOTE_MAX_PER_DAY` | Per-entity daily cap on those automatic votes | `3` |
-| `MCP_DREAM_ENABLED` | Run the autonomous light dream tier (downvotes stale/duplicate entities in idle windows) | off |
-| `MCP_DREAM_IDLE_SECONDS` | Genuine-idle window before the light dream pass fires (once per idle session) | `1800` |
-| `MCP_DREAM_POLL_SECONDS` | How often the coordinator checks whether the light pass is due | `300` |
-| `MCP_DREAM_MODEL` | Fully-qualified model id for light dream spawns | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
-| `MCP_DREAM_TIMEOUT` | Timeout for a single light dream spawn (seconds) | `300` |
-| `MCP_DREAM_MAX_VOTES` | Advisory cap on entities a light pass may demote | `15` |
-| `MCP_DREAM_HEAVY_ENABLED` | Run the heavy dream tier (also merges duplicate entities via reversible soft-delete) | off |
-| `MCP_DREAM_HEAVY_IDLE_SECONDS` | Genuine-idle window before the heavy pass fires (once per idle session) | `5400` |
-| `MCP_DREAM_HEAVY_POLL_SECONDS` | How often the coordinator checks whether the heavy pass is due | `900` |
-| `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id for heavy spawns (set a stronger model, e.g. a Sonnet id) | light dream model |
-| `MCP_DREAM_HEAVY_TIMEOUT` | Timeout for a single heavy dream spawn (seconds) | `600` |
-| `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges + demotions a heavy pass may do | `10` |
-
-Dreaming is opt-in and runs inside the mcp-memory server. Set `MCP_DREAM_ENABLED=true`
-and/or `MCP_DREAM_HEAVY_ENABLED=true`, then run `mcp-memory setup-service` with them set.
-It needs the `claude` CLI on `PATH`.
-
-The visualiser's dream card has **Run light** / **Run heavy** buttons that trigger a
-pass on demand (regardless of the tier's enabled flag). A manual trigger obeys the same
-single-flight guard as the scheduler, so at most one dream runs at a time.
-
-### Contributing workspace markers
-
-Other cline-hooks plugins can add workspace markers by implementing the `memory_workspace_markers` hook, which returns a `frozenset[str]` of directory names:
-
-```python
-from cline_hooks.core.plugin import hookimpl
-
-@hookimpl(optionalhook=True)
-def memory_workspace_markers(self) -> frozenset[str]:
-    return frozenset({".workspace-root"})
-```
-
-### MCP client config
-
-```json
-{
-  "mcpServers": {
-    "memory": {
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
-```
-
-### Agent installation
-
-Automatically configure the MCP server for your agent:
-
-```bash
-mcp-memory install kiro <agent-config.json>   # patches Kiro agent JSON
-mcp-memory install claude-code                # adds via `claude mcp add`
-mcp-memory install codex                      # adds via `codex mcp add`
-mcp-memory install copilot                    # patches VS Code User mcp.json
-mcp-memory install pi                         # patches pi mcp.json (~/.pi/agent)
-```
-
-### Running as a service
-
-mcp-memory uses HTTP transport, so it needs to run as a persistent background service. A setup command is included for macOS and Linux:
-
-```bash
-# Install with defaults (port 8000, DB at ~/.local/share/mcp-memory/memory.db)
-mcp-memory setup-service
-
-# Custom port (DB stays at the default unless --db-path is given)
-mcp-memory setup-service --port 3000
-```
-
-The command auto-detects the platform and generates the appropriate service config. Re-running it without `--port` keeps the installed service's port. On macOS it refuses to replace a `com.mcp-memory` job that launchd loaded from another plist, such as one under a different HOME. On Linux it refuses to replace an existing unit while HOME is not the user's real home.
-
-#### Migrating an existing database to the default location
-
-The hook plugin and the server are separate processes, and the plugin does not inherit
-`MCP_MEMORY_DB_PATH`. If a service was set up with a custom `--db-path`, the two read different
-databases. To consolidate onto the default location and repoint the service:
-
-```bash
-mcp-memory migrate-db
-```
-
-It auto-detects the current path from the installed service, stops the service, moves the
-database (refusing to overwrite a non-empty target), and regenerates the service config at the
-default path. Pass `--source <path>` to override detection.
-
-#### macOS (launchd)
-
-The command creates a plist at `~/Library/LaunchAgents/com.mcp-memory.plist`. To manage:
-
-```bash
-# Restart
-launchctl kickstart -k "gui/$(id -u)/com.mcp-memory"
-
-# Stop
-launchctl bootout "gui/$(id -u)/com.mcp-memory"
-
-# Uninstall
-launchctl bootout "gui/$(id -u)/com.mcp-memory"
-rm ~/Library/LaunchAgents/com.mcp-memory.plist
-```
-
-#### Linux (systemd)
-
-The command creates a system unit at `/etc/systemd/system/mcp-memory.service` (requires sudo). To manage:
-
-```bash
-# Restart
-sudo systemctl restart mcp-memory
-
-# Stop
-sudo systemctl stop mcp-memory
-
-# Uninstall
-sudo systemctl disable --now mcp-memory
-sudo rm /etc/systemd/system/mcp-memory.service
-sudo systemctl daemon-reload
-```
-
-#### Logs
-
-Logs are written to the same directory as the database file (e.g. `~/.local/share/mcp-memory/mcp-memory.log`).
-
-## Tools
-
-All tools require a `project` parameter to scope data.
-
-### create_entities
-
-Create new entities with observations. Raises if any entity name already exists - use `add_observations` to append instead. Non-exempt entity types (everything except `project`) must include at least one relation. Entity names must start with their type prefix (e.g. `task/`, `feature/`), and a `project` entity must be named exactly `project/<project>` (one root per scope).
-
-### add_observations
-
-Append observations to an existing entity without overwriting. Skips duplicates. Throws if the entity does not exist.
-
-### delete_observations
-
-Delete specific observations from an existing entity by exact content match (`observations`) and/or by `content_hash` (`observationHashes`). Returns the count deleted. Throws if the entity does not exist. For an observation that is stale but not wrong enough to remove, prefer `vote` (downvote to sink it) over deletion. To correct one, use `edit_observation`.
-
-### edit_observation
-
-Edit one observation in place by `content_hash` (`observationHash`), keeping its votes and timestamp. Prefer `oldText`: its single exact match is replaced with `newText`; without `oldText`, `newText` replaces the whole content. Returns the new `content_hash`. Raises if nothing matches, `oldText` matches more than once, or the result duplicates another observation.
-
-### trim_observations_to_outcome
-
-Delete every observation on an entity except those whose `content_hash` is in `keep_hashes`. Use this to trim an oversized resolved entity down to its outcome summary deterministically. `keep_hashes` must be non-empty (an entity must retain at least its outcome observation). Returns the number of observations deleted.
-
-### search_nodes
-
-FTS5 full-text search with recency- and vote-weighted BM25 ranking. Recency decay is type-aware (durable types such as `pattern` and `knowledge` decay far slower than `task`), and usefulness votes (see `vote`) nudge results up or down within bounds. Multi-word queries match entities containing *any* of the terms by default (entities matching more terms rank first); pass `match_all=true` to require *all* terms. Optional `entity_type`, `status` (a single value or a list, OR'd together), and time-range (`start`/`end`) filters. Date params support relative formats (`30m`, `1h`, `7d`, `2w`, `3mo`) and ISO dates. Within each returned entity, observations are ordered best-first by their own votes (see `vote`).
-
-### read_graph
-
-Returns the 10 most recent entities and their relations.
-
-### create_relations
-
-Create relationships between entities. Duplicates are ignored. Relation types are normalized (camelCase/underscore to hyphen, lowercased) and must resolve to the canonical vocabulary: `implements`, `depends-on`, `blocks`, `relates-to`, `belongs-to`, `part-of`, `used-by`, `used-in`. Common variants and synonyms are mapped automatically (e.g. `related-to` and `extends` become `relates-to` and `implements`); anything that does not resolve to a canonical type is rejected.
-
-### get_entity_with_relations
-
-Get an entity with all its relations and connected entities via graph traversal, optionally filtered by `entityType` and/or `relationType`.
-
-### set_entity_status
-
-Set or clear the status of an entity. Valid statuses: `planned`, `in-progress`, `blocked`, `resolved`, `archived`. `archived` entities are hidden from `search_nodes`/`search_all_projects` by default; pass `status="archived"` or `include_archived=true` to see them.
-
-### vote
-
-Record a `+1` (useful) or `-1` (stale/unhelpful) usefulness vote on an entity as you retrieve it. Votes accumulate into a net `vote_score` that nudges search ranking within bounds - useful memories surface higher, unhelpful ones sink but stay findable - without changing the entity's content or `updated_at`. Pass `observation` (exact content, like `delete_observations`) or, more cheaply, `observationHash` (the `content_hash` read off the observation in tool output) to cast the vote on a single observation instead of the whole entity - upvoted observations surface first within the entity and downvoted ones sink, so a fat entity leads with its most useful lines. This is a light alternative to `delete_observations` when an observation is stale but not wrong enough to remove. Returns the new net `vote_score`.
-
-In addition to these explicit votes, the server casts a deterministic `+1` on its own when an entity that a search surfaced is edited within a short window (default 30 minutes, `MCP_AUTO_VOTE_WINDOW_SECONDS`) - treating "searched, then acted on" as observed usefulness. Auto-votes are idempotent per surfacing and capped per entity per day (`MCP_AUTO_VOTE_MAX_PER_DAY`, default 3); the surfacings are also retained for 30 days to measure ranking quality (precision@k / MRR).
-
-### rename_entity
-
-Rename a single entity in place within a project scope. All relations and observations are preserved (relations key on entity id, not name). Fails if `new_name` already exists in the scope, or would collide across the global/project name-uniqueness boundary. A different valid type prefix also changes the type; a non-project type needs a relation first.
-
-### move_entity_cross_scope
-
-Move one entity from one project scope to another. Because relations cannot span scopes, all of the entity's relations are dropped and returned (as `droppedRelations`) so the caller can recreate the appropriate ones in the target scope. Fails if an entity with the same name already exists in the target scope.
-
-### delete_entity
-
-Delete an entity and all associated observations and relations.
-
-### delete_relation
-
-Delete a specific relation between two entities.
-
-### merge_entities
-
-Fold a duplicate entity (`source`) into its canonical twin (`target`) within one project. The source's observations are copied onto the target (deduplicated, keeping their votes), all the source's relations are repointed to the target (self-loops and duplicates dropped), the target keeps the higher of the two vote scores, and the source is **soft-deleted**. The merge is reversible: `restore_entity` brings the source back until a grace-window purge removes it. Both entities must already exist in the same project.
-
-### merge_observations
-
-Fold a near-duplicate observation (`sourceHash`) into another (`targetHash`) within a single entity, both addressed by their `content_hash`. The target keeps the higher of the two vote scores and the source observation is **hard-deleted** - unlike `merge_entities`'s reversible soft-delete, this removal is not recoverable. This is the observation-level analogue of `merge_entities` for genuine within-entity duplicates; for an observation that is merely stale rather than a duplicate, prefer `vote` (downvote to sink it) or `delete_observations`.
-
-### restore_entity
-
-Restore a soft-deleted entity, making it visible to reads again. Soft-deleted entities (e.g. the loser of a `merge_entities` call) are hidden from all reads but kept intact until a grace-window purge (off by default, `MCP_MEMORY_PURGE_ENABLED`; window `MCP_MEMORY_PURGE_GRACE_DAYS`, default 30). Restore reverses the hiding while the entity still exists.
-
-### list_metadata
-
-List registered metadata for a `kind` (`projects`, `paths`, or `groups`). `list_metadata(kind="projects")` lists all project names in the knowledge graph. `list_metadata(kind="paths")` (optionally scoped with `project=`) lists registered (project, path) mappings. `list_metadata(kind="groups")` (optionally scoped with `project=`) lists registered (project, group) mappings.
-
-### set_metadata
-
-Change a project's registry metadata. Prefer `add`/`remove` (`remove` applies first); `values` replaces the whole list and cannot be combined with them. `kind="paths"` registers filesystem paths for the project (when the working directory falls under a registered path, that project becomes the active memory scope; a path can belong to only one project) and returns the project's resulting paths. `kind="groups"` registers the groups the project belongs to (e.g. sibling repos in one tooling system, resolved via `get_group_members`) and returns the project's resulting group members. Auto-creates the project's root entity if needed.
-
-### get_project_for_path
-
-Return the project whose registered path contains the given filesystem path, or null if none match. The longest matching registered path wins.
-
-### get_group_members
-
-Return the other projects sharing a group with the given project, or an empty list if the project belongs to no group.
-
-### move_project_entities
-
-Move all entities (with their observations and relations) from one project scope into another. Useful for consolidating a mis-scoped folder-name project into its real project. Fails if any entity name exists in both scopes.
-
-### delete_project
-
-Delete an empty project and its registered paths. Refuses to delete the `global` project or any project that still has entities - delete those entities first.
-
-### search_all_projects
-
-Search entities across all projects in a single call. Returns results grouped by project name. Same FTS5 search and filters as `search_nodes` (including `match_all`) but without the `project` parameter. Pass `projects` to narrow the scan to specific project names instead of every project; add `expand_groups=true` to also union each named project with its group siblings (resolved server-side via `get_group_members`), so callers no longer have to chain `get_group_members` + a per-project search themselves. `expand_groups=true` requires `projects` to be set. Pass `names_only=true` to return just `"name status"` strings per project (bare name when the entity has no status), with no relations or other fields.
-
-## Command-line
-
-### `mcp-memory audit`
-
-Emit a read-only structural-hygiene report of the memory graph as JSON - orphans, misused `project`-type entities, unprefixed names, ghost scopes, oversized entities, `task belongs-to project` relation violations, star-graph tasks, and strongly-downvoted entities. Scope it with `--project <scope>` or `--all-projects`.
-
-Add `--propose-plan` to emit a `{"steps": [...]}` list of concrete fix-it tool calls instead of the raw report. Deterministic fixes (e.g. `rename_entity`) carry `needs_review: false`; fixes needing human/agent judgement (orphan relinking, deletes, and `consider_split` advisories for entities that bundle multiple scopes) carry `needs_review: true`. A `trim_observations_to_outcome` step only carries `needs_review: false` when every observation it would drop is a near-duplicate of one being kept - if any dropped observation looks like a distinct fact, it carries `needs_review: true` instead, since the trim is a hard delete.
-
-### `mcp-memory metrics`
-
-Emit a JSON usage report of recorded tool calls. For each tool it reports the call count, the mean and median input and output byte-size proxies for token cost, and the frequency of each allowlisted option value. The report also totals input/output bytes across all tools and derives an input/output ratio (`null` when no output bytes were recorded). Scope the window with `--since <7d/2w/3m or ISO date>`; omit it for an all-time report (the `since` field then stays `null`, echoing back that no window was applied).
-
-The byte sizes are a byte-count proxy for token cost, not a real tokenizer, so treat them as relative magnitudes rather than exact token counts.
-
-### `mcp-memory export`
-
-Export the entire memory database to a single JSON file:
-
-```bash
-mcp-memory export <output_path>
-```
-
-Every live project is written (soft-deleted entities and the ephemeral telemetry tables are excluded), preserving each entity's type, status, `created_at`/`updated_at`, and vote score, plus every observation's content hash, vote score, and `created_at`. Each project's registered paths and group memberships are included for reference.
-
-### `mcp-memory import`
-
-Merge selected projects from an export file into the local database:
-
-```bash
-# List the projects available in the file without importing anything
-mcp-memory import <input_path>
-
-# Import one or more of them
-mcp-memory import <input_path> --project name1,name2
-
-# Preview the changes without writing
-mcp-memory import <input_path> --project name1 --dry-run
-```
-
-The merge is additive and safe to re-run: new entities are inserted verbatim, an existing same-type entity keeps its own status and timestamps but takes the higher vote score and gains any missing observations, and a name that collides with a different entity type is skipped and reported. Relations and group memberships are deduplicated. Registered paths are never written locally - the summary instead prints the source path(s) so you can register the correct local one with `set_metadata`.
-
-## Development
-
-```bash
-# Run all checks (lint, type-check, test)
-just
-
-# Individual commands
-just lint        # ruff check + format
-just type-check  # mypy
-just test        # pytest
-```
-
-## Related
-
-- [llm-prompts](https://github.com/alexfayers/llm-prompts) - cross-agent rules, workflows, and skills
-- [cline-hooks](https://github.com/alexfayers/cline-hooks) - lifecycle hooks framework for AI coding assistants
+## Docs
+
+- [Configuration](docs/configuration.md): all environment variables, the hook plugin and dreaming
+- [Commands](docs/commands.md): every command, the service and the visualiser
+- [Tools](docs/tools.md): the MCP tools
+- [Contributing](CONTRIBUTING.md)
