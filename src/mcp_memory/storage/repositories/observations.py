@@ -166,12 +166,23 @@ class ObservationRepository:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
         return entity_id
 
+    def refuse_user_loss(
+        self, project: str, entity_name: str, hashes: Sequence[str] | None = None, contents: Sequence[str] = ()
+    ) -> None:
+        """Raise ValueError if an addressed observation has user provenance; hashes None addresses them all."""
+        own = self.for_entity(self._require_entity_id(project, entity_name))
+        if any(
+            o.provenance == "user" and (hashes is None or o.content_hash in hashes or o.content in contents)
+            for o in own
+        ):
+            raise ValueError("Refused: a dream may not remove or demote a user-provenance observation.")
+
     def trim_to_outcome(
         self, project: str, entity_name: str, keep_hashes: list[str], *, protect_corrections: bool = False
     ) -> list[str]:
         """Soft-delete all observations on an entity except those with a content_hash in keep_hashes.
 
-        With protect_corrections, user corrections, decisions and lessons are kept too.
+        With protect_corrections, user corrections, decisions, lessons and user-provenance observations are kept too.
         Returns the content hashes of the trimmed observations.
         """
         if not keep_hashes:
@@ -181,7 +192,11 @@ class ObservationRepository:
         if protect_corrections:
             keep_hashes = [
                 *keep_hashes,
-                *(o.content_hash for o in self.for_entity(entity_id) if is_protected_observation(o.content)),
+                *(
+                    o.content_hash
+                    for o in self.for_entity(entity_id)
+                    if o.provenance == "user" or is_protected_observation(o.content)
+                ),
             ]
         with self._conn.transaction():
             return self._soft_delete(entity_id, f"content_hash NOT IN ({placeholders(len(keep_hashes))})", keep_hashes)

@@ -18,6 +18,8 @@ Read results order observations best-first by vote and trim them to the characte
 
 ## Write
 
+A dream-spawned call may not delete, trim, merge away or downvote a `user` observation, or delete or merge away an entity that holds one. It cannot set `provenance`.
+
 | Tool | What it does |
 |---|---|
 | `create_entities` | Create entities with observations. Fails if a name exists. Every type except `project` needs at least one relation. An entity dict may carry `provenance`, applied to its observations |

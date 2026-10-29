@@ -695,6 +695,26 @@ class TestAddObservationsTool:
         assert entity_schema["provenance"]["enum"] == ["user", "observed", "inferred"]
 
 
+class TestDreamUserObservationGuards:
+    def test_a_dream_cannot_remove_demote_or_forge_a_user_observation(self, server_db: Storage) -> None:
+        dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+        server_db.entities.create(
+            "proj", [{"name": n, "entityType": "task", "observations": ["plain", "dup"]} for n in ("e1", "e2")]
+        )
+        server_db.observations.add("proj", "e1", ["ask"], provenance="user")
+        ask, dup = hash_observation("ask"), hash_observation("dup")
+        assert "error" in tools.delete_observations("proj", "e1", observationHashes=[ask], ctx=dream_ctx)
+        assert "error" in tools.vote("proj", "e1", -1, observationHash=ask, ctx=dream_ctx)
+        assert "error" in tools.merge_observations("proj", "e1", ask, dup, ctx=dream_ctx)
+        assert "error" in tools.delete_entity("proj", "e1", ctx=dream_ctx)
+        assert "error" in tools.merge_entities("proj", "e1", "e2", ctx=dream_ctx)
+        assert tools.trim_observations_to_outcome("proj", "e1", [dup], ctx=dream_ctx)["deleted"] == 1
+        tools.add_observations("proj", "e1", ["forged"], provenance="user", ctx=dream_ctx)
+        provenances = {o.content: o.provenance for o in server_db.reads.get_entity("proj", "e1").observations}
+        assert provenances == {"dup": None, "ask": "user", "forged": None}
+        assert tools.delete_observations("proj", "e1", ["ask"])["count"] == 1
+
+
 class TestStatusObservationsRejected:
     _REJECTED: ClassVar[list[str]] = ["status: in-progress", "  Status: resolved", "STATUS:x"]
 
