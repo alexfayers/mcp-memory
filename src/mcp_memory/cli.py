@@ -533,20 +533,20 @@ def _cmd_import(args: argparse.Namespace) -> None:
     print(summary.render())
 
 
-def _remove_legacy_agent_servers(mcp_path: Path, servers_key: str) -> bool:
-    """Delete the retired memory-agent entries from an MCP config file, leaving all else intact."""
+def _remove_mcp_servers(mcp_path: Path, servers_key: str, names: tuple[str, ...] = _LEGACY_AGENT_SERVERS) -> bool:
+    """Delete the named entries from an MCP config file, leaving all else intact."""
     if not mcp_path.exists() or mcp_path.stat().st_size == 0:
         return False
     config = load_jsonc_object(mcp_path)
     servers = config.get(servers_key)
     if not isinstance(servers, dict):
         return False
-    stale = [name for name in _LEGACY_AGENT_SERVERS if name in servers]
+    stale = [name for name in names if name in servers]
     for name in stale:
         del servers[name]
     if stale:
         mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-        print(f"Removed retired {', '.join(stale)} MCP server from {mcp_path}.")
+        print(f"Removed {', '.join(stale)} MCP server from {mcp_path}.")
     return bool(stale)
 
 
@@ -724,7 +724,7 @@ def _cmd_install_antigravity() -> None:
     agy_bin = shutil.which("agy")
     url = f"http://localhost:{resolve_port()}/mcp"
     mcp_path = Path.home() / ".gemini" / "config" / "mcp_config.json"
-    _remove_legacy_agent_servers(mcp_path, "mcpServers")
+    _remove_mcp_servers(mcp_path, "mcpServers")
     if agy_bin:
         _register_antigravity_server(agy_bin, "memory", url)
     else:
@@ -773,35 +773,11 @@ def _default_copilot_mcp_config_path() -> Path:
     return local_candidates[0]
 
 
-def _register_copilot_server(mcp_path: Path, name: str, url: str) -> None:
-    """Add one HTTP MCP server entry to VS Code's mcp.json if missing."""
-    if mcp_path.exists() and mcp_path.stat().st_size > 0:
-        config = load_jsonc_object(mcp_path)
-    else:
-        config = {}
-
-    servers_obj = config.setdefault("servers", {})
-    if not isinstance(servers_obj, dict):
-        msg = f"error: {mcp_path} has non-object 'servers'"
-        raise TypeError(msg)
-
-    servers: dict[str, object] = servers_obj
-    if name in servers:
-        print(f"{name} MCP server already configured in VS Code Copilot.")
-        return
-
-    servers[name] = {"type": "http", "url": url}
-    mcp_path.parent.mkdir(parents=True, exist_ok=True)
-    mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    print(f"Added {name} MCP server to VS Code Copilot (url: {url}).")
-
-
-def _cmd_install_copilot(args: argparse.Namespace) -> None:
-    """Register memory servers in VS Code Copilot MCP config."""
+def _cmd_uninstall_copilot(args: argparse.Namespace) -> None:
+    """Remove the memory servers from VS Code Copilot MCP config."""
     mcp_path = Path(args.mcp_config).expanduser() if args.mcp_config else _default_copilot_mcp_config_path()
     try:
-        _remove_legacy_agent_servers(mcp_path, "servers")
-        _register_copilot_server(mcp_path, "memory", f"http://localhost:{resolve_port()}/mcp")
+        _remove_mcp_servers(mcp_path, "servers", ("memory", *_LEGACY_AGENT_SERVERS))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -845,7 +821,7 @@ def _cmd_install_pi() -> None:
     """Register memory servers in pi's global MCP config."""
     mcp_path = _pi_mcp_config_path()
     try:
-        _remove_legacy_agent_servers(mcp_path, "mcpServers")
+        _remove_mcp_servers(mcp_path, "mcpServers")
         _register_pi_server(mcp_path, "memory", f"http://localhost:{resolve_port()}/mcp")
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
@@ -949,7 +925,7 @@ def _build_parser() -> argparse.ArgumentParser:
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument(
         "target",
-        choices=["kiro", "claude-code", "codex", "copilot", "antigravity", "pi"],
+        choices=["kiro", "claude-code", "codex", "antigravity", "pi"],
         help="Agent to install for.",
     )
     install.add_argument(
@@ -962,11 +938,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=resolve_port(),
         help=f"HTTP port (default: MCP_MEMORY_PORT, else the installed service's port, else {_DEFAULT_PORT})",
     )
-    install.add_argument(
+    uninstall = sub.add_parser("uninstall", help="Remove the memory MCP server from agent config")
+    uninstall.add_argument("target", choices=["copilot"], help="Agent to uninstall from.")
+    uninstall.add_argument(
         "--mcp-config",
         default=None,
         help=(
-            "Path to VS Code mcp.json for the copilot target "
+            "Path to VS Code mcp.json "
             "(default: current-OS VS Code user config path (Linux/XDG/macOS); "
             "else WSL Windows fallback under /mnt/c/Users)"
         ),
@@ -982,8 +960,6 @@ def _cmd_install(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
         _cmd_install_claude_code()
     elif args.target == "codex":
         _cmd_install_codex()
-    elif args.target == "copilot":
-        _cmd_install_copilot(args)
     elif args.target == "antigravity":
         _cmd_install_antigravity()
     elif args.target == "pi":
@@ -1017,6 +993,8 @@ def main() -> None:
         _cmd_import(args)
     elif args.command == "install":
         _cmd_install(args, parser)
+    elif args.command == "uninstall":
+        _cmd_uninstall_copilot(args)
     else:
         from .server import main as serve
 

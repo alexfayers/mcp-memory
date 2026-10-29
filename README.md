@@ -20,7 +20,7 @@ mcp-memory setup-service          # run the server in the background
 mcp-memory install claude-code    # point an agent at it
 ```
 
-`install` also supports `codex`, `antigravity`, `copilot`, `pi` and `kiro`. For any other client, use the URL `http://localhost:8000/mcp`.
+`install` also supports `codex`, `antigravity`, `pi` and `kiro`. For any other client, use the URL `http://localhost:8000/mcp`.
 
 Other commands:
 

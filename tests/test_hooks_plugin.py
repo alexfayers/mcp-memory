@@ -1349,10 +1349,6 @@ class TestIsMemoryRead:
         assert _is_memory_read(f"mcp__memory__{name}", {})
 
     @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
-    def test_prefixed_copilot_name_is_read(self, name: str) -> None:
-        assert _is_memory_read(f"mcp_mcp-memory_{name}", {})
-
-    @pytest.mark.parametrize("name", _READ_TOOL_NAMES)
     def test_use_mcp_tool_form_is_read(self, name: str) -> None:
         assert _is_memory_read("use_mcp_tool", {"tool_name": name})
 
@@ -1611,22 +1607,6 @@ class TestMemoryReviewNudge:
                 "PostToolUse",
                 task_id="t1",
                 tool_name="mcp__memory__create_entities",
-                parameters={"project": "global", "entities": []},
-            )
-        mock_reset.assert_called_once_with("t1")
-        mock_record.assert_called_once_with()
-
-    def test_copilot_memory_write_resets_counter(self) -> None:
-        with (
-            patch("mcp_memory.hooks.plugin.clear"),
-            patch("mcp_memory.hooks.plugin.reset") as mock_reset,
-            patch("mcp_memory.hooks.plugin.record_write") as mock_record,
-        ):
-            plugin = MemoryPlugin()
-            plugin.on_hook(
-                "PostToolUse",
-                task_id="t1",
-                tool_name="mcp_mcp-memory_create_entities",
                 parameters={"project": "global", "entities": []},
             )
         mock_reset.assert_called_once_with("t1")
