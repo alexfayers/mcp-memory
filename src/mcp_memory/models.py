@@ -10,6 +10,13 @@ EntityStatus = Literal["planned", "in-progress", "blocked", "resolved", "archive
 
 VALID_STATUSES = get_args(EntityStatus)
 
+Provenance = Literal["user", "observed", "inferred"]
+
+VALID_PROVENANCES = get_args(Provenance)
+
+# Trust rank used when two observations merge: user > observed > unknown > inferred.
+_PROVENANCE_RANK: dict[str | None, int] = {"user": 3, "observed": 2, None: 1, "inferred": 0}
+
 # Entity types exempt from autonomous orphan GC.
 STRUCTURAL_ENTITY_TYPES = frozenset({"project", "user-preferences"})
 
@@ -26,6 +33,26 @@ def is_protected_observation(content: str) -> bool:
 
 
 MAX_VOTE_MAGNITUDE = 3
+
+
+def validate_provenance(provenance: str | None) -> None:
+    """Raise ValueError unless provenance is None or one of VALID_PROVENANCES."""
+    if provenance is not None and provenance not in VALID_PROVENANCES:
+        raise ValueError(f"Invalid provenance '{provenance}'. Must be one of: {VALID_PROVENANCES}")
+
+
+PROVENANCE_RANK_SQL = "CASE {col} WHEN 'user' THEN 3 WHEN 'observed' THEN 2 WHEN 'inferred' THEN 0 ELSE 1 END"
+
+
+def provenance_rank(provenance: str | None) -> int:
+    """Return an observation provenance's trust rank, higher meaning more trusted."""
+    return _PROVENANCE_RANK[provenance]
+
+
+def raises_provenance(new: str | None, old: str | None) -> bool:
+    """Return whether new is a known provenance that outranks old, so unknown never replaces a known value."""
+    return new is not None and provenance_rank(new) > provenance_rank(old)
+
 
 VALID_RELATION_TYPES = (
     "implements",
@@ -107,6 +134,7 @@ class Observation:
     content_hash: str
     vote_score: int = 0
     created_at: str | None = None
+    provenance: Provenance | None = None
 
 
 @dataclass

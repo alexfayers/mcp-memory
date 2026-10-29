@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -671,6 +672,23 @@ class TestAddObservationsTool:
         assert result["count"] == 2
         assert result["hashes"] == [hash_observation("b"), hash_observation("c")]
 
+    def test_provenance_is_stored_returned_in_reads_and_tracked(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        tools.add_observations("proj", "e1", ["b"], provenance="user")
+        tools.edit_observation("proj", "e1", hash_observation("b"), "b2", provenance="observed")
+        observations = tools.get_entity_with_relations("proj", "e1")["entity"]["observations"]
+        assert {o["content"]: o.get("from") for o in observations} == {"a": None, "b2": "observed"}
+        assert "error" in tools.add_observations("proj", "e1", ["c"], provenance="guess")
+        row = server_db.connection.query_one(
+            "SELECT options FROM tool_calls WHERE tool = 'add_observations' ORDER BY id LIMIT 1"
+        )
+        assert json.loads(row["options"])["provenance"] == "user"
+
+    def test_create_entities_schema_lists_provenance(self) -> None:
+        tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "create_entities")
+        entity_schema = tool.input_schema["properties"]["entities"]["items"]["properties"]
+        assert entity_schema["provenance"]["enum"] == ["user", "observed", "inferred"]
+
 
 class TestStatusObservationsRejected:
     _REJECTED: ClassVar[list[str]] = ["status: in-progress", "  Status: resolved", "STATUS:x"]
@@ -1265,13 +1283,13 @@ class TestEditObservationTool:
     def test_forwards_arguments_and_returns_new_hash(self, mock_db: MagicMock) -> None:
         mock_db.observations.edit.return_value = "newhash"
         result = tools.edit_observation("proj", "e1", "oldhash", "fixed", oldText="broken")
-        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", "broken")
+        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", "broken", provenance=None)
         assert result == {"message": "Edited observation on 'e1'.", "hash": "newhash"}
 
     def test_old_text_defaults_to_whole_replace(self, mock_db: MagicMock) -> None:
         mock_db.observations.edit.return_value = "newhash"
         tools.edit_observation("proj", "e1", "oldhash", "fixed")
-        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", None)
+        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", None, provenance=None)
 
     def test_value_error_returned_as_error(self, mock_db: MagicMock) -> None:
         mock_db.observations.edit.side_effect = ValueError("oldText not found in observation")

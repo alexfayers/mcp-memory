@@ -24,6 +24,7 @@ from .api import register_api_routes
 from .config import get_backup_enabled, get_backup_interval_seconds, get_db_path, get_sweep_interval_seconds
 from .dedupe import dedupe_read
 from .models import (
+    VALID_PROVENANCES,
     VALID_RELATION_TYPES,
     Entity,
     Relation,
@@ -145,6 +146,7 @@ _ENTITY_INPUTS = Annotated[
                 **dict.fromkeys(["name", "entityType", "status"], _STRING_SCHEMA),
                 "observations": {"type": "array", "items": _STRING_SCHEMA},
                 "relations": {"type": "array", "items": _object_schema(["target", "type"], ["target", "type"])},
+                "provenance": {"type": "string", "enum": list(VALID_PROVENANCES)},
             },
             "required": ["name", "entityType", "observations"],
         },
@@ -205,6 +207,7 @@ CREATE_ENTITIES_DESC = (
     "for its ticket, not its symptom), user-preferences/<alias>-<topic>, pattern/<short-noun>. "
     "Unless entityType is project, pass non-empty relations inline (see create_relations for "
     "which type to pick) - without them nothing is created. "
+    "Optional key: provenance (str; applies to the entity's observations, see add_observations). "
     "Observation wording and what not to store: see add_observations. "
     "Set `status` via the `status` argument, never as a `STATUS:` observation. "
     "The server records each observation's timestamp; do NOT embed a date/timestamp in the text."
@@ -280,7 +283,9 @@ ADD_OBSERVATIONS_DESC = (
     "workarounds. Rationale goes in its own observation. "
     "Memory holds the why: for what changed or how it works, read the code and git log/git blame. "
     "Past ~30 observations, extract focused pattern/ entities. "
-    "The server timestamps each observation; do NOT embed a date in the text."
+    "The server timestamps each observation; do NOT embed a date in the text. "
+    "Pass provenance: user (the user said, asked, decided or corrected it), observed (you read or ran it), "
+    "inferred (your own unchecked conclusion). Split facts of different provenance into separate calls."
 )
 DELETE_OBSERVATIONS_DESC = (
     "Soft-delete observations by exact content (observations) and/or content_hash (observationHashes - cheaper). "
@@ -293,7 +298,8 @@ EDIT_OBSERVATION_DESC = (
     "Edit one observation in place by content_hash, keeping its votes and timestamp. "
     "Prefer oldText: its single exact match is replaced with newText; without oldText, newText "
     "replaces the whole content. Returns the new content_hash. Raises if nothing matches, "
-    "oldText matches more than once, or the result duplicates another observation."
+    "oldText matches more than once, or the result duplicates another observation. "
+    "Pass provenance only when the edit changes where the claim comes from."
 )
 TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
     "Soft-delete all observations on an entity except those in keep_hashes (content_hash). "
@@ -463,6 +469,7 @@ def _wire_entity(entity: Entity) -> dict[str, object]:
             {"content": obs.content}
             | ({"content_hash": obs.content_hash} if obs.content_hash else {})
             | ({"vote_score": obs.vote_score} if obs.vote_score else {})
+            | ({"from": obs.provenance} if obs.provenance else {})
             | ({"at": obs.created_at[:10]} if obs.created_at and obs.created_at[:10] != entity_date else {})
             for obs in entity.observations
         ]
@@ -1259,12 +1266,13 @@ def add_observations(
     project: str,
     entityName: str,
     observations: list[str],
+    provenance: str | None = None,
 ) -> dict[str, object]:
     """Append deduplicated observations to an existing entity."""
     try:
         _reject_status_observations(observations)
         db = _get_db()
-        hashes = db.observations.add(project, entityName, observations)
+        hashes = db.observations.add(project, entityName, observations, provenance)
         return {
             "message": f"Added {len(hashes)} observations to '{entityName}'.",
             "count": len(hashes),
@@ -1315,11 +1323,13 @@ def edit_observation(
     observationHash: str,
     newText: str,
     oldText: str | None = None,
+    *,
+    provenance: str | None = None,
 ) -> dict[str, object]:
     """Edit one observation in place, addressed by content_hash."""
     try:
         db = _get_db()
-        new_hash = db.observations.edit(project, entityName, observationHash, newText, oldText)
+        new_hash = db.observations.edit(project, entityName, observationHash, newText, oldText, provenance=provenance)
         return {"message": f"Edited observation on '{entityName}'.", "hash": new_hash}
     except Exception as e:
         return {"error": str(e)}

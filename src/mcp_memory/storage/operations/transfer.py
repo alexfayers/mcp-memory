@@ -6,7 +6,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from mcp_memory.migrations.runner import schema_version
-from mcp_memory.models import normalize_relation_type
+from mcp_memory.models import normalize_relation_type, raises_provenance
 from mcp_memory.storage.pure.rows import build_entity
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT
 from mcp_memory.storage.services.ids import (
@@ -196,32 +196,42 @@ class Transfer:
         created_at. Returns (new_count, duplicate_count).
         """
         existing = {
-            row["content_hash"]
+            row["content_hash"]: row["provenance"]
             for row in self._conn.query_all(
-                "SELECT content_hash FROM observations WHERE entity_id = ? AND deleted_at IS NULL", (entity_id,)
+                "SELECT content_hash, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL",
+                (entity_id,),
             )
         }
         new_count = 0
         duplicate_count = 0
         for obs in observations:
             content_hash = obs["content_hash"]
+            provenance = obs.get("provenance")
             if content_hash in existing:
                 duplicate_count += 1
+                if raises_provenance(provenance, existing[content_hash]):
+                    existing[content_hash] = provenance
+                    self._conn.write(
+                        "UPDATE observations SET provenance = ? "
+                        "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
+                        (provenance, entity_id, content_hash),
+                    )
                 continue
-            existing.add(content_hash)
+            existing[content_hash] = provenance
             new_count += 1
             created_at = obs.get("created_at")
             if created_at is None:
                 self._conn.write(
-                    "INSERT INTO observations (entity_id, content, content_hash, vote_score) VALUES (?, ?, ?, ?)",
-                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0)),
+                    "INSERT INTO observations (entity_id, content, content_hash, vote_score, provenance) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), provenance),
                 )
             else:
                 self._conn.write(
                     "INSERT INTO observations "
-                    "(entity_id, content, content_hash, vote_score, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at),
+                    "(entity_id, content, content_hash, vote_score, created_at, provenance) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at, provenance),
                 )
         return new_count, duplicate_count
 

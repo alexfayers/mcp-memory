@@ -824,4 +824,13 @@ MIGRATIONS: list[Migration] = [
             END""",
         ],
     ),
+    Migration(
+        version=29,
+        statements=[
+            # provenance records where an observation's claim came from: user, observed or
+            # inferred. NULL means unknown (every pre-v29 row). Validated in Python like
+            # entities.status. Not in the FTS projection, so no trigger changes.
+            "ALTER TABLE observations ADD COLUMN provenance TEXT",
+        ],
+    ),
 ]

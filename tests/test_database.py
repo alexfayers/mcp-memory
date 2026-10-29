@@ -225,6 +225,20 @@ class TestMigrations:
         assert tables == []
         assert db.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0
 
+    def test_rerunning_a_migration_whose_column_exists_keeps_its_data(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        first = open_writable(db_path)
+        first.entities.create("proj", [{"name": "task/a", "entityType": "task", "observations": ["x"]}])
+        with first.connection.transaction():
+            first.connection.write("UPDATE observations SET provenance = 'user'")
+            first.connection.write("DELETE FROM schema_version WHERE version = 29")
+        first.connection.close()
+
+        reopened = open_writable(db_path)
+        assert [o.provenance for o in reopened.reads.get_entity("proj", "task/a").observations] == ["user"]
+        assert reopened.connection.query_one("SELECT MAX(version) AS v FROM schema_version")["v"] == 29
+        reopened.connection.close()
+
     def test_vote_score_backfills_to_zero(self, tmp_path: Path) -> None:
         db_path = tmp_path / "memory.db"
         first = open_writable(db_path)
@@ -1211,6 +1225,10 @@ class TestSoftDeleteRelations:
         assert self._targets(store, "task/t") == ["x/f2", "x/f3"]
 
 
+def _provenances(store: Storage, entity: str) -> dict[str, str | None]:
+    return {o.content: o.provenance for o in store.reads.get_entity("proj", entity).observations}
+
+
 class TestObservations:
     def test_add_observations(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
@@ -1222,6 +1240,55 @@ class TestObservations:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         hashes = store.observations.add("proj", "e1", ["a", "b"])
         assert hashes == [hash_observation("b")]
+
+    def test_add_observations_records_provenance_and_reads_emit_it_when_set(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        store.observations.add("proj", "e1", ["b"], provenance="user")
+        wired = {o["content"]: o for o in _wire_entity(store.reads.get_entity("proj", "e1"))["observations"]}
+        assert wired["b"]["from"] == "user"
+        assert "from" not in wired["a"]
+
+    def test_duplicate_add_raises_provenance_rank_but_never_lowers_it(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        store.observations.add("proj", "e1", ["inf", "usr"], provenance="inferred")
+        store.observations.add("proj", "e1", ["usr"], provenance="user")
+        store.observations.add("proj", "e1", ["inf", "usr", "a"], provenance="inferred")
+        store.observations.add("proj", "e1", ["inf", "usr"])
+        assert _provenances(store, "e1") == {"a": None, "inf": "inferred", "usr": "user"}
+
+    def test_create_entities_applies_an_entity_provenance_to_its_observations(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "e1", "entityType": "task", "observations": ["a"], "provenance": "observed"},
+                {"name": "e2", "entityType": "task", "observations": ["b"]},
+            ],
+        )
+        assert _provenances(store, "e1") == {"a": "observed"}
+        assert _provenances(store, "e2") == {"b": None}
+        with pytest.raises(ValueError, match="Invalid provenance 'guess'"):
+            store.entities.create(
+                "proj", [{"name": "e3", "entityType": "task", "observations": ["c"], "provenance": "guess"}]
+            )
+
+    def test_edit_keeps_provenance_unless_one_is_passed(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a b"]}])
+        store.observations.add("proj", "e1", ["x"], provenance="user")
+        new_hash = store.observations.edit("proj", "e1", hash_observation("x"), "x2")
+        assert _provenances(store, "e1")["x2"] == "user"
+        store.observations.edit("proj", "e1", new_hash, "x2", provenance="inferred")
+        assert _provenances(store, "e1")["x2"] == "inferred"
+        store.observations.edit("proj", "e1", hash_observation("a b"), "a c", provenance="observed")
+        assert _provenances(store, "e1")["a c"] == "observed"
+
+    def test_merge_observations_keeps_the_higher_ranked_provenance(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["t"]}])
+        store.observations.add("proj", "e1", ["u"], provenance="user")
+        store.observations.add("proj", "e1", ["i"], provenance="inferred")
+        store.observations.merge("proj", "e1", hash_observation("t"), hash_observation("i"))
+        assert _provenances(store, "e1") == {"u": "user", "i": "inferred"}
+        store.observations.merge("proj", "e1", hash_observation("u"), hash_observation("i"))
+        assert _provenances(store, "e1") == {"i": "user"}
 
     def test_add_observations_missing_entity_raises(self, store: Storage) -> None:
         with pytest.raises(ValueError, match="not found"):
@@ -1861,6 +1928,19 @@ class TestMergeEntities:
         store.entities.merge("proj", "dup", "canon")
         obs = set(obs_contents(store.reads.get_entity("proj", "canon")))
         assert obs == {"shared", "only-source", "only-target"}
+
+    def test_observation_provenance_is_copied_and_the_higher_rank_wins_on_collision(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["shared"], "provenance": "user"},
+                {"name": "canon", "entityType": "task", "observations": ["shared", "other"], "provenance": "inferred"},
+            ],
+        )
+        store.observations.add("proj", "dup", ["other"])
+        store.observations.add("proj", "dup", ["only-source"], provenance="observed")
+        store.entities.merge("proj", "dup", "canon")
+        assert _provenances(store, "canon") == {"shared": "user", "other": "inferred", "only-source": "observed"}
 
     def test_source_is_soft_deleted_not_gone(self, store: Storage) -> None:
         store.entities.create(

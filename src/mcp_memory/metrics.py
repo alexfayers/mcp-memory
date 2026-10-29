@@ -37,6 +37,7 @@ _TRACKED_OPTIONS = frozenset({
     "entityType",
     "min_content_tokens",
     "vote",
+    "provenance",
     "project",
     "start",
     "end",

@@ -10,6 +10,14 @@ from .schema import MIGRATIONS
 logger = logging.getLogger(__name__)
 
 
+def _execute_statement(db: sqlite3.Connection, statement: str) -> None:
+    try:
+        db.execute(statement)
+    except sqlite3.OperationalError as e:
+        if not str(e).startswith("duplicate column name"):
+            raise
+
+
 def run_migrations(db: sqlite3.Connection) -> None:
     """Apply pending database migrations."""
     db.execute(
@@ -41,7 +49,7 @@ def run_migrations(db: sqlite3.Connection) -> None:
             with db:
                 db.execute("BEGIN")
                 for statement in migration.statements:
-                    db.execute(statement)
+                    _execute_statement(db, statement)
                 db.execute(
                     "INSERT INTO schema_version (version) VALUES (?)",
                     (migration.version,),
