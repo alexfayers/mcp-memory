@@ -29,3 +29,4 @@ READ_ONLY_TOOLS: tuple[str, ...] = (
     "search_all_projects",
     "get_entity_with_relations",
 )
+DEDUPED_READ_TOOLS = frozenset(["search_nodes", "search_all_projects", "read_graph", "get_entity_with_relations"])

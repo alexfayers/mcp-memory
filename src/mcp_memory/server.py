@@ -19,6 +19,7 @@ from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 from . import dream, metrics, usefulness
 from .activity import record_tool
 from .config import get_db_path, get_sweep_interval_seconds
+from .dedupe import dedupe_read
 from .models import (
     VALID_RELATION_TYPES,
     Entity,
@@ -59,6 +60,7 @@ def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
 
 
 _NULL_SCHEMA: dict[str, str] = {"type": "null"}
+_HIDDEN_ARGUMENTS = frozenset({"context_window_id", "context_turn"})
 
 
 def _prune_schema(node: Any) -> Any:
@@ -70,7 +72,9 @@ def _prune_schema(node: Any) -> Any:
     pruned = {
         key: _prune_schema(value)
         for key, value in node.items()
-        if not (key == "title" and isinstance(value, str)) and not (key == "default" and value is None)
+        if key not in _HIDDEN_ARGUMENTS
+        and not (key == "title" and isinstance(value, str))
+        and not (key == "default" and value is None)
     }
     branches = pruned.get("anyOf")
     if isinstance(branches, list) and _NULL_SCHEMA in branches:
@@ -157,6 +161,7 @@ SEARCH_NODES_DESC = (
     "(see vote). Each observation carries a content_hash usable with "
     "vote, delete_observations, and merge_observations to address it without "
     "pasting its full content. Use compact=true to omit observations for a lightweight summary. "
+    "Repeats are hashes in `seen` (include_seen=true for text). "
     "A hyphenated term (auth-service) is one token and will not match authservice - use bare "
     "keywords and retry variants before concluding nothing exists." + _MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
@@ -606,6 +611,9 @@ def search_nodes(
     match_all: bool = False,
     max_observation_chars: int | None = None,
     include_archived: bool = False,
+    include_seen: bool = False,
+    context_window_id: str | None = None,
+    context_turn: int | None = None,
 ) -> dict[str, object]:
     """Search entities using FTS5 full-text search with recency-weighted BM25 ranking."""
     try:
@@ -623,7 +631,7 @@ def search_nodes(
             max_observation_chars=max_observation_chars,
             include_archived=include_archived,
         )
-        return _prepare_read_result(result)
+        return dedupe_read(_prepare_read_result(result), context_window_id, context_turn, include_seen=include_seen)
     except Exception as e:
         return {"error": str(e)}
 
@@ -640,6 +648,10 @@ def read_graph(
     status: str | None = None,
     compact: bool = False,
     max_observation_chars: int | None = None,
+    *,
+    include_seen: bool = False,
+    context_window_id: str | None = None,
+    context_turn: int | None = None,
 ) -> dict[str, object]:
     """Return the most recent entities and their relations for a project."""
     try:
@@ -650,7 +662,7 @@ def read_graph(
             compact=compact,
             max_observation_chars=max_observation_chars,
         )
-        return _prepare_read_result(result)
+        return dedupe_read(_prepare_read_result(result), context_window_id, context_turn, include_seen=include_seen)
     except Exception as e:
         return {"error": str(e)}
 
@@ -930,10 +942,13 @@ def search_all_projects(
     expand_groups: bool = False,
     include_archived: bool = False,
     names_only: bool = False,
+    include_seen: bool = False,
+    context_window_id: str | None = None,
+    context_turn: int | None = None,
 ) -> dict[str, object]:
     """Search entities across all projects, returning results grouped by project."""
     try:
-        return _search_all_projects(
+        result = _search_all_projects(
             query,
             limit=limit,
             entity_type=entityType,
@@ -948,6 +963,7 @@ def search_all_projects(
             include_archived=include_archived,
             names_only=names_only,
         )
+        return dedupe_read(result, context_window_id, context_turn, include_seen=include_seen)
     except Exception as e:
         return {"error": str(e)}
 
@@ -1062,6 +1078,9 @@ def get_entity_with_relations(
     relationType: str | None = None,
     compact: bool = False,
     max_observation_chars: int | None = None,
+    include_seen: bool = False,
+    context_window_id: str | None = None,
+    context_turn: int | None = None,
 ) -> dict[str, object]:
     """Get an entity with all its relations and related entities, optionally filtered."""
     try:
@@ -1074,7 +1093,13 @@ def get_entity_with_relations(
             compact=compact,
             max_observation_chars=max_observation_chars,
         )
-        return _prepare_read_result(result)
+        return dedupe_read(
+            _prepare_read_result(result),
+            context_window_id,
+            context_turn,
+            include_seen=include_seen,
+            full_keys=("entity",),
+        )
     except Exception as e:
         return {"error": str(e)}
 

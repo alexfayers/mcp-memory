@@ -53,6 +53,8 @@ from mcp_memory.storage import open_writable
 from mcp_memory.tool_names import READ_ONLY_TOOLS
 
 if TYPE_CHECKING:
+    from cline_hooks.core.plugin import HookResult
+
     from mcp_memory.storage import Storage
 
 _needs_profanity_check = pytest.mark.skipif(
@@ -1412,7 +1414,7 @@ class TestMemoryReadsNotGated:
                 task_id="t1",
                 mcp_tool_name=name,
             )
-        assert result is None
+        assert result is None or result.block is None
 
     def test_non_memory_tool_still_blocked(self, plugin: MemoryPlugin) -> None:
         with (
@@ -1427,6 +1429,28 @@ class TestMemoryReadsNotGated:
             )
         assert result is not None
         assert result.block is not None
+
+
+class TestContextWindowInjection:
+    def _call(self, plugin: MemoryPlugin, tool: str = "search_nodes", task_id: str = "t1") -> HookResult | None:
+        plugin.on_hook("PreToolUse", tool_name="use_mcp_tool", parameters={}, task_id=task_id)
+        return plugin.on_hook("PreMcpToolUse", mcp_tool_name=tool, mcp_arguments={"query": "q"}, task_id=task_id)
+
+    def test_deduped_read_gets_stable_window_and_other_tools_nothing(self, plugin: MemoryPlugin) -> None:
+        first = self._call(plugin).updated_input
+        plugin.on_hook("PreToolUse", task_id="t1", tool_name="read_file", parameters={})
+        second = self._call(plugin).updated_input
+        assert first["query"] == "q"
+        assert first["context_window_id"] == second["context_window_id"]
+        assert second["context_turn"] == first["context_turn"] + 2
+        assert self._call(plugin, tool="list_metadata") is None
+
+    def test_subagent_and_new_task_start_get_new_windows(self) -> None:
+        plugin = _real_plugin()
+        main = self._call(plugin).updated_input["context_window_id"]
+        assert self._call(plugin, task_id="t1:agent1").updated_input["context_window_id"] != main
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[], source="compact")
+        assert self._call(plugin).updated_input["context_window_id"] != main
 
 
 class TestReadOnlyAgentExemption:

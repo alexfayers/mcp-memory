@@ -38,6 +38,7 @@ from mcp_memory.hooks.tracker import (
     clear,
     get_reminder_chance,
     get_scope,
+    get_window,
     has_edited,
     has_scope_blocked,
     increment,
@@ -48,11 +49,12 @@ from mcp_memory.hooks.tracker import (
     set_scope,
     should_block,
     should_warn,
+    tick_turn,
 )
 from mcp_memory.path_resolver import normalize_path, resolve_project_for_path
 from mcp_memory.storage import open_readonly, open_writable
 from mcp_memory.storage.pure.rows import strip_today_date_prefix
-from mcp_memory.tool_names import MUTATING_TOOLS, READ_ONLY_TOOLS
+from mcp_memory.tool_names import DEDUPED_READ_TOOLS, MUTATING_TOOLS, READ_ONLY_TOOLS
 
 if TYPE_CHECKING:
     from mcp_memory.models import Entity
@@ -818,6 +820,7 @@ class MemoryPlugin(HooksPlugin):
         )
 
     def _on_pre_tool_use(self, **kwargs: object) -> HookResult | None:
+        tick_turn(str(kwargs.get("task_id", "")))
         agent_type = str(kwargs.get("agent_type", ""))
         if _is_exempt_agent(agent_type):
             return None
@@ -834,6 +837,19 @@ class MemoryPlugin(HooksPlugin):
         return _check_block(task_id, project_scope)
 
     def _on_pre_mcp_tool_use(self, **kwargs: object) -> HookResult | None:
+        result = self._gate_mcp_tool_use(**kwargs)
+        if str(kwargs.get("mcp_tool_name", "")) not in DEDUPED_READ_TOOLS or (result is not None and result.block):
+            return result
+        task_id = str(kwargs.get("task_id", ""))
+        result = result or HookResult()
+        result.updated_input = {
+            **_str_dict(kwargs.get("mcp_arguments")),
+            "context_window_id": get_window(task_id),
+            "context_turn": tick_turn(task_id, 0),
+        }
+        return result
+
+    def _gate_mcp_tool_use(self, **kwargs: object) -> HookResult | None:
         agent_type = str(kwargs.get("agent_type", ""))
         if _is_exempt_agent(agent_type):
             return None

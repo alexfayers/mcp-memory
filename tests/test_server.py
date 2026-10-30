@@ -755,6 +755,42 @@ class TestEntityWireShape:
         assert "project_name" not in entity
 
 
+class TestDedupedReads:
+    @pytest.fixture(autouse=True)
+    def _seed(self, server_db: Storage, request: pytest.FixtureRequest) -> None:
+        self.window = request.node.name
+        seeds = {"a": "alpha needle", "b": "beta"}
+        entities = [{"name": k, "entityType": "x", "observations": [v]} for k, v in seeds.items()]
+        server_db.entities.create("proj", entities)
+        server_db.relations.create("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
+
+    def _search(self, turn: int, window: str | None = None, **kw: object) -> dict[str, Any]:
+        return tools.search_nodes("proj", "needle", context_window_id=window or self.window, context_turn=turn, **kw)
+
+    def test_repeat_in_same_window_returns_hashes(self) -> None:
+        self._search(1)
+        second = self._search(2)
+        assert second["entities"][0] == {**second["entities"][0], "seen": [hash_observation("alpha needle")]}
+        assert "observations" not in second["entities"][0]
+        assert "include_seen" in second["seen_note"]
+
+    def test_full_text_for_include_seen_ttl_other_or_missing_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_DEDUPE_TURNS", "5")
+        self._search(1)
+        bare = tools.search_nodes("proj", "needle")
+        full = [self._search(2, include_seen=True), self._search(7), self._search(2, "other"), bare]
+        assert [obs_contents(result["entities"][0]) for result in full] == [["alpha needle"]] * 4
+
+    def test_related_and_grouped_entities_dedupe_but_target_stays_full(self) -> None:
+        window = {"context_window_id": self.window}
+        tools.search_nodes("proj", "alpha beta", context_turn=1, **window)
+        result = tools.get_entity_with_relations("proj", "a", context_turn=2, **window)
+        assert obs_contents(result["entity"]) == ["alpha needle"]
+        assert result["relatedEntities"][0]["seen"] == [hash_observation("beta")]
+        grouped = tools.search_all_projects("beta", context_turn=3, **window)["results"]["proj"]["entities"][0]
+        assert grouped["seen"] == [hash_observation("beta")]
+
+
 class TestSearchAllProjectsNamesOnly:
     def _seed(self, server_db: Storage) -> None:
         server_db.entities.create(
