@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_a44f0ac069e85531_test_tool_annotations_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.0">coverage.py v7.17.0</a>,
-            created at 2026-10-30 14:55 +0000
+            created at 2026-10-30 15:14 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -177,8 +177,8 @@
     <p class="run run2"><span class="n"><a id="t95" href="#t95">95</a></span><span class="t">            <span class="op">]</span> <span class="op">+</span> <span class="op">[</span><span class="nam">client</span><span class="op">.</span><span class="nam">call_tool</span><span class="op">(</span><span class="str">&quot;search_nodes&quot;</span><span class="op">,</span> <span class="op">{</span><span class="str">&quot;project&quot;</span><span class="op">:</span> <span class="str">&quot;p&quot;</span><span class="op">,</span> <span class="str">&quot;query&quot;</span><span class="op">:</span> <span class="str">&quot;hello&quot;</span><span class="op">}</span><span class="op">)</span> <span class="key">for</span> <span class="nam">_</span> <span class="key">in</span> <span class="nam">range</span><span class="op">(</span><span class="nam">count</span><span class="op">)</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t96" href="#t96">96</a></span><span class="t">            <span class="key">return</span> <span class="op">[</span><span class="nam">r</span><span class="op">.</span><span class="nam">structured_content</span> <span class="key">for</span> <span class="nam">r</span> <span class="key">in</span> <span class="key">await</span> <span class="nam">asyncio</span><span class="op">.</span><span class="nam">gather</span><span class="op">(</span><span class="op">*</span><span class="nam">calls</span><span class="op">)</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t97" href="#t97">97</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t98" href="#t98">98</a></span><span class="t">    <span class="nam">results</span> <span class="op">=</span> <span class="nam">asyncio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">scenario</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t99" href="#t99">99</a></span><span class="t">    <span class="key">assert</span> <span class="nam">all</span><span class="op">(</span><span class="str">&quot;error&quot;</span> <span class="key">not</span> <span class="key">in</span> <span class="nam">r</span> <span class="key">for</span> <span class="nam">r</span> <span class="key">in</span> <span class="nam">results</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t98" href="#t98">98</a></span><span class="t">    <span class="nam">errors</span> <span class="op">=</span> <span class="op">[</span><span class="nam">r</span><span class="op">[</span><span class="str">&quot;error&quot;</span><span class="op">]</span> <span class="key">for</span> <span class="nam">r</span> <span class="key">in</span> <span class="nam">asyncio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">scenario</span><span class="op">(</span><span class="op">)</span><span class="op">)</span> <span class="key">if</span> <span class="str">&quot;error&quot;</span> <span class="key">in</span> <span class="nam">r</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t99" href="#t99">99</a></span><span class="t">    <span class="key">assert</span> <span class="key">not</span> <span class="nam">errors</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -188,7 +188,7 @@
             <a class="nav" href="z_a44f0ac069e85531_test_tool_annotations_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.0">coverage.py v7.17.0</a>,
-            created at 2026-10-30 14:55 +0000
+            created at 2026-10-30 15:14 +0000
         </p>
     </div>
 </footer>

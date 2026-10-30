@@ -28,7 +28,7 @@
 | src/mcp\_memory/path\_resolver.py                    |       35 |        1 |     97% |        18 |
 | src/mcp\_memory/payload.py                           |       12 |        0 |    100% |           |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      524 |       45 |     91% |55-56, 350, 447, 457, 495, 555-557, 561, 635-636, 666-667, 675, 683, 695-696, 758-759, 773-774, 967-968, 995, 1013-1018, 1057-1064, 1103-1104, 1130-1131, 1153-1154, 1370, 1374 |
+| src/mcp\_memory/server.py                            |      525 |       45 |     91% |55-56, 350, 448, 458, 496, 556-558, 562, 636-637, 667-668, 676, 684, 696-697, 759-760, 774-775, 968-969, 996, 1014-1019, 1058-1065, 1104-1105, 1131-1132, 1154-1155, 1371, 1375 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
@@ -90,14 +90,14 @@
 | tests/test\_payload.py                               |       68 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
-| tests/test\_server.py                                |      796 |        1 |     99% |      1410 |
+| tests/test\_server.py                                |      814 |        1 |     99% |      1431 |
 | tests/test\_server\_http.py                          |       59 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       17 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       56 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      558 |        0 |    100% |           |
-| **TOTAL**                                            | **13356** |  **456** | **97%** |           |
+| **TOTAL**                                            | **13375** |  **456** | **97%** |           |
 
 
 ## Setup coverage badge
