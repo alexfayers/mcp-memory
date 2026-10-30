@@ -54,8 +54,8 @@
             </div>
         </aside>
         <h2>
-            <span class="text">50 statements &nbsp;</span>
-            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">50<span class="text"> run</span></button>
+            <span class="text">56 statements &nbsp;</span>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">56<span class="text"> run</span></button>
             <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">0<span class="text"> missing</span></button>
             <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">4<span class="text"> excluded</span></button>
         </h2>
@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_a44f0ac069e85531_test_tracker_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.0">coverage.py v7.17.0</a>,
-            created at 2026-10-29 17:32 +0000
+            created at 2026-10-30 14:55 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -157,6 +157,13 @@
     <p class="run"><span class="n"><a id="t75" href="#t75">75</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_wrong_type_argument_is_rejected</span><span class="op">(</span><span class="nam">self</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t76" href="#t76">76</a></span><span class="t">        <span class="key">with</span> <span class="nam">pytest</span><span class="op">.</span><span class="nam">raises</span><span class="op">(</span><span class="nam">ToolError</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t77" href="#t77">77</a></span><span class="t">            <span class="nam">asyncio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">server</span><span class="op">.</span><span class="nam">mcp</span><span class="op">.</span><span class="nam">call_tool</span><span class="op">(</span><span class="str">&quot;read_graph&quot;</span><span class="op">,</span> <span class="op">{</span><span class="str">&quot;project&quot;</span><span class="op">:</span> <span class="str">&quot;p&quot;</span><span class="op">,</span> <span class="str">&quot;compact&quot;</span><span class="op">:</span> <span class="str">&quot;notabool&quot;</span><span class="op">}</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t78" href="#t78">78</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t79" href="#t79">79</a></span><span class="t">    <span class="key">def</span> <span class="nam">test_context_window_arguments_are_accepted_but_hidden_and_include_seen_is_advertised</span><span class="op">(</span><span class="nam">self</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t80" href="#t80">80</a></span><span class="t">        <span class="nam">asyncio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">server</span><span class="op">.</span><span class="nam">mcp</span><span class="op">.</span><span class="nam">call_tool</span><span class="op">(</span><span class="str">&quot;read_graph&quot;</span><span class="op">,</span> <span class="op">{</span><span class="str">&quot;project&quot;</span><span class="op">:</span> <span class="str">&quot;p&quot;</span><span class="op">,</span> <span class="str">&quot;context_window_id&quot;</span><span class="op">:</span> <span class="str">&quot;w&quot;</span><span class="op">,</span> <span class="str">&quot;context_turn&quot;</span><span class="op">:</span> <span class="num">1</span><span class="op">}</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t81" href="#t81">81</a></span><span class="t">        <span class="nam">tools</span> <span class="op">=</span> <span class="op">{</span><span class="nam">tool</span><span class="op">.</span><span class="nam">name</span><span class="op">:</span> <span class="nam">tool</span> <span class="key">for</span> <span class="nam">tool</span> <span class="key">in</span> <span class="nam">asyncio</span><span class="op">.</span><span class="nam">run</span><span class="op">(</span><span class="nam">server</span><span class="op">.</span><span class="nam">mcp</span><span class="op">.</span><span class="nam">list_tools</span><span class="op">(</span><span class="op">)</span><span class="op">)</span><span class="op">}</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t82" href="#t82">82</a></span><span class="t">        <span class="nam">properties</span> <span class="op">=</span> <span class="nam">tools</span><span class="op">[</span><span class="str">&quot;read_graph&quot;</span><span class="op">]</span><span class="op">.</span><span class="nam">input_schema</span><span class="op">[</span><span class="str">&quot;properties&quot;</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t83" href="#t83">83</a></span><span class="t">        <span class="key">assert</span> <span class="str">&quot;include_seen&quot;</span> <span class="key">in</span> <span class="nam">properties</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t84" href="#t84">84</a></span><span class="t">        <span class="key">assert</span> <span class="key">not</span> <span class="op">{</span><span class="str">&quot;context_window_id&quot;</span><span class="op">,</span> <span class="str">&quot;context_turn&quot;</span><span class="op">}</span> <span class="op">&amp;</span> <span class="nam">properties</span><span class="op">.</span><span class="nam">keys</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -166,7 +173,7 @@
             <a class="nav" href="z_a44f0ac069e85531_test_tracker_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.0">coverage.py v7.17.0</a>,
-            created at 2026-10-29 17:32 +0000
+            created at 2026-10-30 14:55 +0000
         </p>
     </div>
 </footer>
