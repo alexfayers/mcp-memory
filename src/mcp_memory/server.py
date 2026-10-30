@@ -359,15 +359,16 @@ def _ensure_project_root(db: Storage, project: str) -> None:
     if project == _GLOBAL_PROJECT:
         return
     root_name = f"project/{project}"
-    try:
-        db.reads.get_entity(project, root_name)
-    except ValueError:
-        entity: dict[str, object] = {
-            "name": root_name,
-            "entityType": "project",
-            "observations": [f"Root entity for {project}"],
-        }
-        db.entities.create(project, [entity])
+    with db.transaction():
+        try:
+            db.reads.get_entity(project, root_name)
+        except ValueError:
+            entity: dict[str, object] = {
+                "name": root_name,
+                "entityType": "project",
+                "observations": [f"Root entity for {project}"],
+            }
+            db.entities.create(project, [entity])
 
 
 register_visualise_routes(mcp, _get_db)

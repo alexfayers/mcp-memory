@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+import contextlib
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
@@ -58,6 +61,24 @@ class TestEnsureProjectRoot:
         _ensure_project_root(store, "my-project")
         entity = store.reads.get_entity("my-project", "project/my-project")
         assert entity.entity_type == "project"
+
+    def test_concurrent_callers_both_succeed(self, store: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
+        both_saw_no_root = threading.Barrier(2, timeout=0.5)
+        get_entity = store.reads.get_entity
+
+        def get_entity_then_wait(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return get_entity(*args, **kwargs)
+            except ValueError:
+                with contextlib.suppress(threading.BrokenBarrierError):
+                    both_saw_no_root.wait()
+                raise
+
+        monkeypatch.setattr(store.reads, "get_entity", get_entity_then_wait)
+        with ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(_ensure_project_root, store, "my-project") for _ in range(2)]
+        for future in futures:
+            future.result()
 
     def test_skips_global(self, store: Storage) -> None:
         _ensure_project_root(store, "global")

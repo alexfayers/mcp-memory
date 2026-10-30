@@ -95,5 +95,5 @@ def test_concurrent_sync_tools_work_over_streamable_http() -> None:
             ] + [client.call_tool("search_nodes", {"project": "p", "query": "hello"}) for _ in range(count)]
             return [r.structured_content for r in await asyncio.gather(*calls)]
 
-    results = asyncio.run(scenario())
-    assert all("error" not in r for r in results)
+    errors = [r["error"] for r in asyncio.run(scenario()) if "error" in r]
+    assert not errors
