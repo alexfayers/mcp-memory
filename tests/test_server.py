@@ -427,8 +427,8 @@ class TestInlineRelations:
         )
         assert result[0].relation_type == "implements"
 
-    def test_missing_both_type_keys_raises(self) -> None:
-        with pytest.raises(KeyError, match=r"type.*relation_type"):
+    def test_missing_type_key_names_expected_and_received_keys(self) -> None:
+        with pytest.raises(ValueError, match=r"needs keys target, type, got keys target"):
             _validate_and_extract_relations(
                 "proj",
                 [
@@ -496,6 +496,11 @@ class TestRuntimePolicyErrors:
             [{"source": "task/a", "target": "project/proj", "type": "belongs-to"}],
         )
         assert "error" in result
+
+    def test_create_relations_error_names_expected_and_received_keys(self, server_db: Storage) -> None:
+        result = tools.create_relations("proj", [{"from": "task/a", "to": "feature/b", "relationType": "implements"}])
+        assert "source, target, type" in result["error"]
+        assert "from, relationType, to" in result["error"]
 
     def test_create_entities_returns_error_for_strict_project_scoped_user_preferences(
         self, monkeypatch: pytest.MonkeyPatch, server_db: Storage

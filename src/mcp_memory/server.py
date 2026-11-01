@@ -10,11 +10,12 @@ import functools
 import inspect
 import logging
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import anyio
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
+from pydantic import WithJsonSchema
 
 from . import dream, metrics, usefulness
 from .activity import record_tool
@@ -99,6 +100,37 @@ class _PrunedSchemaMCPServer(MCPServer):
 
 mcp = _PrunedSchemaMCPServer("mcp-memory")
 
+_STRING_SCHEMA = {"type": "string"}
+
+
+def _object_schema(properties: list[str], required: list[str]) -> dict[str, Any]:
+    """Return a JSON schema for an object of string properties."""
+    return {"type": "object", "properties": dict.fromkeys(properties, _STRING_SCHEMA), "required": required}
+
+
+_RELATION_INPUTS = Annotated[
+    list[dict[str, str]],
+    WithJsonSchema({
+        "type": "array",
+        "items": _object_schema(["source", "target", "type"], ["source", "target", "type"]),
+    }),
+]
+_ENTITY_INPUTS = Annotated[
+    list[dict[str, str | list[str] | list[dict[str, str]] | None]],
+    WithJsonSchema({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                **dict.fromkeys(["name", "entityType", "status"], _STRING_SCHEMA),
+                "observations": {"type": "array", "items": _STRING_SCHEMA},
+                "relations": {"type": "array", "items": _object_schema(["target", "type"], ["target", "type"])},
+            },
+            "required": ["name", "entityType", "observations"],
+        },
+    }),
+]
+
 VALID_ENTITY_TYPES = frozenset({
     "project",
     "feature",
@@ -125,8 +157,7 @@ _TARGET_MAX_OBSERVATION_CHARS_DOC = (
 )
 _RELATIONS_WIRE_DOC = ' Relations are returned as "source relation-type target" strings.'
 CREATE_ENTITIES_DESC = (
-    "Create new entities with observations in the knowledge graph. "
-    "All data is scoped to the given project. "
+    "Create new entities with observations in a project. "
     "Raises if any entity name already exists in that project - use add_observations to "
     "append to an existing entity instead. "
     "Valid entity types: project, feature, task, user-preferences, pattern, knowledge. "
@@ -136,14 +167,11 @@ CREATE_ENTITIES_DESC = (
     "never add a second root). "
     "Name forms: feature/<project>/<area>, task/<TICKET-ID>-<slug> (name an investigation "
     "for its ticket, not its symptom), user-preferences/<alias>-<topic>, pattern/<short-noun>. "
-    "Each entity dict must have keys: name (str), entityType (str), observations (list[str]), "
-    "and, unless entityType is project, relations (non-empty list of {target, type} dicts; see "
-    "create_relations for which type to pick) inline - without them nothing is created. "
-    "Optional key: status (str). "
+    "Unless entityType is project, pass non-empty relations inline (see create_relations for "
+    "which type to pick) - without them nothing is created. "
     "Observation wording and what not to store: see add_observations. "
     "Set `status` via the `status` argument, never as a `STATUS:` observation. "
-    "The server automatically records each observation's timestamp; do NOT prefix or embed "
-    "a date/timestamp in the observation text yourself."
+    "The server records each observation's timestamp; do NOT embed a date/timestamp in the text."
 )
 SEARCH_NODES_DESC = (
     "Search entities and relations by text query within a project. "
@@ -174,7 +202,7 @@ READ_GRAPH_DESC = (
 )
 CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
-    "Relations are the core of the graph model. Each relation has source, target, and type. "
+    "Relations are the core of the graph model. "
     "Prefer a specific type over relates-to: task implements feature (link a task straight "
     "to project/ only where no feature exists), task depends-on task, feature belongs-to "
     "project, pattern used-in project."
@@ -477,13 +505,15 @@ def _validate_relation_type(raw: str) -> str:
     return relation_type
 
 
-def _extract_relation_type(rel: dict[str, str]) -> str:
-    """Extract and canonicalize a relation type, accepting 'type' or 'relation_type' keys."""
-    if "type" in rel:
-        return _validate_relation_type(str(rel["type"]))
-    if "relation_type" in rel:
-        return _validate_relation_type(str(rel["relation_type"]))
-    raise KeyError("Relation must have a 'type' or 'relation_type' key.")
+def _relation_from_dict(rel: dict[str, str], default_source: str | None = None) -> Relation:
+    """Build a Relation from tool input, accepting 'relation_type' for 'type' and a default source."""
+    source = rel.get("source", default_source)
+    target = rel.get("target")
+    raw_type = rel.get("type", rel.get("relation_type"))
+    if source is None or target is None or raw_type is None:
+        expected = "source, target, type" if default_source is None else "target, type"
+        raise ValueError(f"Relation needs keys {expected}, got keys {', '.join(sorted(rel)) or 'none'}.")
+    return Relation(source=str(source), target=str(target), relation_type=_validate_relation_type(str(raw_type)))
 
 
 def _validate_entity_type_and_name(project: str, entity_type: object, name: str) -> None:
@@ -532,13 +562,7 @@ def _validate_and_extract_relations(
         if isinstance(relations_raw, list):
             for rel in relations_raw:
                 if isinstance(rel, dict):
-                    all_relations.append(
-                        Relation(
-                            source=str(rel.get("source", name)),
-                            target=str(rel["target"]),
-                            relation_type=_extract_relation_type(rel),
-                        )
-                    )
+                    all_relations.append(_relation_from_dict(rel, name))
     return all_relations
 
 
@@ -583,7 +607,7 @@ def _create_entities(
 @_track
 def create_entities(
     project: str,
-    entities: list[dict[str, str | list[str] | list[dict[str, str]] | None]],
+    entities: _ENTITY_INPUTS,
 ) -> dict[str, str]:
     """Create or update entities with observations, enforcing relation requirements."""
     try:
@@ -979,19 +1003,12 @@ def search_all_projects(
 @_track
 def create_relations(
     project: str,
-    relations: list[dict[str, str]],
+    relations: _RELATION_INPUTS,
 ) -> dict[str, str]:
     """Create relations between entities in a project."""
     try:
         db = _get_db()
-        relation_objects = [
-            Relation(
-                source=rel["source"],
-                target=rel["target"],
-                relation_type=_extract_relation_type(rel),
-            )
-            for rel in relations
-        ]
+        relation_objects = [_relation_from_dict(rel) for rel in relations]
         db.relations.create(project, relation_objects)
         return {"message": f"Created {len(relation_objects)} relations in project '{project}'."}
     except Exception as e:
