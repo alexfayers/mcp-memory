@@ -706,6 +706,7 @@ dependencies = [
     { name = "better-profanity" },
     { name = "httpx" },
     { name = "mcp" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -723,6 +724,7 @@ requires-dist = [
     { name = "better-profanity" },
     { name = "httpx" },
     { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "pydantic", specifier = ">=2.14.1" },
 ]
 
 [package.metadata.requires-dev]
