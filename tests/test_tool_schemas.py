@@ -63,6 +63,18 @@ class TestPrunedInputSchemas:
         tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
         assert tools["read_graph"].title == "Read graph"
 
+    def test_create_relations_declares_relation_keys(self) -> None:
+        tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+        relation = tools["create_relations"].input_schema["properties"]["relations"]["items"]
+        assert sorted(relation["properties"]) == ["source", "target", "type"]
+        assert sorted(relation["required"]) == ["source", "target", "type"]
+
+    def test_create_entities_declares_inline_relation_keys(self) -> None:
+        tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+        entity = tools["create_entities"].input_schema["properties"]["entities"]["items"]
+        relation = entity["properties"]["relations"]["items"]
+        assert sorted(relation["required"]) == ["target", "type"]
+
 
 @pytest.mark.usefixtures("server_db")
 class TestValidationUnchanged:
