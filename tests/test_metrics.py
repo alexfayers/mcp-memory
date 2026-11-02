@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from mcp_memory.storage import Storage
+    from tests.conftest import FakeApi
 
 
 class TestStorage:
@@ -207,30 +208,15 @@ class TestUsageOverTime:
 
 
 class TestMetricsCommand:
-    def test_metrics_command_reports_usage(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
+    def test_metrics_command_prints_the_servers_report(
+        self, api: FakeApi, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        db_path = tmp_path / "cli-metrics.db"
-        seed = open_writable(db_path)
-        seed.telemetry.record_tool_call("search_nodes", 100, 1000, {"compact": True})
-        seed.telemetry.record_tool_call("search_nodes", 200, 3000, {"compact": True})
-        seed.telemetry.record_tool_call("read_graph", 50, 500, {})
-        seed.connection.close()
-
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        monkeypatch.setattr("sys.argv", ["mcp-memory", "metrics"])
+        api.results["metrics"] = {"total_calls": 3}
+        monkeypatch.setattr("sys.argv", ["mcp-memory", "metrics", "--since", "7d"])
         cli.main()
 
-        report = json.loads(capsys.readouterr().out)
-        assert report["total_calls"] == 3
-        assert report["since"] is None
-        tools = {tool["tool"]: tool for tool in report["tools"]}
-        assert set(tools) == {"read_graph", "search_nodes"}
-        assert tools["search_nodes"]["call_count"] == 2
-        assert tools["read_graph"]["call_count"] == 1
+        assert api.calls == [("metrics", {"since": "7d"})]
+        assert json.loads(capsys.readouterr().out) == {"total_calls": 3}
 
 
 _BENCH_OBSERVATIONS = [

@@ -60,27 +60,30 @@ class ImportSummary:
         return "\n".join(lines)
 
 
-def export_database(db: Storage, output_path: Path) -> None:
-    """Write every live project of the database to a JSON export file."""
+def export_database(db: Storage) -> dict[str, Any]:
+    """Build the export document holding every live project of the database."""
     snapshot = db.transfer.export_data()
-    data = {
+    return {
         "format": EXPORT_FORMAT,
         "format_version": EXPORT_FORMAT_VERSION,
         "schema_version": snapshot["schema_version"],
         "exported_at": datetime.now(tz=UTC).isoformat(),
         "projects": snapshot["projects"],
     }
-    output_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def load_export(input_path: Path) -> dict[str, Any]:
-    """Parse and validate an export file, enforcing the schema-version guard.
+    """Parse and validate an export file."""
+    return validate_export(json.loads(input_path.read_text(encoding="utf-8")))
+
+
+def validate_export(data: dict[str, Any]) -> dict[str, Any]:
+    """Validate an export document, enforcing the schema-version guard.
 
     Raises ValueError for an unrecognised format/version or a schema_version newer than
     this build supports. An older schema_version imports fine, since import goes through
     the current write path rather than raw rows.
     """
-    data: dict[str, Any] = json.loads(input_path.read_text(encoding="utf-8"))
     if data.get("format") != EXPORT_FORMAT:
         raise ValueError(f"Not an mcp-memory export file (format: {data.get('format')!r})")
     if data.get("format_version") != EXPORT_FORMAT_VERSION:

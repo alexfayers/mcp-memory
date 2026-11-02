@@ -15,7 +15,9 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from typing import Any
 
+from . import api_client
 from .config import (
     _DEFAULT_PORT,
     get_db_path,
@@ -405,43 +407,28 @@ def _cmd_migrate_db(args: argparse.Namespace) -> None:
         print("No installed service found; start the server to use the migrated database.")
 
 
-def _cmd_audit(args: argparse.Namespace) -> None:
-    """Emit the read-only structural-hygiene report, or a proposed fix plan, as JSON on stdout."""
-    from .audit import audit_graph, propose_plan
-    from .storage import open_readonly
-
-    db_path = get_db_path()
-    if not db_path.exists():
-        print(f"Error: database not found: {db_path}", file=sys.stderr)
+def _api(op: str, args: dict[str, Any]) -> Any:
+    """Run a server operation, exiting with its error when the server cannot be reached or refuses."""
+    try:
+        return api_client.call(op, args)
+    except api_client.ApiError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    db = open_readonly(db_path)
-    try:
-        report = audit_graph(db, None if args.all_projects else args.project)
-        plan = propose_plan(db, report) if args.propose_plan else None
-    finally:
-        db.connection.close()
-    if plan is not None:
-        print(json.dumps({"steps": plan}, indent=2))
-    else:
-        print(json.dumps(report, indent=2))
+
+def _cmd_audit(args: argparse.Namespace) -> None:
+    """Emit the read-only structural-hygiene report, or a proposed fix plan, as JSON on stdout."""
+    project = None if args.all_projects else args.project
+    print(json.dumps(_api("audit", {"project": project, "plan": args.propose_plan}), indent=2))
 
 
 def _cmd_eval(args: argparse.Namespace) -> None:
     """Report search-ranking quality over recorded retrieval telemetry (read-only)."""
-    from .eval import evaluate
-    from .storage import open_readonly
+    from .eval import EvalReport
 
-    db_path = get_db_path()
-    if not db_path.exists():
-        print(f"Error: database not found: {db_path}", file=sys.stderr)
-        sys.exit(1)
-
-    db = open_readonly(db_path)
-    try:
-        report = evaluate(db, args.k, since=args.since, min_content_tokens=args.min_content_tokens)
-    finally:
-        db.connection.close()
+    report = EvalReport(
+        **_api("eval", {"k": args.k, "since": args.since, "min_content_tokens": args.min_content_tokens})
+    )
     window = f", since {args.since}" if args.since else ""
     if args.min_content_tokens:
         window += f", min_content_tokens={args.min_content_tokens}"
@@ -476,37 +463,19 @@ def _cmd_eval(args: argparse.Namespace) -> None:
 
 def _cmd_metrics(args: argparse.Namespace) -> None:
     """Emit per-tool usage metrics (byte-size proxies + option frequencies) as JSON on stdout."""
-    from dataclasses import asdict
-
-    from .metrics import usage_report
-    from .storage import open_writable
-
-    db = open_writable(get_db_path())
-    try:
-        report = usage_report(db, since=args.since)
-    finally:
-        db.connection.close()
-    print(json.dumps(asdict(report), indent=2))
+    print(json.dumps(_api("metrics", {"since": args.since}), indent=2))
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
     """Export the entire memory database to a JSON file."""
-    from .export_import import export_database
-    from .storage import open_writable
-
     output_path = Path(args.output_path).expanduser()
-    db = open_writable(get_db_path())
-    try:
-        export_database(db, output_path)
-    finally:
-        db.connection.close()
+    output_path.write_text(json.dumps(_api("export", {}), indent=2), encoding="utf-8")
     print(f"Exported database to {output_path}")
 
 
 def _cmd_import(args: argparse.Namespace) -> None:
-    """Merge selected projects from a JSON export into the local database."""
-    from .export_import import import_projects, list_export_projects, load_export
-    from .storage import open_writable
+    """Merge selected projects from a JSON export into the server's database."""
+    from .export_import import ImportSummary, list_export_projects, load_export
 
     try:
         data = load_export(Path(args.input_path).expanduser())
@@ -522,14 +491,7 @@ def _cmd_import(args: argparse.Namespace) -> None:
         return
 
     names = [name.strip() for name in args.project.split(",") if name.strip()]
-    db = open_writable(get_db_path())
-    try:
-        summary = import_projects(db, data, names, dry_run=args.dry_run)
-    except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
-    finally:
-        db.connection.close()
+    summary = ImportSummary(**_api("import", {"data": data, "projects": names, "dry_run": args.dry_run}))
     print(summary.render())
 
 

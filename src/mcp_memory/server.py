@@ -19,6 +19,7 @@ from pydantic import WithJsonSchema
 
 from . import dream, metrics, usefulness
 from .activity import record_tool
+from .api import register_api_routes
 from .config import get_db_path, get_sweep_interval_seconds
 from .dedupe import dedupe_read
 from .models import (
@@ -400,6 +401,7 @@ def _ensure_project_root(db: Storage, project: str) -> None:
 
 
 register_visualise_routes(mcp, _get_db)
+register_api_routes(mcp, _get_db)
 
 
 # Transitional: surfaces legacy relation types that predate the canonical

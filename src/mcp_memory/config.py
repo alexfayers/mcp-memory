@@ -78,7 +78,7 @@ def resolve_port() -> str:
 
 
 def get_memory_url() -> str:
-    """Return the mcp-memory server URL that dream spawns connect to."""
+    """Return the mcp-memory server URL that dream spawns, the hooks and the CLI connect to."""
     explicit = os.environ.get("MCP_MEMORY_URL")
     if explicit:
         return explicit

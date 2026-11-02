@@ -8,6 +8,7 @@ than guesswork. Coupled to no live state: every entity, age, and vote is set exp
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 import math
 import sqlite3
 from types import SimpleNamespace
@@ -19,7 +20,6 @@ from mcp_memory import (
     cli,
     eval as ranking_eval,
 )
-from mcp_memory.storage import open_readonly, open_writable
 from tests import backdate_store, rank_of
 from tests.eval.eval_harness import (
     _FIXTURE_LATER,
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from mcp_memory.storage import Storage
+    from tests.conftest import FakeApi
 
 
 class TestTypeAwareDecay:
@@ -491,23 +492,14 @@ class TestVoteInfluence:
 
 class TestEvalCommand:
     def test_eval_command_reports_ranking_quality(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
+        self, api: FakeApi, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        db_path = tmp_path / "cli-eval.db"
-        seed = open_writable(db_path)
-        seed.entities.create("proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}])
-        seed.telemetry.record_surfaced("search_nodes", "needle", "rid-1", [("proj", "task/a", 1)])
-        mark_used(seed, "rid-1", "task/a")
-        seed.connection.close()
-
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
+        api.results["eval"] = asdict(ranking_eval.EvalReport(1, 1.0, 1.0, 1.0, 1.0, 1.0, 5))
         monkeypatch.setattr("sys.argv", ["mcp-memory", "eval", "--k", "5"])
         cli.main()
 
         out = capsys.readouterr().out
+        assert api.calls == [("eval", {"k": 5, "since": None, "min_content_tokens": 0})]
         assert "1 labelled queries (k=5)" in out
         assert "mean precision@5: 1.000" in out
         assert "MRR: 1.000" in out
@@ -518,103 +510,17 @@ class TestEvalCommand:
         assert "mean success@5: 1.000" in out
         assert "not subject to the precision@k ceiling" in out
 
-    def test_eval_command_since_scopes_window_and_header(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
+    def test_eval_command_options_scope_the_request_and_header(
+        self, api: FakeApi, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        db_path = tmp_path / "cli-eval-since.db"
-        seed = open_writable(db_path)
-        seed.entities.create("proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}])
-        seed.telemetry.record_surfaced("search_nodes", "needle", "rid-old", [("proj", "task/a", 1)])
-        seed.telemetry.record_surfaced("search_nodes", "needle", "rid-recent", [("proj", "task/a", 1)])
-        mark_used(seed, "rid-old", "task/a")
-        mark_used(seed, "rid-recent", "task/a")
-        with seed.connection.transaction():
-            seed.connection.write(
-                "UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days') WHERE retrieval_id = 'rid-old'"
-            )
-        seed.connection.close()
-
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        monkeypatch.setattr("sys.argv", ["mcp-memory", "eval", "--k", "5", "--since", "7d"])
-        cli.main()
-
-        out = capsys.readouterr().out
-        assert "1 labelled queries (k=5, since 7d)" in out
-
-    def test_eval_command_min_content_tokens_scopes_window_and_header(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        db_path = tmp_path / "cli-eval-min-tokens.db"
-        seed = open_writable(db_path)
-        seed.entities.create(
-            "proj",
-            [
-                {"name": "task/a", "entityType": "task", "observations": ["needle"]},
-                {"name": "task/b", "entityType": "task", "observations": ["needle"]},
-            ],
+        api.results["eval"] = asdict(ranking_eval.EvalReport(1, 1.0, 1.0, 1.0, 1.0, 1.0, 5))
+        monkeypatch.setattr(
+            "sys.argv", ["mcp-memory", "eval", "--k", "5", "--since", "7d", "--min-content-tokens", "2"]
         )
-        seed.telemetry.record_surfaced("search_nodes", "task", "rid-short", [("proj", "task/a", 1)])
-        seed.telemetry.record_surfaced("search_nodes", "deploy notification", "rid-long", [("proj", "task/b", 1)])
-        mark_used(seed, "rid-short", "task/a")
-        mark_used(seed, "rid-long", "task/b")
-        seed.connection.close()
-
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        monkeypatch.setattr("sys.argv", ["mcp-memory", "eval", "--k", "5", "--min-content-tokens", "2"])
         cli.main()
 
-        out = capsys.readouterr().out
-        assert "1 labelled queries (k=5, min_content_tokens=2)" in out
-
-    def test_eval_command_does_not_prune_surfaced_labels(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        db_path = tmp_path / "cli-eval-retention.db"
-        seed = open_writable(db_path)
-        seed.entities.create("proj", [{"name": "task/a", "entityType": "task", "observations": ["needle"]}])
-        seed.telemetry.record_surfaced("search_nodes", "needle", "rid-1", [("proj", "task/a", 1)])
-        mark_used(seed, "rid-1", "task/a")
-        with seed.connection.transaction():
-            seed.connection.write("UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days')")
-        seed.connection.close()
-
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        monkeypatch.setenv("MCP_MEMORY_SURFACED_RETENTION_DAYS", "1")
-        monkeypatch.setattr("sys.argv", ["mcp-memory", "eval", "--k", "5"])
-        cli.main()
-
-        out = capsys.readouterr().out
-        assert "1 labelled queries (k=5)" in out
-
-        reopened = open_readonly(db_path)
-        row = reopened.connection.query_one("SELECT COUNT(*) AS n FROM surfaced_entities")
-        assert row["n"] == 1
-        reopened.connection.close()
-
-    def test_eval_command_errors_when_the_database_is_missing(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        db_path = tmp_path / "does-not-exist.db"
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        monkeypatch.setattr("sys.argv", ["mcp-memory", "eval"])
-
-        with pytest.raises(SystemExit) as excinfo:
-            cli.main()
-
-        assert excinfo.value.code == 1
-        assert str(db_path) in capsys.readouterr().err
+        assert api.calls == [("eval", {"k": 5, "since": "7d", "min_content_tokens": 2})]
+        assert "1 labelled queries (k=5, since 7d, min_content_tokens=2)" in capsys.readouterr().out
 
 
 class TestEvaluateReadonly:

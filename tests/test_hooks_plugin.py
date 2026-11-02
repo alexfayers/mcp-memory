@@ -23,7 +23,7 @@ from cline_hooks.frontends.claude_code.protocol import ClaudeCodeProtocol
 from cline_hooks.plugins.startup_blocks import RESERVE_CHARS, StartupBlocksPlugin
 
 from mcp_memory import server
-from mcp_memory.config import get_db_path
+from mcp_memory.api import _recent_memory, _safe_project
 from mcp_memory.hooks.plugin import (
     _DATE_PREFIX_WARNING,
     _EDIT_TOOL_WEIGHT,
@@ -44,8 +44,8 @@ from mcp_memory.hooks.plugin import (
     _parse_mcp_arguments,
     _resolve_anchor,
     _resolved_project_set,
-    _safe_project,
     _workspace_entity_note,
+    resolve_project_for_path,
 )
 from mcp_memory.hooks.tracker import _MEMORY_BLOCK_THRESHOLD, get_scope, set_reminder_chance
 from mcp_memory.path_resolver import normalize_path
@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from cline_hooks.core.plugin import HookResult
 
     from mcp_memory.storage import Storage
+    from tests.conftest import FakeApi
 
 _needs_profanity_check = pytest.mark.skipif(
     not ENABLE_PROFANITY_CHECK,
@@ -215,73 +216,59 @@ def _real_plugin() -> MemoryPlugin:
 
 
 class TestAutoRegister:
-    def _db(self) -> Storage:
-        return open_writable(get_db_path())
+    def _task_start(self, workspace: Path) -> HookResult | None:
+        return _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(workspace)])
 
-    def test_pins_to_existing_project_matching_basename(self, tmp_path: Path) -> None:
-        db = self._db()
-        db.entities.create("acme", [{"name": "project/acme", "entityType": "project", "observations": ["root"]}])
+    def test_registers_the_repo_root_under_the_project_the_server_names(self, tmp_path: Path, api: FakeApi) -> None:
         repo = tmp_path / "acme"
         (repo / ".git").mkdir(parents=True)
-        result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert self._db().projects.get_project_for_path(str(repo)) == "acme"
+        api.results.update({"project-paths": {}, "register-workspace": "platform"})
+        result = self._task_start(repo)
+        assert ("register-workspace", {"anchor": str(repo), "basename": "acme"}) in api.calls
         assert result is not None
-        assert any("acme" in note for note in result.notes)
+        assert any("platform" in note for note in result.notes)
 
-    def test_pins_via_existing_sibling_mapping(self, tmp_path: Path) -> None:
-        db = self._db()
-        repo = tmp_path / "repo"
-        (repo / ".git").mkdir(parents=True)
-        db.projects.set_paths("platform", [str(repo / "sub")])
-        _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert self._db().projects.get_project_for_path(str(repo)) == "platform"
-
-    def test_note_but_no_mint_when_unknown(self, tmp_path: Path) -> None:
+    def test_note_but_no_mint_when_unknown(self, tmp_path: Path, api: FakeApi) -> None:
         repo = tmp_path / "weird"
         (repo / ".git").mkdir(parents=True)
-        result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert "weird" not in self._db().projects.names()
+        api.results.update({"project-paths": {}, "register-workspace": None})
+        result = self._task_start(repo)
         assert result is not None
         assert any("set_metadata" in note and "add=" in note for note in result.notes)
 
-    def test_no_clobber_when_already_mapped(self, tmp_path: Path) -> None:
-        db = self._db()
+    def test_no_register_when_already_mapped(self, tmp_path: Path, api: FakeApi) -> None:
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
-        db.projects.set_paths("platform", [str(repo)])
-        _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert self._db().projects.paths_for("platform") == [normalize_path(str(repo))]
+        api.results["project-paths"] = {"platform": [normalize_path(str(repo))]}
+        self._task_start(repo)
+        assert "register-workspace" not in [op for op, _ in api.calls]
 
-    def test_home_anchor_is_never_registered(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_home_anchor_is_never_registered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api: FakeApi
+    ) -> None:
         home = tmp_path / "home"
         (home / ".git").mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: home)
-        db = self._db()
-        db.entities.create("home", [{"name": "project/home", "entityType": "project", "observations": ["r"]}])
-        _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(home)])
-        assert self._db().projects.get_project_for_path(str(home)) is None
+        api.results["project-paths"] = {}
+        self._task_start(home)
+        assert "register-workspace" not in [op for op, _ in api.calls]
 
-    def test_collapses_to_workspace_marker_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_collapses_to_workspace_marker_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api: FakeApi
+    ) -> None:
         monkeypatch.setenv("MCP_MEMORY_WORKSPACE_MARKERS", ".marker")
         workspace = tmp_path / "workspace"
         (workspace / ".marker").mkdir(parents=True)
         pkg = workspace / "src" / "PkgA"
         (pkg / ".git").mkdir(parents=True)
-        db = self._db()
-        db.entities.create("PkgA", [{"name": "project/PkgA", "entityType": "project", "observations": ["r"]}])
-        _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(pkg)])
-        assert self._db().projects.get_project_for_path(str(workspace / "src" / "PkgB")) == "PkgA"
+        api.results.update({"project-paths": {}, "register-workspace": "PkgA"})
+        self._task_start(pkg)
+        assert ("register-workspace", {"anchor": str(workspace), "basename": "PkgA"}) in api.calls
 
-    def test_db_error_does_not_break_task_start(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_server_error_does_not_break_task_start(self, tmp_path: Path) -> None:
         repo = tmp_path / "acme"
         (repo / ".git").mkdir(parents=True)
-
-        def _boom(_path: object) -> Storage:
-            raise OSError("db unavailable")
-
-        monkeypatch.setattr("mcp_memory.hooks.plugin.open_writable", _boom)
-        result = _real_plugin().on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        assert result is not None
+        assert self._task_start(repo) is not None
 
 
 @pytest.fixture
@@ -665,54 +652,29 @@ class TestRegisteredPathResolution:
         assert note == "The project memory entity for this workspace is `project/myrepo`."
 
 
-class TestResolvedProjectSet:
-    def _db(self) -> Storage:
-        return open_writable(get_db_path())
+class TestResolveProjectForPath:
+    def test_matches_registered_paths_from_the_server(self, tmp_path: Path, api: FakeApi) -> None:
+        repo = tmp_path / "acme-service-infra"
+        api.results["project-paths"] = {"platform": [normalize_path(str(repo))]}
+        assert resolve_project_for_path(str(repo / "lib" / "stack.ts")) == "platform"
+        assert resolve_project_for_path(str(tmp_path / "elsewhere")) is None
 
+    def test_server_error_returns_none(self) -> None:
+        assert resolve_project_for_path("/anything") is None
+
+
+class TestResolvedProjectSet:
     def test_empty_workspace_roots_returns_global_only(self) -> None:
         assert _resolved_project_set([]) == ["global"]
 
-    def test_no_group_returns_global_and_repo(self, tmp_path: Path) -> None:
-        repo = tmp_path / "solo"
-        repo.mkdir()
-        assert _resolved_project_set([str(repo)]) == ["global", "solo"]
-
-    def test_single_sibling_included(self, tmp_path: Path) -> None:
-        db = self._db()
-        db.projects.set_groups("llm-prompts", ["tooling"])
-        db.projects.set_groups("cline-hooks", ["tooling"])
+    def test_group_siblings_follow_global_and_repo(self, tmp_path: Path, api: FakeApi) -> None:
+        api.results["group-members"] = ["cline-hooks", "other"]
         repo = tmp_path / "llm-prompts"
         repo.mkdir()
-        assert _resolved_project_set([str(repo)]) == ["global", "llm-prompts", "cline-hooks"]
+        assert _resolved_project_set([str(repo)]) == ["global", "llm-prompts", "cline-hooks", "other"]
+        assert ("group-members", {"project": "llm-prompts"}) in api.calls
 
-    def test_multiple_siblings_included(self, tmp_path: Path) -> None:
-        db = self._db()
-        db.projects.set_groups("a", ["tooling"])
-        db.projects.set_groups("b", ["tooling"])
-        db.projects.set_groups("c", ["tooling"])
-        repo = tmp_path / "a"
-        repo.mkdir()
-        assert _resolved_project_set([str(repo)]) == ["global", "a", "b", "c"]
-
-    def test_db_error_falls_back_to_global_and_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        def _boom(_path: object) -> Storage:
-            raise OSError("db unavailable")
-
-        monkeypatch.setattr("mcp_memory.hooks.plugin.open_readonly", _boom)
-        repo = tmp_path / "acme"
-        repo.mkdir()
-        assert _resolved_project_set([str(repo)]) == ["global", "acme"]
-
-    def test_never_opens_a_writable_connection(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        def _boom(_path: object) -> Storage:
-            raise AssertionError("_resolved_project_set must not open a writable connection")
-
-        monkeypatch.setattr("mcp_memory.hooks.plugin.open_writable", _boom)
-        repo = tmp_path / "acme"
-        repo.mkdir()
-        assert _resolved_project_set([str(repo)]) == ["global", "acme"]
-
-    def test_missing_db_file_degrades_to_global_and_repo(self, tmp_path: Path) -> None:
+    def test_server_error_falls_back_to_global_and_repo(self, tmp_path: Path) -> None:
         repo = tmp_path / "acme"
         repo.mkdir()
         assert _resolved_project_set([str(repo)]) == ["global", "acme"]
@@ -727,17 +689,21 @@ def _task_start_notes(*plugins: HooksPlugin, roots: list[str], **kwargs: object)
 
 
 class TestRecentMemoryStartupBlock:
-    def test_lists_recent_entities_of_global_and_repo(self, tmp_path: Path) -> None:
-        db = open_writable(get_db_path())
+    @pytest.fixture(autouse=True)
+    def _serve_recent_memory(self, api: FakeApi, store: Storage) -> None:
+        api.results["recent-memory"] = lambda args: _recent_memory(store, args["project"], args["left"])
+
+    def test_lists_recent_entities_of_global_and_repo(self, tmp_path: Path, store: Storage) -> None:
+        db = store
         db.entities.create("global", [{"name": "p/one", "entityType": "pattern", "observations": ["first fact"]}])
         db.entities.create("acme", [{"name": "task/two", "entityType": "task", "observations": ["second fact"]}])
         notes = _task_start_notes(StartupBlocksPlugin(), roots=[str(tmp_path / "acme")])
         assert any("- p/one (pattern): first fact\n\n## acme\n- task/two (task): second" in n for n in notes)
 
-    def test_budget_keeps_names(self, tmp_path: Path) -> None:
+    def test_budget_keeps_names(self, tmp_path: Path, store: Storage) -> None:
         names = [f"task/{number}" for number in range(5)]
         entities = [{"name": name, "entityType": "task", "observations": ["x" * 70]} for name in names]
-        open_writable(get_db_path()).entities.create("acme", entities)
+        store.entities.create("acme", entities)
         spec = replace(ClaudeCodeProtocol.frontend_spec, max_context_chars=RESERVE_CHARS + 400)
         with patch.object(ClaudeCodeProtocol, "frontend_spec", spec):
             notes = _task_start_notes(StartupBlocksPlugin(), roots=[str(tmp_path / "acme")])
@@ -773,10 +739,8 @@ class TestBuildTaskStartContext:
         assert "REQUIRED before starting" not in instructions
         assert "Only if the opening message asks about outstanding work" in instructions
 
-    def test_project_list_reflects_resolved_scopes(self, tmp_path: Path) -> None:
-        db = open_writable(get_db_path())
-        db.projects.set_groups("llm-prompts", ["tooling"])
-        db.projects.set_groups("cline-hooks", ["tooling"])
+    def test_project_list_reflects_resolved_scopes(self, tmp_path: Path, api: FakeApi) -> None:
+        api.results["group-members"] = ["cline-hooks"]
         repo = tmp_path / "llm-prompts"
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
