@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import httpx
@@ -271,9 +272,9 @@ class TestApiIdle:
     async def test_reports_last_activity_and_idle_seconds(
         self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1000.0))
         activity.record_tool("list_metadata", {}, {"projects": []})
-        monkeypatch.setattr(activity.time, "time", lambda: 1030.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1030.0))
         resp = await client.get("/api/idle")
         assert resp.status_code == 200
         assert resp.json() == {"last_activity": 1000.0, "idle_seconds": 30.0}
@@ -282,9 +283,9 @@ class TestApiIdle:
     async def test_polling_idle_does_not_reset_the_timer(
         self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1000.0))
         activity.record_tool("list_metadata", {}, {"projects": []})
-        monkeypatch.setattr(activity.time, "time", lambda: 1050.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1050.0))
         await client.get("/api/idle")
         await client.get("/api/idle")
         assert activity.last_activity() == 1000.0
@@ -296,9 +297,9 @@ class TestApiDream:
     async def test_absent_status_reports_unavailable_with_live_idle(
         self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1000.0))
         activity.record_tool("list_metadata", {}, {"projects": []})
-        monkeypatch.setattr(activity.time, "time", lambda: 1042.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1042.0))
         resp = await client.get("/api/dream")
         assert resp.status_code == 200
         data = resp.json()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -198,7 +199,7 @@ class TestRecordAndRead:
         }
 
     def test_record_pass_sets_last_pass_with_operations(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(dream_status.time, "time", lambda: 5000.0)
+        monkeypatch.setattr(dream_status, "time", SimpleNamespace(time=lambda: 5000.0))
         dream_status.record_startup(
             enabled=True,
             idle_threshold_seconds=1800.0,
