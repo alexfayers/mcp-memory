@@ -1,29 +1,32 @@
+sibling_llm_prompts := `d="$(dirname "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")")/llm-prompts"; [ -d "$d" ] && printf %s "$d"; true`
+uv_run := if sibling_llm_prompts == "" { "uv run" } else { "uv run --with-editable " + quote(sibling_llm_prompts) }
+
 @_default: lint type-check naming-check test
 
 lint:
-    uv run ruff check --fix src/ tests/
-    uv run ruff format src/ tests/
+    {{uv_run}} ruff check --fix src/ tests/
+    {{uv_run}} ruff format src/ tests/
 
 lint-check:
-    uv run ruff check src/ tests/
+    {{uv_run}} ruff check src/ tests/
 
 type-check:
-    uv run mypy src/
+    {{uv_run}} mypy src/
 
 naming-check:
-    uv run python tests/naming_check.py src/mcp_memory/storage
+    {{uv_run}} python tests/naming_check.py src/mcp_memory/storage
 
 naming-check-final:
-    uv run python tests/naming_check.py src/mcp_memory/storage --final
+    {{uv_run}} python tests/naming_check.py src/mcp_memory/storage --final
 
 test *args:
-    uv run pytest {{args}}
+    {{uv_run}} pytest {{args}}
 
 baseline:
-    uv run python -m tests.eval.regen_baseline
+    {{uv_run}} python -m tests.eval.regen_baseline
 
 baseline-compare base head *args:
-    uv run python -m tests.eval.compare_baseline --base {{base}} --head {{head}} {{args}}
+    {{uv_run}} python -m tests.eval.compare_baseline --base {{base}} --head {{head}} {{args}}
 
 bench-diff ref="origin/main" *args:
     #!/usr/bin/env bash
