@@ -70,18 +70,18 @@
 | tests/eval/test\_eval\_baseline.py                   |       26 |        0 |    100% |           |
 | tests/eval/test\_eval\_fixture.py                    |      172 |        1 |     99% |       150 |
 | tests/eval/test\_eval\_harness.py                    |       95 |        0 |    100% |           |
-| tests/eval/test\_ranking\_eval.py                    |      418 |        0 |    100% |           |
+| tests/eval/test\_ranking\_eval.py                    |      419 |        0 |    100% |           |
 | tests/eval/test\_ranking\_replay.py                  |       50 |        0 |    100% |           |
 | tests/eval/test\_regen\_baseline.py                  |       52 |        0 |    100% |           |
 | tests/eval/test\_size\_baseline.py                   |       42 |        0 |    100% |           |
 | tests/naming\_check.py                               |      105 |      105 |      0% |    12-162 |
-| tests/test\_activity.py                              |      148 |        0 |    100% |           |
+| tests/test\_activity.py                              |      149 |        0 |    100% |           |
 | tests/test\_audit.py                                 |      251 |        0 |    100% |           |
 | tests/test\_cli.py                                   |      513 |        2 |     99% |   56, 249 |
 | tests/test\_config.py                                |      173 |        0 |    100% |           |
 | tests/test\_database.py                              |     1850 |        2 |     99% | 589, 1744 |
-| tests/test\_dream.py                                 |      483 |        3 |     99% |429-430, 527 |
-| tests/test\_dream\_status.py                         |      200 |        0 |    100% |           |
+| tests/test\_dream.py                                 |      484 |        3 |     99% |430-431, 528 |
+| tests/test\_dream\_status.py                         |      201 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      280 |        0 |    100% |           |
 | tests/test\_hooks\_plugin.py                         |     1065 |       67 |     94% |708, 1694-1699, 1704-1707, 1712-1720, 1731-1734, 1763-1766, 1808-1811, 1815-1818, 1822-1826, 1830-1832, 1837-1839, 1844-1849, 1853-1854, 1858-1860, 1865-1873 |
 | tests/test\_metrics.py                               |      194 |        0 |    100% |           |
@@ -96,8 +96,8 @@
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
-| tests/test\_visualise.py                             |      558 |        0 |    100% |           |
-| **TOTAL**                                            | **13397** |  **456** | **97%** |           |
+| tests/test\_visualise.py                             |      559 |        0 |    100% |           |
+| **TOTAL**                                            | **13402** |  **456** | **97%** |           |
 
 
 ## Setup coverage badge
