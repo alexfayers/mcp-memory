@@ -2,6 +2,8 @@
 
 `mcp-memory` with no arguments runs the server in the foreground. Run `mcp-memory <command> --help` for flags.
 
+`audit`, `eval`, `metrics`, `export` and `import` call the running server at `MCP_MEMORY_URL` and fail when it is not reachable. `migrate-db` works on the database file directly.
+
 | Command | What it does |
 |---|---|
 | `setup-service [--port] [--db-path]` | Install the background service |

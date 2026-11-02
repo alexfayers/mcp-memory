@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
-import sqlite3
 import sys
-
-from .config import get_db_path
 
 _CASE_INSENSITIVE_PLATFORMS = {"darwin", "win32"}
 
@@ -45,24 +42,3 @@ def match_project_for_path(target: str, mappings: Iterable[tuple[str, str]]) -> 
             if depth > best_depth:
                 best_name, best_depth = name, depth
     return best_name
-
-
-def resolve_project_for_path(path: str, db_path: Path | None = None) -> str | None:
-    """Resolve a path to its project via a read-only database lookup.
-
-    Returns None on any database error (missing file, missing table, corruption) so
-    callers can fall back to other detection without surfacing failures.
-    """
-    resolved_db = db_path or get_db_path()
-    conn: sqlite3.Connection | None = None
-    try:
-        conn = sqlite3.connect(f"file:{resolved_db}?mode=ro", uri=True)
-        rows = conn.execute(
-            "SELECT p.name, pp.path FROM project_paths pp JOIN projects p ON pp.project_id = p.id"
-        ).fetchall()
-    except (sqlite3.Error, OSError):
-        return None
-    finally:
-        if conn is not None:
-            conn.close()
-    return match_project_for_path(path, [(name, registered) for name, registered in rows])

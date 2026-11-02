@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -11,7 +10,6 @@ import pytest
 from mcp_memory import cli
 from mcp_memory.audit import audit_graph, propose_plan
 from mcp_memory.models import Relation
-from mcp_memory.storage import open_readonly, open_writable
 from mcp_memory.storage.services.ids import (
     get_entity_id,
     get_or_create_project_id,
@@ -21,6 +19,7 @@ from tests import soft_delete_store
 
 if TYPE_CHECKING:
     from mcp_memory.storage import Storage
+    from tests.conftest import FakeApi
 
 
 def _names(findings: list[dict[str, object]]) -> set[str]:
@@ -474,60 +473,20 @@ class TestProposePlan:
 
 
 class TestAuditCommand:
-    def test_emits_json_for_scope(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        db_path = tmp_path / "memory.db"
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        open_writable(db_path).entities.create(
-            "proj", [{"name": "task/lonely", "entityType": "task", "observations": ["o"]}]
-        )
+    def test_prints_the_report_for_the_scope(self, api: FakeApi, capsys: pytest.CaptureFixture[str]) -> None:
+        api.results["audit"] = {"project": "proj", "orphans": []}
 
         cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False))
 
-        report = json.loads(capsys.readouterr().out)
-        assert report["project"] == "proj"
-        assert _names(report["orphans"]) == {"task/lonely"}
+        assert api.calls == [("audit", {"project": "proj", "plan": False})]
+        assert json.loads(capsys.readouterr().out)["project"] == "proj"
 
-    def test_propose_plan_emits_steps(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        db_path = tmp_path / "memory.db"
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        open_writable(db_path).entities.create(
-            "proj", [{"name": "RandomThing", "entityType": "task", "observations": ["o"]}]
-        )
+    def test_propose_plan_asks_for_all_projects_plan(self, api: FakeApi) -> None:
+        api.results["audit"] = {"steps": []}
 
-        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=True))
+        cli._cmd_audit(cli.argparse.Namespace(project=None, all_projects=True, propose_plan=True))
 
-        payload = json.loads(capsys.readouterr().out)
-        assert "rename_entity" in [s["tool"] for s in payload["steps"]]
-
-    def test_does_not_archive_stale_entities(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        db_path = tmp_path / "memory.db"
-        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(db_path))
-        seeded = open_writable(db_path)
-        seeded.entities.create(
-            "proj",
-            [
-                {
-                    "name": "task/old",
-                    "entityType": "task",
-                    "observations": ["o"],
-                    "status": "resolved",
-                }
-            ],
-        )
-        with seeded.connection.transaction():
-            seeded.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days')")
-        seeded.connection.close()
-
-        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False))
-        capsys.readouterr()
-
-        assert open_readonly(db_path).reads.get_entity("proj", "task/old").status == "resolved"
+        assert api.calls == [("audit", {"project": None, "plan": True})]
 
     def test_parser_requires_a_scope(self) -> None:
         parser = cli._build_parser()

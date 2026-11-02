@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import contextlib
 from datetime import UTC, datetime
 import json
 import os
@@ -10,9 +11,6 @@ from pathlib import Path
 import random
 import re
 import socket
-import sqlite3
-import textwrap
-from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from cline_hooks.core.parameters import FileEditParameters, ReadParameters
@@ -28,7 +26,8 @@ from cline_hooks.core.vocabulary import (
 )
 from cline_hooks.plugins.startup_blocks import StartupBlock
 
-from mcp_memory.config import get_db_path, get_memory_url, get_workspace_markers
+from mcp_memory import api_client
+from mcp_memory.config import get_memory_url, get_workspace_markers
 from mcp_memory.hooks.review_tracker import (
     record_write,
     reset as reset_review,
@@ -51,14 +50,9 @@ from mcp_memory.hooks.tracker import (
     should_warn,
     tick_turn,
 )
-from mcp_memory.path_resolver import normalize_path, resolve_project_for_path
-from mcp_memory.storage import open_readonly, open_writable
+from mcp_memory.path_resolver import match_project_for_path
 from mcp_memory.storage.pure.rows import strip_today_date_prefix
 from mcp_memory.tool_names import DEDUPED_READ_TOOLS, MUTATING_TOOLS, READ_ONLY_TOOLS
-
-if TYPE_CHECKING:
-    from mcp_memory.models import Entity
-    from mcp_memory.storage import Storage
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(MUTATING_TOOLS)
 _MEMORY_WRITE_CALL = re.compile(rf"_(?:{'|'.join(map(re.escape, MUTATING_TOOLS))})\b")
@@ -125,9 +119,6 @@ _READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
 
 _FILE_EDIT_TOOLS_ENV = "MCP_MEMORY_EDIT_TOOLS"
 _EDIT_TOOL_WEIGHT = 0.25
-
-_START_OBSERVATION_CHARS = 80
-_START_PROJECT_RELATIONS = 15
 
 _DEFAULT_WRAPPER_TOOLS = frozenset({"codemode"})
 _WRAPPER_TOOLS_ENV = "MCP_MEMORY_WRAPPER_TOOLS"
@@ -279,34 +270,18 @@ def _registration_target(workspace_roots: list[str]) -> tuple[Path, str] | None:
     return resolved
 
 
+def resolve_project_for_path(path: str) -> str | None:
+    """Resolve a path to its project through the server, or None when the server cannot answer."""
+    try:
+        paths = api_client.call("project-paths", timeout=_LIVENESS_TIMEOUT_SECONDS)
+    except api_client.ApiError:
+        return None
+    return match_project_for_path(path, [(name, registered) for name, group in paths.items() for registered in group])
+
+
 def _resolve_project(path: str) -> str | None:
     """Resolve a path to a project, preferring registered paths over .git detection."""
     return resolve_project_for_path(path) or _find_project_from_path(path)
-
-
-def _safe_project(anchor: Path, basename: str, db: Storage) -> str | None:
-    """Return the project an anchor may be safely registered to, or None.
-
-    Only identifies a project that already exists, never invents one:
-    - if the anchor (or an ancestor) is already registered, reuse that project - this
-      also means an existing mapping is never overwritten;
-    - else if a sibling package under the anchor is already mapped to a single project,
-      reuse it so the whole workspace collapses to that scope;
-    - else if a project scope already exists whose name matches the repository-root
-      folder name (case-insensitively), pin to that project;
-    - otherwise return None so the caller prompts for deliberate registration.
-    """
-    existing = db.projects.get_project_for_path(str(anchor))
-    if existing:
-        return existing
-    anchor_norm = Path(normalize_path(str(anchor)))
-    below = {project for project, registered in db.projects.paths() if Path(registered).is_relative_to(anchor_norm)}
-    if len(below) == 1:
-        return next(iter(below))
-    for project in db.projects.names():
-        if project.casefold() == basename.casefold():
-            return project
-    return None
 
 
 _SCOPE_MISMATCH_WARNING = (
@@ -409,7 +384,7 @@ def _resolved_project_set(workspace_roots: list[str]) -> list[str]:
 
     Group siblings come from the project_groups table (set via projects.set_groups),
     so distinct project scopes can be scanned together without a hardcoded name or
-    a cross-scope relation (relations are hard-scoped to one project). A DB failure
+    a cross-scope relation (relations are hard-scoped to one project). A server failure
     degrades to [global, repo-name] rather than breaking task start.
     """
     projects = ["global"]
@@ -417,70 +392,15 @@ def _resolved_project_set(workspace_roots: list[str]) -> list[str]:
         return projects
     repo_name = _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name
     projects.append(repo_name)
-    try:
-        db = open_readonly(get_db_path())
-        projects.extend(db.projects.group_members(repo_name))
-    except (sqlite3.Error, OSError):
-        pass
+    with contextlib.suppress(api_client.ApiError):
+        projects.extend(api_client.call("group-members", {"project": repo_name}, timeout=_LIVENESS_TIMEOUT_SECONDS))
     return projects
 
 
-def _entity_lines(entity: Entity) -> tuple[str, str]:
-    """Return an entity's line without and with its first observation."""
-    details = [entity.entity_type]
-    if entity.status:
-        details.append(entity.status)
-    brief = f"- {entity.name} ({', '.join(details)})"
-    if not entity.observations:
-        return brief, brief
-    observation = textwrap.shorten(entity.observations[0].content, _START_OBSERVATION_CHARS, placeholder="...")
-    return brief, f"{brief}: {observation}"
-
-
 def _recent_memory(repo: str, left: int | None) -> str:
-    """Return the recent memory of `global` and the repo project, fitted to the characters left.
-
-    Every entity name is included. First observations, then the repo project entity's relations,
-    are added in order while they fit.
-
-    Args:
-        repo: The workspace's memory project.
-        left: The characters available, or None for no limit.
-
-    Returns:
-        The rendered memory.
-    """
-    project_entity = f"project/{repo}"
-    db = open_readonly(get_db_path())
-    try:
-        global_entities = db.reads.recent("global", max_observation_chars=0)["entities"]
-        repo_entities = db.reads.recent(repo, max_observation_chars=0)["entities"]
-        try:
-            graph = db.reads.get_entity_with_relations(repo, project_entity, max_observation_chars=0)
-        except ValueError:
-            graph = None
-    finally:
-        db.connection.close()
-    relations: list[str] = []
-    if graph is not None:
-        repo_entities = [graph["entity"], *(entity for entity in repo_entities if entity.name != project_entity)]
-        relations = [
-            f"{relation.source} -{relation.relation_type}-> {relation.target}"
-            for relation in graph["relations"][:_START_PROJECT_RELATIONS]
-        ]
-    lines: list[tuple[str, str]] = []
-    for heading, entities, extra in (("## global", global_entities, []), (f"\n## {repo}", repo_entities, relations)):
-        if entities:
-            lines.append((heading, heading))
-            lines.extend(_entity_lines(entity) for entity in entities)
-            lines.extend(("", relation) for relation in extra)
-    shown = [brief for brief, _ in lines]
-    for index, (_, full) in enumerate(lines):
-        fuller = [*shown[:index], full, *shown[index + 1 :]]
-        if left is not None and len("\n".join(line for line in fuller if line)) > left:
-            break
-        shown = fuller
-    return "\n".join(line for line in shown if line).strip("\n")
+    """Return the server-rendered recent memory of `global` and the repo project, fitted to the characters left."""
+    args = {"project": repo, "left": left}
+    return str(api_client.call("recent-memory", args, timeout=_LIVENESS_TIMEOUT_SECONDS))
 
 
 def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
@@ -770,7 +690,7 @@ class MemoryPlugin(HooksPlugin):
 
         Best-effort and non-destructive: registers the workspace only when its project
         can be identified safely (see _safe_project) and never overwrites an existing
-        mapping or the home directory. A database failure is swallowed so task start is
+        mapping or the home directory. A server failure is swallowed so task start is
         never broken. Returns None when a path is registered silently or nothing is done,
         and a guidance note when the workspace maps to no identifiable project.
         """
@@ -779,13 +699,12 @@ class MemoryPlugin(HooksPlugin):
             return None
         anchor, basename = target
         try:
-            db = open_writable(get_db_path())
-            project = _safe_project(anchor, basename, db)
-            if project is None:
-                return _AUTO_REGISTER_UNKNOWN_NOTE.format(anchor=anchor)
-            db.projects.add_path(project, str(anchor))
-        except (sqlite3.Error, OSError):
+            args = {"anchor": str(anchor), "basename": basename}
+            project = api_client.call("register-workspace", args, timeout=_LIVENESS_TIMEOUT_SECONDS)
+        except api_client.ApiError:
             return None
+        if project is None:
+            return _AUTO_REGISTER_UNKNOWN_NOTE.format(anchor=anchor)
         return _AUTO_REGISTERED_NOTE.format(project=project, anchor=anchor)
 
     def _on_task_end(self, **kwargs: object) -> None:

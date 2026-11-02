@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,10 +11,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mcp_memory import cli
+from mcp_memory.api_client import ApiError
 from mcp_memory.export_import import (
     EXPORT_FORMAT,
     EXPORT_FORMAT_VERSION,
-    export_database,
+    ImportSummary,
+    export_database as build_export,
     import_projects,
     load_export,
 )
@@ -24,6 +27,12 @@ from tests import soft_delete_store
 
 if TYPE_CHECKING:
     from mcp_memory.storage import Storage
+    from tests.conftest import FakeApi
+
+
+def export_database(db: Storage, output_path: Path) -> None:
+    output_path.write_text(json.dumps(build_export(db)), encoding="utf-8")
+
 
 _OLD_TS = "2020-01-01 00:00:00"
 
@@ -321,62 +330,55 @@ class TestSchemaGuard:
 
 
 class TestCli:
-    def test_omitting_project_lists_and_writes_nothing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    def test_omitting_project_lists_and_calls_nothing(
+        self, tmp_path: Path, api: FakeApi, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
-        export_database(src, out)
-        src.connection.close()
+        export_database(_make_db(tmp_path / "src.db"), out)
 
-        dest_path = tmp_path / "dest.db"
-        monkeypatch.setattr(cli, "get_db_path", lambda: dest_path)
         cli._cmd_import(argparse.Namespace(input_path=str(out), project=None, dry_run=False))
 
         captured = capsys.readouterr().out
         assert "global" in captured
         assert "proj" in captured
+        assert api.calls == []
 
-        dest = open_writable(dest_path)
-        assert "proj" not in dest.projects.names()
-        dest.connection.close()
-
-    def test_export_then_import_round_trip_via_cli(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    def test_export_writes_the_servers_document(
+        self, tmp_path: Path, api: FakeApi, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        src_path = tmp_path / "src.db"
-        _make_db(src_path).connection.close()
         out = tmp_path / "export.json"
-        monkeypatch.setattr(cli, "get_db_path", lambda: src_path)
+        api.results["export"] = {"format": EXPORT_FORMAT}
         cli._cmd_export(argparse.Namespace(output_path=str(out)))
-        assert out.exists()
+        assert json.loads(out.read_text(encoding="utf-8")) == {"format": EXPORT_FORMAT}
+        assert str(out) in capsys.readouterr().out
 
-        dest_path = tmp_path / "dest.db"
-        monkeypatch.setattr(cli, "get_db_path", lambda: dest_path)
-        cli._cmd_import(argparse.Namespace(input_path=str(out), project="proj", dry_run=False))
-        assert "Import summary" in capsys.readouterr().out
-
-        dest = open_writable(dest_path)
-        assert dest.entities.exists_in("task/t", "proj")
-        dest.connection.close()
-
-    def test_summary_printed_for_dry_run_and_real(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    def test_import_sends_the_file_and_prints_the_summary(
+        self, tmp_path: Path, api: FakeApi, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        src = _make_db(tmp_path / "src.db")
         out = tmp_path / "export.json"
-        export_database(src, out)
-        src.connection.close()
+        export_database(_make_db(tmp_path / "src.db"), out)
+        api.results["import"] = asdict(ImportSummary(entities_new=2, dry_run=True))
 
-        dest_path = tmp_path / "dest.db"
-        monkeypatch.setattr(cli, "get_db_path", lambda: dest_path)
+        cli._cmd_import(argparse.Namespace(input_path=str(out), project="proj, global", dry_run=True))
 
-        cli._cmd_import(argparse.Namespace(input_path=str(out), project="proj", dry_run=True))
-        dry_out = capsys.readouterr().out
-        assert "dry run" in dry_out
-        assert "Import summary" in dry_out
+        ((op, args),) = api.calls
+        assert (op, args["projects"], args["dry_run"], args["data"]) == (
+            "import",
+            ["proj", "global"],
+            True,
+            load_export(out),
+        )
+        assert "[dry run] Import summary" in capsys.readouterr().out
 
-        cli._cmd_import(argparse.Namespace(input_path=str(out), project="proj", dry_run=False))
-        real_out = capsys.readouterr().out
-        assert "Import summary" in real_out
-        assert "dry run" not in real_out
+    def test_import_failure_exits_with_the_servers_message(
+        self, tmp_path: Path, api: FakeApi, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = tmp_path / "export.json"
+        export_database(_make_db(tmp_path / "src.db"), out)
+        api.results["import"] = ApiError("Project(s) not found in export file: nope")
+
+        with pytest.raises(SystemExit) as excinfo:
+            cli._cmd_import(argparse.Namespace(input_path=str(out), project="nope", dry_run=False))
+
+        assert excinfo.value.code == 1
+        assert "Project(s) not found in export file: nope" in capsys.readouterr().err
