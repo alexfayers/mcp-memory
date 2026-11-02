@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import sqlite3
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -399,9 +400,9 @@ class TestEvaluateCachedAsync:
         monkeypatch.setattr(ranking_eval, "_evaluate_readonly", counting_evaluate_readonly)
         monkeypatch.setattr(ranking_eval, "get_eval_cache_ttl_seconds", lambda: 60)
 
-        monkeypatch.setattr(ranking_eval.time, "monotonic", lambda: 1000.0)
+        monkeypatch.setattr(ranking_eval, "time", SimpleNamespace(monotonic=lambda: 1000.0))
         await ranking_eval.evaluate_cached_async(store, k=5)
-        monkeypatch.setattr(ranking_eval.time, "monotonic", lambda: 1061.0)
+        monkeypatch.setattr(ranking_eval, "time", SimpleNamespace(monotonic=lambda: 1061.0))
         await ranking_eval.evaluate_cached_async(store, k=5)
 
         assert calls == 2

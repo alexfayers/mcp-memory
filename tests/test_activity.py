@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -248,24 +249,24 @@ class TestReadExtraction:
 
 class TestActivityMarker:
     def test_recording_advances_last_activity(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1000.0))
         activity.record_tool("list_metadata", {}, {"projects": []})
         assert activity.last_activity() == 1000.0
 
     def test_idle_seconds_measures_gap_since_last_activity(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1000.0))
         activity.record_tool("list_metadata", {}, {"projects": []})
-        monkeypatch.setattr(activity.time, "time", lambda: 1075.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1075.0))
         assert activity.idle_seconds() == 75.0
 
     def test_errored_call_still_counts_as_activity(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(activity.time, "time", lambda: 4242.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 4242.0))
         activity.record_tool("delete_entity", {"project": "p", "name": "e1"}, {"error": "boom"})
         assert activity.recent(0) == []
         assert activity.last_activity() == 4242.0
 
     def test_marker_persists_to_disk_and_seeds_after_clear(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(activity.time, "time", lambda: 5000.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 5000.0))
         activity.record_tool("list_metadata", {}, {"projects": []})
         assert json.loads(activity._marker_path().read_text())["last_activity"] == 5000.0
 
@@ -273,14 +274,14 @@ class TestActivityMarker:
         assert activity.last_activity() == 5000.0
 
     def test_fresh_install_seeds_now_not_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(activity.time, "time", lambda: 9000.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 9000.0))
         assert activity.last_activity() == 9000.0
         assert activity.idle_seconds() == 0.0
 
     def test_disk_write_is_throttled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(activity.time, "time", lambda: 1000.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1000.0))
         activity.record_tool("list_metadata", {}, {"projects": []})
-        monkeypatch.setattr(activity.time, "time", lambda: 1005.0)
+        monkeypatch.setattr(activity, "time", SimpleNamespace(time=lambda: 1005.0))
         activity.record_tool("list_metadata", {}, {"projects": []})
         assert json.loads(activity._marker_path().read_text())["last_activity"] == 1000.0
         assert activity.last_activity() == 1005.0

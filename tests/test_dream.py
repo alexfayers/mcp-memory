@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -322,7 +323,7 @@ class TestCoordinatorTick:
         tiers: list[dream.TierSpec],
     ) -> None:
         monkeypatch.setattr(dream.activity, "idle_seconds", lambda: idle)
-        monkeypatch.setattr(dream.time, "monotonic", lambda: now)
+        monkeypatch.setattr(dream, "time", SimpleNamespace(monotonic=lambda: now))
         monkeypatch.setattr(dream, "_enabled_tiers", lambda: tiers)
         monkeypatch.setattr(dream.dream_status, "record_pass_start", lambda _tier: None)
         monkeypatch.setattr(dream.dream_status, "record_pass", lambda *_a, **_k: None)
@@ -349,7 +350,7 @@ class TestCoordinatorTick:
         assert runs == ["light"]
         # Still idle a poll later - the tier has fired this session, so it holds off.
         monkeypatch.setattr(dream.activity, "idle_seconds", lambda: 2100.0)
-        monkeypatch.setattr(dream.time, "monotonic", lambda: 100_300.0)
+        monkeypatch.setattr(dream, "time", SimpleNamespace(monotonic=lambda: 100_300.0))
         asyncio.run(dream._coordinator_tick())
         assert runs == ["light"]
 
@@ -369,7 +370,7 @@ class TestCoordinatorTick:
         asyncio.run(dream._coordinator_tick())
         # The clock climbs to 90 min in the SAME session; heavy fires, light does not re-fire.
         monkeypatch.setattr(dream.activity, "idle_seconds", lambda: 5400.0)
-        monkeypatch.setattr(dream.time, "monotonic", lambda: 103_600.0)
+        monkeypatch.setattr(dream, "time", SimpleNamespace(monotonic=lambda: 103_600.0))
         asyncio.run(dream._coordinator_tick())
         assert runs == ["light", "heavy"]
 
@@ -390,10 +391,10 @@ class TestCoordinatorTick:
         assert runs == ["light"]
         # The user returns (marker touched well after our pass), then goes idle again.
         monkeypatch.setattr(dream.activity, "idle_seconds", lambda: 50.0)
-        monkeypatch.setattr(dream.time, "monotonic", lambda: 200_000.0)
+        monkeypatch.setattr(dream, "time", SimpleNamespace(monotonic=lambda: 200_000.0))
         asyncio.run(dream._coordinator_tick())
         monkeypatch.setattr(dream.activity, "idle_seconds", lambda: 1800.0)
-        monkeypatch.setattr(dream.time, "monotonic", lambda: 205_000.0)
+        monkeypatch.setattr(dream, "time", SimpleNamespace(monotonic=lambda: 205_000.0))
         asyncio.run(dream._coordinator_tick())
         assert runs == ["light", "light"]
 
@@ -448,7 +449,7 @@ class TestRunGuarded:
         # last_pass_end is what lets the coordinator attribute a marker reset to the
         # dream itself; it must be stamped at the end of every claimed pass.
         monkeypatch.setattr(dream.dream_status, "record_pass", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(dream.time, "monotonic", lambda: 123_456.0)
+        monkeypatch.setattr(dream, "time", SimpleNamespace(monotonic=lambda: 123_456.0))
         spec = _tier_spec("light", _acoro("nothing demoted"))  # type: ignore[arg-type]
         asyncio.run(dream._run_guarded(spec))
         assert dream._session.last_pass_end == 123_456.0
