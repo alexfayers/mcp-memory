@@ -100,6 +100,26 @@ def clear(task_id: str) -> None:
             _write(data)
 
 
+def _drop(task_id: str, names: tuple[str, ...]) -> None:
+    """Remove the task's entries whose key starts with one of these names."""
+    prefixes = tuple(f"{task_id}:{name}" for name in names)
+    with _locked():
+        data = _read()
+        for key in [key for key in data if key.startswith(prefixes)]:
+            del data[key]
+        _write(data)
+
+
+def reset_work(task_id: str) -> None:
+    """Forget what the task's current piece of work has edited, written and been reminded of."""
+    _drop(task_id, ("wrote:", "edited", "edit_path", "once:", "wide_edit"))
+
+
+def reset_context_window(task_id: str) -> None:
+    """Start a new context window for the task, as after a compaction."""
+    _drop(task_id, ("window", "turn"))
+
+
 def tick_turn(task_id: str, amount: int = 1) -> int:
     """Add to the task's context-window turn counter and return it."""
     return int(increment(f"{task_id}:turn", amount))
@@ -149,18 +169,85 @@ def set_scope(task_id: str, project: str) -> None:
         _write(data)
 
 
+def _is_flagged(key: str) -> bool:
+    """Return True if the flag stored under this key is set."""
+    with _locked():
+        return _read().get(key) is True
+
+
+def _flag(key: str) -> None:
+    """Set the flag stored under this key."""
+    with _locked():
+        data = _read()
+        data[key] = True
+        _write(data)
+
+
 def has_edited(task_id: str) -> bool:
     """Return True if the task has made a file edit."""
-    with _locked():
-        return _read().get(f"{task_id}:edited") is True
+    return _is_flagged(f"{task_id}:edited")
 
 
 def mark_edited(task_id: str) -> None:
     """Record that the task has made a file edit."""
+    _flag(f"{task_id}:edited")
+
+
+def has_wide_edit(task_id: str) -> bool:
+    """Return True if the task's work went past one existing file."""
+    return _is_flagged(f"{task_id}:wide_edit")
+
+
+def mark_wide_edit(task_id: str) -> None:
+    """Record that the task's work went past one existing file."""
+    _flag(f"{task_id}:wide_edit")
+
+
+def mark_failed(task_id: str) -> None:
+    """Record that a shell command failed and has not yet been followed by a success."""
+    _flag(f"{task_id}:failed")
+
+
+def pop_failed(task_id: str) -> bool:
+    """Return True and clear the flag if a shell command failed since the last call."""
     with _locked():
         data = _read()
-        data[f"{task_id}:edited"] = True
+        failed = data.pop(f"{task_id}:failed", False) is True
+        if failed:
+            _write(data)
+        return failed
+
+
+def claim_once(task_id: str, name: str) -> bool:
+    """Return True the first time this one-off is claimed for the task, False afterwards."""
+    with _locked():
+        data = _read()
+        key = f"{task_id}:once:{name}"
+        if data.get(key) is True:
+            return False
+        data[key] = True
         _write(data)
+        return True
+
+
+def has_written(task_id: str, kind: str) -> bool:
+    """Return True if the task has written to an entity of this kind (e.g. `feature`, `task`)."""
+    return _is_flagged(f"{task_id}:wrote:{kind}")
+
+
+def mark_written(task_id: str, kind: str) -> None:
+    """Record that the task has written to an entity of this kind."""
+    _flag(f"{task_id}:wrote:{kind}")
+
+
+def claim_edit_path(task_id: str, path: str) -> bool:
+    """Return True if this path is the task's first edited file or was already claimed as it."""
+    with _locked():
+        data = _read()
+        stored = data.setdefault(f"{task_id}:edit_path", path)
+        if stored == path:
+            _write(data)
+        return stored == path
 
 
 def get_reminder_chance(task_id: str, default: float) -> float:

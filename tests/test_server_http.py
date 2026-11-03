@@ -9,6 +9,7 @@ import socket
 from typing import TYPE_CHECKING
 
 from mcp import Client
+from mcp.types import CallToolResult
 import pytest
 import uvicorn
 
@@ -64,16 +65,27 @@ def test_sync_tools_touching_sqlite_work_over_streamable_http() -> None:
         "relations": [{"target": "project/p", "relation_type": "part-of"}],
     }
 
-    async def scenario() -> tuple[dict[str, object], dict[str, object]]:
+    async def scenario() -> tuple[CallToolResult, CallToolResult]:
         async with _serving() as url, Client(url) as client:
             created = await client.call_tool("create_entities", {"project": "p", "entities": [entity]})
             found = await client.call_tool("search_nodes", {"project": "p", "query": "hello"})
-            return created.structured_content, found.structured_content
+            return created, found
 
     created, found = asyncio.run(scenario())
-    assert "error" not in created
-    assert "error" not in found
-    assert found["entities"]
+    assert not created.is_error
+    assert not found.is_error
+    assert found.structured_content["entities"]
+
+
+@pytest.mark.usefixtures("server_db")
+def test_failed_tool_call_is_an_mcp_error_with_the_message_text() -> None:
+    async def scenario() -> CallToolResult:
+        async with _serving() as url, Client(url) as client:
+            return await client.call_tool("list_metadata", {"kind": "bogus"})
+
+    result = asyncio.run(scenario())
+    assert result.is_error
+    assert result.content[0].text == "Invalid kind 'bogus'. Must be one of: projects, paths, groups."
 
 
 @pytest.mark.usefixtures("server_db")
@@ -88,12 +100,12 @@ def test_concurrent_sync_tools_work_over_streamable_http() -> None:
             "relations": [{"target": "project/p", "relation_type": "part-of"}],
         }
 
-    async def scenario() -> list[dict[str, object]]:
+    async def scenario() -> list[CallToolResult]:
         async with _serving() as url, Client(url) as client:
             calls = [
                 client.call_tool("create_entities", {"project": "p", "entities": [entity(i)]}) for i in range(count)
             ] + [client.call_tool("search_nodes", {"project": "p", "query": "hello"}) for _ in range(count)]
-            return [r.structured_content for r in await asyncio.gather(*calls)]
+            return list(await asyncio.gather(*calls))
 
-    errors = [r["error"] for r in asyncio.run(scenario()) if "error" in r]
+    errors = [r.content[0].text for r in asyncio.run(scenario()) if r.is_error]
     assert not errors

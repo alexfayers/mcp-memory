@@ -9,7 +9,7 @@ import contextlib
 from pathlib import Path
 import threading
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -40,11 +40,16 @@ def server_db(tmp_path: Path) -> Iterator[Storage]:
 
 
 class _StructuredTools:
-    """Server tools called directly, each returning its result's structured content."""
+    """Server tools called directly, each returning its structured content, or ``{"error": text}`` on a tool error."""
 
     def __getattr__(self, name: str) -> Callable[..., Any]:
         tool = getattr(server, name)
-        return lambda *args, **kwargs: tool(*args, **kwargs).structured_content
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            result = tool(*args, **kwargs)
+            return {"error": result.content[0].text} if result.is_error else result.structured_content
+
+        return call
 
 
 tools = _StructuredTools()
@@ -103,6 +108,15 @@ class TestValidateEntityTypes:
                     }
                 ],
             )
+
+    @pytest.mark.parametrize(
+        ("entity_type", "hint"),
+        [("task", r"implements.*feature.*same call"), ("pattern", r"part-of.*broader pattern.*same call")],
+    )
+    def test_relation_error_says_what_to_link_to_in_the_same_call(self, entity_type: str, hint: str) -> None:
+        entity = {"name": f"{entity_type}/x", "entityType": entity_type, "observations": []}
+        with pytest.raises(ValueError, match=hint):
+            _validate_and_extract_relations("proj", [entity])
 
     def test_pattern_requires_relation(self) -> None:
         with pytest.raises(ValueError, match=r"requires at least one relation.*inline"):
@@ -617,6 +631,105 @@ class TestAddObservationsTool:
         assert result["hashes"] == [hash_observation("b"), hash_observation("c")]
 
 
+class TestStatusObservationsRejected:
+    _REJECTED: ClassVar[list[str]] = ["status: in-progress", "  Status: resolved", "STATUS:x"]
+    _ACCEPTED: ClassVar[list[str]] = [
+        "statuses are listed in the report",
+        "Status code 404 handling",
+        "Decision: cache the total",
+    ]
+
+    @pytest.fixture
+    def entity(self, server_db: Storage) -> Storage:
+        server_db.entities.create("proj", [{"name": "task/e1", "entityType": "task", "observations": ["seed"]}])
+        return server_db
+
+    @staticmethod
+    def _observations(db: Storage, name: str = "task/e1") -> list[str]:
+        return obs_contents(db.reads.get_entity("proj", name))
+
+    @pytest.mark.parametrize("text", _REJECTED)
+    def test_add_observations_rejects_and_writes_nothing(self, entity: Storage, text: str) -> None:
+        result = tools.add_observations("proj", "task/e1", ["fine", text])
+        assert "set_entity_status" in result["error"]
+        assert self._observations(entity) == ["seed"]
+
+    @pytest.mark.parametrize("text", _REJECTED)
+    def test_create_entities_rejects_and_writes_nothing(self, server_db: Storage, text: str) -> None:
+        entities = [
+            {"name": "feature/proj/a", "entityType": "feature", "observations": ["fine"], "relations": []},
+            {"name": "task/b", "entityType": "task", "observations": ["fine", text]},
+        ]
+        result = tools.create_entities("proj", entities)
+        assert "set_entity_status" in result["error"]
+        assert server_db.reads.search("proj", "fine")["entities"] == []
+
+    @pytest.mark.parametrize("text", _REJECTED)
+    def test_edit_observation_rejects_and_keeps_the_text(self, entity: Storage, text: str) -> None:
+        result = tools.edit_observation("proj", "task/e1", hash_observation("seed"), text)
+        assert "set_entity_status" in result["error"]
+        assert self._observations(entity) == ["seed"]
+
+    def test_edit_observation_rejects_new_text_with_old_text_too(self, entity: Storage) -> None:
+        result = tools.edit_observation("proj", "task/e1", hash_observation("seed"), "status: done", oldText="seed")
+        assert "set_entity_status" in result["error"]
+        assert self._observations(entity) == ["seed"]
+
+    def test_edit_observation_rejects_a_partial_edit_that_makes_the_result_start_with_status(
+        self, server_db: Storage
+    ) -> None:
+        server_db.entities.create("proj", [{"name": "task/e2", "entityType": "task", "observations": ["State: done"]}])
+        result = tools.edit_observation("proj", "task/e2", hash_observation("State: done"), "Status", oldText="State")
+        assert "set_entity_status" in result["error"]
+        assert self._observations(server_db, "task/e2") == ["State: done"]
+
+    def test_edit_observation_accepts_a_partial_edit_whose_fragment_starts_with_status(
+        self, server_db: Storage
+    ) -> None:
+        server_db.entities.create("proj", [{"name": "task/e2", "entityType": "task", "observations": ["Note: old"]}])
+        result = tools.edit_observation("proj", "task/e2", hash_observation("Note: old"), "status: new", oldText="old")
+        assert "error" not in result
+
+    @pytest.mark.parametrize("text", _ACCEPTED)
+    def test_other_text_is_accepted_on_every_path(self, entity: Storage, text: str) -> None:
+        assert "error" not in tools.add_observations("proj", "task/e1", [text])
+        assert "error" not in tools.edit_observation("proj", "task/e1", hash_observation(text), text + " v2")
+        created = {
+            "name": "feature/proj/ok",
+            "entityType": "feature",
+            "observations": [text],
+            "relations": [{"target": "project/proj", "type": "part-of"}],
+        }
+        assert "error" not in tools.create_entities("proj", [created])
+
+
+class TestWriteGuidanceInDescriptions:
+    @staticmethod
+    def _description(tool: str) -> str:
+        return next(t.description or "" for t in asyncio.run(server.mcp.list_tools()) if t.name == tool)
+
+    @pytest.mark.parametrize("tool", ["add_observations", "create_entities", "edit_observation"])
+    def test_description_says_an_observation_cannot_start_with_status(self, tool: str) -> None:
+        assert "starting with 'status:' is rejected: use set_entity_status" in self._description(tool)
+
+    @pytest.mark.parametrize("tool", ["add_observations", "create_entities"])
+    def test_description_states_what_is_worth_writing_and_what_a_feature_holds(self, tool: str) -> None:
+        description = self._description(tool)
+        assert "can't get from code or git" in description
+        assert "Bad: 'Added total field'" in description
+        assert "one caller-view line" in description
+        assert "user's stated decisions" in description
+        assert "never holds a status line, task text or the ask" in description
+        assert "knowledge/" in description
+
+    def test_description_makes_a_task_an_instruction_of_only_what_was_asked(self) -> None:
+        description = self._description("add_observations")
+        assert "A task holds an instruction" in description
+        assert "Add a tag filter to the list endpoint, with tests" in description
+        assert "git can't show" in description
+        assert "outcome observation" not in self._description("trim_observations_to_outcome")
+
+
 class TestDeleteObservationsTool:
     def test_delete_by_content(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
@@ -637,6 +750,10 @@ class TestTrimObservationsToOutcomeTool:
         result = tools.trim_observations_to_outcome("proj", "e1", [hash_observation("a")])
         assert result == {"message": "Trimmed 2 observation(s) from 'e1'.", "deleted": 2}
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a"]
+
+    def test_bloat_warning_does_not_ask_for_an_outcome_summary(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c", "d"]}])
+        assert "outcome summary" not in str(tools.set_entity_status("proj", "e1", "resolved"))
 
     def test_empty_keep_hashes_returns_error(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])

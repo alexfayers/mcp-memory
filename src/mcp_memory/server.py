@@ -30,6 +30,7 @@ from .models import (
 )
 from .payload import compact_json
 from .storage import GraphResult, NodeList, open_writable
+from .storage.pure.rows import reject_status_observation
 from .visualise import register_visualise_routes
 
 if TYPE_CHECKING:
@@ -43,7 +44,10 @@ logger = logging.getLogger(__name__)
 
 
 def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
-    """Record each tool call's activity and return its result as compact JSON text plus structured content."""
+    """Record each tool call's activity and return its result as compact JSON text plus structured content.
+
+    A result carrying an ``error`` is returned as an MCP tool error with that message as its text.
+    """
 
     @functools.wraps(fn)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> CallToolResult:
@@ -56,6 +60,8 @@ def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
             metrics.record(_get_db(), fn.__name__, arguments, result)
         except Exception:  # ruff: ignore[try-except-pass] - instrumentation must never break a tool call
             pass
+        if "error" in result:
+            return CallToolResult(content=[TextContent(type="text", text=str(result["error"]))], is_error=True)
         return CallToolResult(content=[TextContent(type="text", text=compact_json(result))], structured_content=result)
 
     return wrapper
@@ -157,6 +163,20 @@ _TARGET_MAX_OBSERVATION_CHARS_DOC = (
     "default budget), 0 for the top observation only, positive for a custom budget."
 )
 _RELATIONS_WIRE_DOC = ' Relations are returned as "source relation-type target" strings.'
+_STATUS_REJECTED_DOC = "An observation starting with 'status:' is rejected: use set_entity_status. "
+_WRITE_TEST_DOC = (
+    "Write only what a new session can't get from code or git. "
+    "Good: 'Decision: keep the cart total server-side - a client price can be stale'. "
+    "Bad: 'Added total field', 'tests pass'. " + _STATUS_REJECTED_DOC
+)
+_FEATURE_DOC = (
+    "A feature records the user's stated decisions about the capability with their reasons, its gotchas, and "
+    "every decision binding later work on it. It may also hold one caller-view line: what the capability does for "
+    "its caller, written from the caller's side so search finds it (e.g. 'Export a report as CSV, filtered by "
+    "date range'). A feature never holds a status line, task text or the ask, or implementation detail "
+    "(file names, internals, test layout). "
+    "A fact serving no capability goes in knowledge/, a how-to in pattern/. "
+)
 CREATE_ENTITIES_DESC = (
     "Create new entities with observations in a project. "
     "Raises if any entity name already exists in that project - use add_observations to "
@@ -166,11 +186,19 @@ CREATE_ENTITIES_DESC = (
     "a 'project' entity MUST be named exactly 'project/<project>' (one root per scope, "
     "auto-created on first write; if its name does not match the repo, rename_entity it, "
     "never add a second root). "
-    "Name forms: feature/<project>/<area>, task/<TICKET-ID>-<slug> (name an investigation "
-    "for its ticket, not its symptom), user-preferences/<alias>-<topic>, pattern/<short-noun>. "
+    "Name forms: feature/<project>/<capability> (e.g. feature/<project>/report-export), "
+    "task/<TICKET-ID>-<slug> or task/<step> for one small step, created with the feature before editing a second file "
+    "(e.g. task/add-export-tests; "
+    "name an investigation for its ticket, not its symptom), user-preferences/<alias>-<topic>, "
+    "pattern/<short-noun> part-of a broader pattern (e.g. pattern/csv-quoting-gotchas "
+    "part-of pattern/file-formats). "
     "Unless entityType is project, pass non-empty relations inline (see create_relations for "
     "which type to pick) - without them nothing is created. "
-    "Observation wording and what not to store: see add_observations. "
+    "Example: entities:[{name:'feature/<project>/<capability>', entityType:'feature', observations:[...], "
+    "relations:[{target:'project/<project>', type:'part-of'}]}]. "
+    + _WRITE_TEST_DOC
+    + _FEATURE_DOC
+    + "Observation wording and what not to store: see add_observations. "
     "Set `status` via the `status` argument, never as a `STATUS:` observation. "
     "The server records each observation's timestamp; do NOT embed a date/timestamp in the text."
 )
@@ -204,9 +232,11 @@ READ_GRAPH_DESC = (
 CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
     "Relations are the core of the graph model. "
-    "Prefer a specific type over relates-to: task implements feature (link a task straight "
-    "to project/ only where no feature exists), task depends-on task, feature belongs-to "
-    "project, pattern used-in project."
+    "Prefer a specific type over relates-to: task implements feature (no feature fits: create one, "
+    "in the task's own create_entities call when the task is new), task depends-on task, feature belongs-to project, "
+    "pattern part-of its closest broader pattern (a top-level one part-of project/<project>, "
+    "or project/global in global), never one hub linked to many entities. "
+    "Both ends must be in this project: a relation cannot cross scopes."
 )
 DELETE_ENTITY_DESC = (
     "Delete an entity and all its associated observations and relations from a project. "
@@ -234,12 +264,23 @@ ADD_OBSERVATIONS_DESC = (
     "To reorder by usefulness instead of adding, see vote. "
     "If this replaces or contradicts an observation, search_nodes then edit_observation instead. "
     "One atomic fact per observation, on the entity it concerns - create one rather than "
-    "dump onto an unrelated entity. Tense: present for project/feature, past for task; "
-    "rationale goes in its own observation. Past ~30 observations, extract focused pattern/ "
+    "dump onto an unrelated entity. "
+    + _WRITE_TEST_DOC
+    + _FEATURE_DOC
+    + "A task holds an instruction carrying only what the user asked, including any file names or tools their ask "
+    "names (e.g. 'Add a tag filter to the list endpoint, with tests'), never how-detail not in the user's ask: "
+    "file names, test styles or past tense ('Added X', 'tests pass'). It also holds "
+    "its own decisions and why, and an outcome line only for what git can't show (where it "
+    "landed: PR or CR number, merged, deployed; what is unverified; a surprise), plus open follow-ups while planned "
+    "or in-progress. A follow-up found while working, or still open when the task resolves, is its own planned task. "
+    "A how-to reusable elsewhere goes in a pattern/ (search_nodes first, append to a match): "
+    "project scope if reusable only in this project, else global. Tense: present for project/feature, past for task; "
+    "rationale goes in its own observation. Past ~30 observations, move reusable how-tos to focused pattern/ "
     "entities. Do NOT store: content duplicating rules or skills, session logs or "
     "changelogs, file paths in global, ephemeral status, commit SHAs, workarounds for "
-    "retired tools, or implementation steps of a resolved task (keep 1-3 outcome "
-    "observations - see trim_observations_to_outcome). "
+    "retired tools, or implementation steps of a resolved task (keep 1-3 observations: its instruction, a decision and "
+    "why, and an outcome line if it has one - see "
+    "trim_observations_to_outcome). "
     "The server timestamps each observation; do NOT embed a date in the text."
 )
 DELETE_OBSERVATIONS_DESC = (
@@ -256,12 +297,12 @@ EDIT_OBSERVATION_DESC = (
     "Edit one observation in place by content_hash, keeping its votes and timestamp. "
     "Prefer oldText: its single exact match is replaced with newText; without oldText, newText "
     "replaces the whole content. Returns the new content_hash. Raises if nothing matches, "
-    "oldText matches more than once, or the result duplicates another observation."
+    "oldText matches more than once, or the result duplicates another observation. " + _STATUS_REJECTED_DOC.rstrip()
 )
 TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
     "Delete all observations on an entity except those whose content_hash is in keep_hashes. "
-    "Use this to trim an oversized resolved entity down to its outcome summary deterministically. "
-    "keep_hashes must be non-empty (an entity must retain at least its outcome observation). "
+    "Use this to trim an oversized resolved entity down to its ask, a decision and why, and any outcome line. "
+    "keep_hashes must be non-empty (an entity must retain at least one observation). "
     "Returns the number of observations deleted."
 )
 RENAME_ENTITY_DESC = (
@@ -518,6 +559,15 @@ def _relation_from_dict(rel: dict[str, str], default_source: str | None = None) 
     return Relation(source=str(source), target=str(target), relation_type=_validate_relation_type(str(raw_type)))
 
 
+def _reject_status_observations(observations: object) -> None:
+    """Raise if any observation text starts with ``status:``, since status has its own field."""
+    if not isinstance(observations, list):
+        return
+    for text in observations:
+        if isinstance(text, str):
+            reject_status_observation(text)
+
+
 def _validate_entity_type_and_name(project: str, entity_type: object, name: str) -> None:
     """Enforce entity-type validity and the type-prefix naming convention.
 
@@ -554,11 +604,18 @@ def _validate_and_extract_relations(
 
         if entity_type not in _RELATION_EXEMPT_ENTITY_TYPES:
             if not relations_raw or not isinstance(relations_raw, list):
+                task_hint = {
+                    "task": " Link a task to the feature it implements with 'implements'. If no feature "
+                    "fits, add one named for the capability (feature/<project>/<capability>) to this same call.",
+                    "pattern": " Link a pattern part-of its closest broader pattern (a top-level one "
+                    "part-of project/<project>, or project/global in global). If that parent is missing, "
+                    "add it to this same call.",
+                }.get(str(entity_type), "")
                 raise ValueError(
                     f"Entity type '{entity_type}' requires at least one relation. "
                     f"Only {sorted(_RELATION_EXEMPT_ENTITY_TYPES)} are exempt. "
                     "Pass relations inline in this call; create_relations afterwards cannot "
-                    "fix it because the entity is not created."
+                    f"fix it because the entity is not created.{task_hint}"
                 )
 
         if isinstance(relations_raw, list):
@@ -572,6 +629,8 @@ def _create_entities(
     project: str, entities: list[dict[str, str | list[str] | list[dict[str, str]] | None]]
 ) -> dict[str, str]:
     """Validate relations, guard cross-scope duplicates, then create the entities and their relations."""
+    for entity_data in entities:
+        _reject_status_observations(entity_data.get("observations"))
     db = _get_db()
     _ensure_project_root(db, project)
     all_relations = _validate_and_extract_relations(project, entities)
@@ -1140,6 +1199,7 @@ def add_observations(
 ) -> dict[str, object]:
     """Append deduplicated observations to an existing entity."""
     try:
+        _reject_status_observations(observations)
         db = _get_db()
         hashes = db.observations.add(project, entityName, observations)
         return {
@@ -1297,7 +1357,7 @@ def set_entity_status(
         if status == "resolved" and count > _RESOLVED_OBS_CEILING:
             result["bloatWarning"] = (
                 f"Entity has {count} observations; resolved entities should be trimmed to "
-                f"{_RESOLVED_OBS_CEILING} or fewer (outcome summary only). "
+                f"{_RESOLVED_OBS_CEILING} or fewer (ask, a decision and why, any outcome line). "
                 f"Use trim_observations_to_outcome to trim. If the observations cover several "
                 f"genuinely distinct outcomes or scopes, prefer splitting them into separate "
                 f"single-scope entities instead of trimming away real content - and give each "
