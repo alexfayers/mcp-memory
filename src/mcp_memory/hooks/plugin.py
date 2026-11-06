@@ -22,6 +22,7 @@ from cline_hooks.core.vocabulary import (
     FILE_EDIT_TOOLS,
     FILE_READ_TOOLS,
     MESSAGE_TOOLS,
+    PLAN_EXIT_TOOLS,
     SHELL_TOOLS,
     SKILL_TOOLS,
     CanonicalTool,
@@ -47,12 +48,14 @@ from mcp_memory.hooks.tracker import (
     has_edited,
     has_scope_blocked,
     has_wide_edit,
+    has_wide_work,
     has_written,
     increment,
     mark_edited,
     mark_failed,
     mark_scope_blocked,
     mark_wide_edit,
+    mark_wide_work,
     mark_written,
     pop_failed,
     reset,
@@ -213,6 +216,7 @@ def _is_exempt_agent(agent_type: str) -> bool:
     return bool(agent_type) and agent_type in _read_only_agent_types()
 
 
+_GIT_COMMIT = re.compile(r"(?:^|[|;&(\n])\s*git(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+commit\b")
 _SPAWNED_AGENT_KEYS = ("subagent_type", "definition", "agent_type", "agent")
 
 
@@ -221,6 +225,11 @@ def _delegates_work(tool_name: str, parameters: dict[str, object]) -> bool:
     return tool_name in AGENT_SPAWN_TOOLS and not any(
         _is_exempt_agent(str(parameters.get(key, ""))) for key in _SPAWNED_AGENT_KEYS
     )
+
+
+def _commits(tool_name: str, parameters: dict[str, object]) -> bool:
+    """Return True if the call is a shell command that runs `git commit`."""
+    return tool_name in SHELL_TOOLS and _GIT_COMMIT.search(ShellParameters.build(parameters).command) is not None
 
 
 def _missing_record_blocks(task_id: str) -> list[str]:
@@ -947,17 +956,17 @@ class MemoryPlugin(HooksPlugin):
         blocked = self._tasks_required(**kwargs)
         if blocked and not claim_once(task_id, "stop_block"):
             return None
-        if blocked is None and has_edited(task_id) and has_written(task_id, "task"):
+        if blocked is None and has_edited(task_id):
             reset_work(task_id)
         return blocked
 
     def _tasks_required(self, **kwargs: object) -> HookResult | None:
-        """Block finishing after file edits without a `task/`, or without a `feature/` once work went past one file."""
+        """Block finishing wide work without a `task/`, or without a `feature/` once work went past one file."""
         task_id = str(kwargs.get("task_id", ""))
         if (
             _is_exempt_agent(str(kwargs.get("agent_type", "")))
             or is_subagent(kwargs)
-            or not has_edited(task_id)
+            or not (has_edited(task_id) and has_wide_work(task_id))
             or not _is_memory_server_reachable()
         ):
             return None
@@ -1073,12 +1082,11 @@ class MemoryPlugin(HooksPlugin):
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
         _task_scope(task_id, workspace_roots)
 
-        if (
-            _is_file_edit(tool_name)
-            or _delegates_work(tool_name, parameters)
-            or _written_paths(tool_name, parameters, workspace_roots)
-        ):
+        is_wide = _delegates_work(tool_name, parameters) or _commits(tool_name, parameters)
+        if is_wide or _is_file_edit(tool_name) or _written_paths(tool_name, parameters, workspace_roots):
             mark_edited(task_id)
+        if is_wide or tool_name in PLAN_EXIT_TOOLS:
+            mark_wide_work(task_id)
 
         if tool_name in SHELL_TOOLS and pop_failed(task_id):
             return HookResult(notes=[_WORKAROUND_GOTCHA_NUDGE])

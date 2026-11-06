@@ -2424,12 +2424,17 @@ class TestGotchaNudgeAfterWorkaround:
         assert self._succeed(live_plugin) is None
 
 
+def _commit(plugin: MemoryPlugin) -> None:
+    _post(plugin, "replace_in_file", {})
+    _post(plugin, "execute_command", {"command": "git commit -m x"})
+
+
 class TestTasksRequiredAtCompletion:
     @pytest.mark.parametrize("hook", ["AttemptCompletion", "Stop"])
     def test_finishing_after_edits_without_a_task_is_blocked_until_one_is_written(
         self, live_plugin: MemoryPlugin, hook: str
     ) -> None:
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         blocked = live_plugin.on_hook(hook, task_id="t1")
         assert blocked is not None
         assert blocked.block is not None
@@ -2442,7 +2447,7 @@ class TestTasksRequiredAtCompletion:
         assert result is None or result.block is None
 
     def test_failed_task_write_does_not_lift_the_stop_block(self, live_plugin: MemoryPlugin) -> None:
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         _write_entity(live_plugin, "task", tool_result=json.dumps({"error": "Target entity not found"}))
         blocked = live_plugin.on_hook("Stop", task_id="t1")
         assert blocked is not None
@@ -2464,7 +2469,7 @@ class TestTasksRequiredAtCompletion:
         self, live_plugin: MemoryPlugin, tool: str, arguments: dict[str, object]
     ) -> None:
         set_scope("t1", "proj")
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         _post(live_plugin, f"mcp__memory__{tool}", arguments)
         blocked = live_plugin.on_hook("Stop", task_id="t1")
         assert blocked is not None
@@ -2481,20 +2486,50 @@ class TestTasksRequiredAtCompletion:
         self, live_plugin: MemoryPlugin, tool: str, arguments: dict[str, object]
     ) -> None:
         set_scope("t1", "proj")
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         _post(live_plugin, f"mcp__memory__{tool}", arguments)
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    @pytest.mark.parametrize("hook", ["AttemptCompletion", "Stop"])
+    def test_finishing_after_a_small_edit_needs_no_task(self, live_plugin: MemoryPlugin, hook: str) -> None:
+        _post(live_plugin, "replace_in_file", {})
+        result = live_plugin.on_hook(hook, task_id="t1")
+        assert result is None or result.block is None
+
+    @pytest.mark.parametrize(
+        "command", ["git commit -m x", "cd sub && git -C repo commit --amend", "git add . && git commit"]
+    )
+    def test_a_commit_makes_the_work_need_a_task(self, live_plugin: MemoryPlugin, command: str) -> None:
+        _post(live_plugin, "replace_in_file", {})
+        _post(live_plugin, "execute_command", {"command": command})
+        blocked = live_plugin.on_hook("Stop", task_id="t1")
+        assert blocked is not None
+        assert "task/" in (blocked.block or "")
+
+    @pytest.mark.parametrize("tool", ["plan_mode_respond", "exit_plan_mode"])
+    def test_a_plan_makes_the_following_edit_need_a_task(self, live_plugin: MemoryPlugin, tool: str) -> None:
+        _post(live_plugin, tool, {})
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+        _post(live_plugin, "replace_in_file", {})
+        blocked = live_plugin.on_hook("Stop", task_id="t1")
+        assert blocked is not None
+        assert "task/" in (blocked.block or "")
+
+    def test_a_command_that_only_mentions_commit_is_not_wide_work(self, live_plugin: MemoryPlugin) -> None:
+        _post(live_plugin, "replace_in_file", {})
+        _post(live_plugin, "execute_command", {"command": "git log --grep commit"})
         assert live_plugin.on_hook("Stop", task_id="t1") is None
 
     def test_stop_without_edits_does_nothing(self, live_plugin: MemoryPlugin) -> None:
         assert live_plugin.on_hook("Stop", task_id="t1") is None
 
     def test_stop_is_not_blocked_when_the_server_is_down(self, live_plugin: MemoryPlugin) -> None:
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         with patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=False):
             assert live_plugin.on_hook("Stop", task_id="t1") is None
 
     def test_subagent_stop_is_not_blocked(self, live_plugin: MemoryPlugin) -> None:
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         assert live_plugin.on_hook("Stop", task_id="t1", agent_id="sub-1") is None
 
 
@@ -2512,19 +2547,19 @@ class TestWorkLifecycle:
     def test_next_piece_of_work_is_gated_again_after_a_stop_that_passes_with_a_task(
         self, live_plugin: MemoryPlugin
     ) -> None:
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         _write_entity(live_plugin, "task")
         assert self._stop(live_plugin) is None
 
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         self._assert_stop_blocks(live_plugin)
 
     def test_next_prompt_resets_work_finished_in_a_forced_turn(self, live_plugin: MemoryPlugin) -> None:
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         _write_entity(live_plugin, "task")
         live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="now something else")
 
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         assert self._stop(live_plugin) is not None
 
     def test_next_prompt_keeps_work_that_still_lacks_its_feature(self, live_plugin: MemoryPlugin) -> None:
@@ -2535,7 +2570,7 @@ class TestWorkLifecycle:
         assert "`feature/`" in self._assert_stop_blocks(live_plugin)
 
     def test_compaction_keeps_the_work_state(self, live_plugin: MemoryPlugin) -> None:
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         live_plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[], source="compact")
         self._assert_stop_blocks(live_plugin)
 
@@ -2556,6 +2591,15 @@ class TestWorkLifecycle:
         kwargs = {"task_id": "t1", "tool_name": "replace_in_file", "parameters": {"path": f"/work/proj/{name}"}}
         plugin.on_hook("PreToolUse", workspace_roots=["/work/proj"], **kwargs)
         plugin.on_hook("PostToolUse", workspace_roots=["/work/proj"], **kwargs)
+
+    def test_a_small_fix_that_ends_without_a_task_does_not_make_the_next_fix_wide(
+        self, live_plugin: MemoryPlugin
+    ) -> None:
+        self._edit(live_plugin, "a.py")
+        assert self._stop(live_plugin) is None
+
+        self._edit(live_plugin, "b.py")
+        assert self._stop(live_plugin) is None
 
     def test_stop_asks_for_a_feature_when_work_past_one_file_wrote_only_a_task(self, live_plugin: MemoryPlugin) -> None:
         _write_entity(live_plugin, "task")
@@ -2601,7 +2645,7 @@ class TestWorkLifecycle:
         assert "`feature/`" in self._assert_stop_blocks(live_plugin)
 
     def test_stop_forces_at_most_one_turn_per_piece_of_work(self, live_plugin: MemoryPlugin) -> None:
-        _post(live_plugin, "replace_in_file", {})
+        _commit(live_plugin)
         assert self._stop(live_plugin) is not None
         assert self._stop(live_plugin) is None
 

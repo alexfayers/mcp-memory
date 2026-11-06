@@ -112,7 +112,7 @@ def _drop(task_id: str, names: tuple[str, ...]) -> None:
 
 def reset_work(task_id: str) -> None:
     """Forget what the task's current piece of work has edited, written and been reminded of."""
-    _drop(task_id, ("wrote:", "edited", "edit_path", "once:", "wide_edit"))
+    _drop(task_id, ("wrote:", "edited", "edit_path", "once:", "wide_edit", "wide_work"))
 
 
 def reset_context_window(task_id: str) -> None:
@@ -199,8 +199,19 @@ def has_wide_edit(task_id: str) -> bool:
 
 
 def mark_wide_edit(task_id: str) -> None:
-    """Record that the task's work went past one existing file."""
+    """Record that the task's work went past one existing file, which is wide work."""
     _flag(f"{task_id}:wide_edit")
+    mark_wide_work(task_id)
+
+
+def has_wide_work(task_id: str) -> bool:
+    """Return True if the task's work is wide: past one file, a commit, a plan or a delegation."""
+    return _is_flagged(f"{task_id}:wide_work")
+
+
+def mark_wide_work(task_id: str) -> None:
+    """Record that the task's work is wide."""
+    _flag(f"{task_id}:wide_work")
 
 
 def mark_failed(task_id: str) -> None:
