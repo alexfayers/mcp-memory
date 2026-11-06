@@ -259,18 +259,3 @@ def claim_edit_path(task_id: str, path: str) -> bool:
         if stored == path:
             _write(data)
         return stored == path
-
-
-def get_reminder_chance(task_id: str, default: float) -> float:
-    """Return the memory-reminder probability recorded for a task, or the default."""
-    with _locked():
-        chance = _read().get(f"{task_id}:reminder_chance")
-    return float(chance) if isinstance(chance, (int, float)) else default
-
-
-def set_reminder_chance(task_id: str, chance: float) -> None:
-    """Record the memory-reminder probability for a task."""
-    with _locked():
-        data = _read()
-        data[f"{task_id}:reminder_chance"] = chance
-        _write(data)

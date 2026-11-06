@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
-import random
 import re
 import socket
 import subprocess
@@ -42,7 +41,6 @@ from mcp_memory.hooks.tracker import (
     claim_edit_path,
     claim_once,
     clear,
-    get_reminder_chance,
     get_scope,
     get_window,
     has_edited,
@@ -61,7 +59,6 @@ from mcp_memory.hooks.tracker import (
     reset,
     reset_context_window,
     reset_work,
-    set_reminder_chance,
     set_scope,
     should_block,
     should_warn,
@@ -76,8 +73,6 @@ _MEMORY_WRITE_CALL = re.compile(rf"_(?:{'|'.join(map(re.escape, MUTATING_TOOLS))
 
 _MEMORY_READ_TOOL_NAMES = frozenset(READ_ONLY_TOOLS)
 
-_MEMORY_REMINDER_TOOLS = FILE_EDIT_TOOLS | SHELL_TOOLS | {CanonicalTool.PLAN_MODE_RESPOND}
-
 _MEMORY_REPLACE_CLAUSE = (
     "If this replaces or contradicts an observation, search_nodes then edit_observation it instead of appending."
 )
@@ -88,8 +83,6 @@ _MEMORY_REMINDER_TEMPLATE = (
     + "), record it in the `{project}` project or `global` scope now. "
     "Don't record what you changed or that tests pass. " + _MEMORY_REPLACE_CLAUSE
 )
-_MEMORY_REMINDER_CHANCE = 0.6
-_MEMORY_COOLDOWN_STEPS = 5
 _MEMORY_BLOCK_TEMPLATE = (
     "MEMORY UPDATE REQUIRED: before continuing, record any lasting fact (" + _MEMORY_LASTING_FACT_KINDS + ") in the"
     " `{project}` project or `global` scope, or set the task's status if there is none. " + _MEMORY_REPLACE_CLAUSE
@@ -274,17 +267,6 @@ def _file_edit_tool_names() -> frozenset[str]:
 def _is_file_edit(tool_name: str) -> bool:
     """Return True if a tool call is a reduced-weight file-edit operation."""
     return _extract_mcp_suffix(tool_name) in _file_edit_tool_names()
-
-
-def _reminder_due(task_id: str) -> bool:
-    """Step the task's reminder chance, roll it, and reset the chance when a reminder is due."""
-    chance = min(
-        _MEMORY_REMINDER_CHANCE,
-        get_reminder_chance(task_id, _MEMORY_REMINDER_CHANCE) + _MEMORY_REMINDER_CHANCE / _MEMORY_COOLDOWN_STEPS,
-    )
-    due = random.random() < chance
-    set_reminder_chance(task_id, 0.0 if due else chance)
-    return due
 
 
 def _extract_mcp_suffix(tool_name: str) -> str:
@@ -917,7 +899,6 @@ class MemoryPlugin(HooksPlugin):
             reset_context_window(task_id)
         else:
             clear(task_id)
-            set_reminder_chance(task_id, 0.0)
         auto_note = self._maybe_auto_register(workspace_roots)
         if workspace_roots:
             set_scope(task_id, _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name)
@@ -1095,7 +1076,6 @@ class MemoryPlugin(HooksPlugin):
             if not _is_error_result(kwargs.get("tool_result")):
                 _record_written_kinds(task_id, _task_scope(task_id, workspace_roots), tool_name, parameters)
                 reset(task_id)
-                set_reminder_chance(task_id, 0.0)
                 record_write()
             return None
 
@@ -1112,9 +1092,7 @@ class MemoryPlugin(HooksPlugin):
             increment(task_id)
         _record_scope_from_parameters(task_id, tool_name, parameters)
 
-        if should_warn(task_id) or (
-            tool_name in _MEMORY_REMINDER_TOOLS and has_edited(task_id) and _reminder_due(task_id)
-        ):
+        if should_warn(task_id):
             reminder = _MEMORY_REMINDER_TEMPLATE.format(
                 project=_task_scope(task_id, workspace_roots),
             )

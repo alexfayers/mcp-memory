@@ -39,6 +39,8 @@ Environment variables. The server reads the first table. The hook plugin reads t
 
 Finishing needs a `task/` write only after wide work: a `git commit`, edits past one existing file, a presented plan or a delegation. A small fix may finish without one. Edits past one existing file also need a `feature/`.
 
+The `MEMORY CHECK` reminder comes after 8 counted tool calls without a memory write, and the next call is blocked at 10.
+
 Another cline-hooks plugin can add workspace markers by implementing the `memory_workspace_markers` hook. It returns a `frozenset[str]` of directory names:
 
 ```python
