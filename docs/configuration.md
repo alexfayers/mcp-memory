@@ -33,8 +33,13 @@ Environment variables. The server reads the first table. The hook plugin reads t
 | `MCP_MEMORY_WORKSPACE_MARKERS` | Comma-separated directory names that mark a multi-package workspace root, so sibling packages share one project scope. Markers from other cline-hooks plugins are used after these | none |
 | `MCP_MEMORY_READONLY_AGENTS` | Extra agent types exempt from the memory-update gate | `Explore`, `Plan` |
 | `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names, counted at reduced weight toward the gate | `replace_in_file`, `write_to_file` |
+| `MCP_MEMORY_FEATURE_FIRST_BLOCK` | Set to `1` to block, instead of only noting, a second file, a created file or a shell write before a `feature/` is written | off |
 | `MCP_MEMORY_WRAPPER_TOOLS` | Extra tools that run other tool calls. Counted as one call, unless their input names a memory write tool | `codemode` |
 | `MCP_MEMORY_UNCOUNTED_TOOLS` | Extra bookkeeping tools that are not counted toward the gate | the frontend's bookkeeping, skill and message tools |
+
+Finishing needs a `task/` write only after wide work: a `git commit`, edits past one existing file, a presented plan or a delegation. A small fix may finish without one. Edits past one existing file also need a `feature/`.
+
+The `MEMORY CHECK` reminder comes after 8 counted tool calls without a memory write, and the next call is blocked at 10.
 
 Another cline-hooks plugin can add workspace markers by implementing the `memory_workspace_markers` hook. It returns a `frozenset[str]` of directory names:
 

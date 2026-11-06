@@ -10,6 +10,16 @@ import sqlite3
 from mcp_memory.models import Entity, Observation, Relation
 
 _TODAY_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ \t]*[:,-][ \t]+")
+_STATUS_OBSERVATION = re.compile(r"\s*status:", re.IGNORECASE)
+
+
+def reject_status_observation(text: str) -> None:
+    """Raise if the observation text starts with ``status:``, since status has its own field."""
+    if _STATUS_OBSERVATION.match(text):
+        raise ValueError(
+            "Observation starts with 'status:'. Set the entity status with set_entity_status instead, "
+            "not as an observation."
+        )
 
 
 def hash_observation(content: str) -> str:

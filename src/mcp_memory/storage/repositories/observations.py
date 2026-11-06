@@ -10,6 +10,7 @@ from mcp_memory.storage.pure.rows import (
     budget_observations,
     build_observation,
     hash_observation,
+    reject_status_observation,
     strip_today_date_prefix,
 )
 from mcp_memory.storage.pure.sql import placeholders
@@ -228,6 +229,7 @@ class ObservationRepository:
         new_content = strip_today_date_prefix(new_text)
         if not new_content.strip():
             raise ValueError("Edited observation must not be empty")
+        reject_status_observation(new_content)
         if new_content == content:
             return content_hash
 

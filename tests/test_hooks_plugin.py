@@ -8,8 +8,13 @@ from contextlib import AbstractContextManager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import json
+import os
 from pathlib import Path
 import socket
+from socketserver import BaseRequestHandler, TCPServer
+import subprocess
+import sys
+import threading
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -28,7 +33,6 @@ from mcp_memory.hooks.plugin import (
     _DATE_PREFIX_WARNING,
     _EDIT_TOOL_WEIGHT,
     _FRUSTRATION_NUDGE_TEMPLATE,
-    _MEMORY_COOLDOWN_STEPS,
     ENABLE_FRUSTRATION_CHECK,
     ENABLE_PROFANITY_CHECK,
     MemoryPlugin,
@@ -47,7 +51,7 @@ from mcp_memory.hooks.plugin import (
     _workspace_entity_note,
     resolve_project_for_path,
 )
-from mcp_memory.hooks.tracker import _MEMORY_BLOCK_THRESHOLD, get_scope, set_reminder_chance
+from mcp_memory.hooks.tracker import _MEMORY_BLOCK_THRESHOLD, get_scope, set_scope
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage import open_writable
 from mcp_memory.tool_names import READ_ONLY_TOOLS
@@ -294,6 +298,18 @@ def plugin() -> Iterator[MemoryPlugin]:
         yield MemoryPlugin()
 
 
+@pytest.fixture
+def live_plugin() -> Iterator[MemoryPlugin]:
+    """A MemoryPlugin on the real tracker with a started task and a reachable memory server."""
+    with (
+        patch.object(MemoryPlugin, "_maybe_auto_register", return_value=None),
+        patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+    ):
+        plugin = MemoryPlugin()
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[])
+        yield plugin
+
+
 def _registered_paths(mapping: dict[Path, str]) -> AbstractContextManager[object]:
     return patch(
         "mcp_memory.hooks.plugin.resolve_project_for_path",
@@ -513,8 +529,7 @@ class TestMemoryPluginMessages:
         (repo / ".git").mkdir(parents=True)
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
 
-        set_reminder_chance("t1", 1.0)
-        with patch("random.random", return_value=0.0):
+        with patch("mcp_memory.hooks.plugin.should_warn", return_value=True):
             result = plugin.on_hook(
                 "PostToolUse",
                 task_id="t1",
@@ -525,27 +540,13 @@ class TestMemoryPluginMessages:
         assert len(result.notes) == 1
         assert "`cool-project`" in result.notes[0]
 
-    def test_reminder_cooldown_is_per_session(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
-        repo = tmp_path / "cool-project"
-        (repo / ".git").mkdir(parents=True)
-        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        plugin.on_hook("TaskStart", task_id="t2", workspace_roots=[str(repo)])
-
-        def _edit(task_id: str) -> object:
-            return plugin.on_hook(
-                "PostToolUse",
-                task_id=task_id,
-                tool_name="write_to_file",
-                parameters={"path": str(repo / "file.py")},
-            )
-
-        with patch("random.random", return_value=1.0):
-            for _ in range(_MEMORY_COOLDOWN_STEPS):
-                _edit("t2")
-        with patch("random.random", return_value=0.0):
-            assert _edit("t1") is not None
-        with patch("random.random", return_value=0.5):
-            assert _edit("t2") is not None
+    def test_reminder_comes_only_at_the_soft_threshold(self, live_plugin: MemoryPlugin) -> None:
+        _post(live_plugin, "replace_in_file", {})
+        for _ in range(int(_MEMORY_BLOCK_THRESHOLD * 0.8) - 1):
+            assert live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={}) is None
+        reminded = live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
+        assert reminded is not None
+        assert "MEMORY CHECK" in reminded.notes[0]
 
     def test_reminder_and_block_tell_the_model_to_edit_a_replaced_observation(self, plugin: MemoryPlugin) -> None:
         with (
@@ -559,12 +560,37 @@ class TestMemoryPluginMessages:
         assert reminded is not None
         assert "edit_observation" in (blocked.block or "")
         assert "edit_observation" in reminded.notes[0]
+        assert "set the task's status" in (blocked.block or "")
+        assert "Don't record what you changed" in reminded.notes[0]
+
+    def test_completion_reminder_routes_facts_and_limits_the_outcome_line(self, plugin: MemoryPlugin) -> None:
+        result = plugin.on_hook("AttemptCompletion", task_id="t1")
+        assert result is not None
+        note = result.notes[0]
+        assert "`feature/`" in note
+        assert "`pattern/`" in note
+        assert "own `planned` `task/`" in note
+        assert "git can't show" in note
+        assert "no outcome line" in note
+
+    def test_set_entity_status_clears_the_block(self, plugin: MemoryPlugin) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_block", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
+            result = plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="use_mcp_tool",
+                parameters={"tool_name": "set_entity_status", "arguments": "{}"},
+            )
+        assert result is None or result.block is None
 
     @pytest.mark.parametrize("warn", [False, True])
     def test_reminder_fires_for_any_tool_type_once_the_soft_threshold_is_reached(
         self, plugin: MemoryPlugin, warn: bool
     ) -> None:
-        with patch("mcp_memory.hooks.plugin.should_warn", return_value=warn), patch("random.random", return_value=1.0):
+        with patch("mcp_memory.hooks.plugin.should_warn", return_value=warn):
             result = plugin.on_hook("PostToolUse", task_id="t1", tool_name="web_fetch", parameters={})
         assert (result is not None) is warn
 
@@ -1635,7 +1661,6 @@ class TestMemoryReviewNudge:
             plugin = MemoryPlugin()
             result = plugin.on_hook("UserPromptSubmit", task_id="t1")
         assert result is not None
-        assert len(result.notes) == 1
         note = result.notes[0]
         assert "memory-review" in note
         assert "user" in note.lower()
@@ -1648,7 +1673,8 @@ class TestMemoryReviewNudge:
         ):
             plugin = MemoryPlugin()
             result = plugin.on_hook("UserPromptSubmit", task_id="t1")
-        assert result is None
+        assert result is not None
+        assert not any("memory-review" in note for note in result.notes)
         mock_reset.assert_not_called()
 
 
@@ -1688,7 +1714,7 @@ class TestProfanityNudge:
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
             plugin = MemoryPlugin()
             result = plugin.on_hook("UserPromptSubmit", task_id="t1", message="can you check the parser")
-        assert result is None
+        assert result is None or not any(_FRUSTRATION_MARKER in note for note in result.notes)
 
     @_needs_frustration_check
     def test_fires_on_repeated_punct_when_negative_and_not_shouting(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1702,7 +1728,7 @@ class TestProfanityNudge:
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
             plugin = MemoryPlugin()
             result = plugin.on_hook("UserPromptSubmit", task_id="t1", message="self.config.value.thing")
-        assert result is None
+        assert result is None or not any(_FRUSTRATION_MARKER in note for note in result.notes)
 
     @pytest.mark.parametrize(
         "message",
@@ -1748,7 +1774,7 @@ class TestProfanityNudge:
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
             plugin = MemoryPlugin()
             result = plugin.on_hook("UserPromptSubmit", task_id="t1", message=message)
-        assert result is None
+        assert result is None or not any(_FRUSTRATION_MARKER in note for note in result.notes)
 
     @pytest.mark.parametrize(
         "message",
@@ -1765,7 +1791,7 @@ class TestProfanityNudge:
         with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
             plugin = MemoryPlugin()
             result = plugin.on_hook("UserPromptSubmit", task_id="t1", message=message)
-        assert result is None
+        assert result is None or not any(_FRUSTRATION_MARKER in note for note in result.notes)
 
     @_needs_frustration_check
     def test_minced_oath_alone_is_mild(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2072,29 +2098,601 @@ class TestFileEditsReducedWeight:
 
 
 class TestMemoryGateWaitsForFirstFileEdit:
-    @pytest.fixture
-    def live_plugin(self) -> Iterator[MemoryPlugin]:
-        """A MemoryPlugin on the real tracker with a started task and a reachable memory server."""
-        with (
-            patch.object(MemoryPlugin, "_maybe_auto_register", return_value=None),
-            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
-        ):
-            plugin = MemoryPlugin()
-            plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[])
-            yield plugin
-
     def test_lookup_only_session_gets_no_reminder_and_no_block(self, live_plugin: MemoryPlugin) -> None:
-        set_reminder_chance("t1", 1.0)
-        with patch("random.random", return_value=0.0):
-            for _ in range(_MEMORY_BLOCK_THRESHOLD * 2):
-                for hook in ("PostToolUse", "PreToolUse"):
-                    assert live_plugin.on_hook(hook, task_id="t1", tool_name="execute_command", parameters={}) is None
+        for _ in range(_MEMORY_BLOCK_THRESHOLD * 2):
+            for hook in ("PostToolUse", "PreToolUse"):
+                assert live_plugin.on_hook(hook, task_id="t1", tool_name="execute_command", parameters={}) is None
 
     def test_session_is_gated_once_a_file_edit_is_made(self, live_plugin: MemoryPlugin) -> None:
         live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="write_to_file", parameters={})
-        with patch("random.random", return_value=1.0):
-            for _ in range(_MEMORY_BLOCK_THRESHOLD):
-                live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
+        for _ in range(_MEMORY_BLOCK_THRESHOLD):
+            live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
         blocked = live_plugin.on_hook("PreToolUse", task_id="t1", tool_name="execute_command", parameters={})
         assert blocked is not None
         assert blocked.block is not None
+
+
+def _post(plugin: MemoryPlugin, tool_name: str, parameters: dict[str, object], **kwargs: object) -> None:
+    plugin.on_hook("PostToolUse", task_id="t1", tool_name=tool_name, parameters=parameters, **kwargs)
+
+
+def _write_entity(plugin: MemoryPlugin, kind: str, **kwargs: object) -> None:
+    entity = {"name": f"{kind}/proj/thing", "entityType": kind, "observations": ["x"]}
+    _post(plugin, "mcp__memory__create_entities", {"project": "proj", "entities": [entity]}, **kwargs)
+
+
+class TestFeatureBeforeFirstEdit:
+    @pytest.fixture(autouse=True)
+    def _blocking(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_FEATURE_FIRST_BLOCK", "1")
+
+    @staticmethod
+    def _edit(
+        plugin: MemoryPlugin,
+        tool_name: str = "replace_in_file",
+        parameters: dict[str, object] | None = None,
+        **kwargs: object,
+    ) -> HookResult | None:
+        return plugin.on_hook("PreToolUse", task_id="t1", tool_name=tool_name, parameters=parameters or {}, **kwargs)
+
+    def _assert_blocked(self, plugin: MemoryPlugin, *args: object, **kwargs: object) -> str:
+        blocked = self._edit(plugin, *args, **kwargs)  # type: ignore[arg-type]
+        assert blocked is not None
+        assert blocked.block is not None
+        return blocked.block
+
+    def test_edit_with_no_path_is_blocked_until_a_feature_is_written(self, live_plugin: MemoryPlugin) -> None:
+        block = self._assert_blocked(live_plugin)
+        assert "feature/" in block
+        assert "This edit names no file" in block
+        _write_entity(live_plugin, "feature")
+        assert self._edit(live_plugin) is None
+
+    def test_editing_one_existing_file_again_is_not_blocked(self, live_plugin: MemoryPlugin) -> None:
+        edit = {"path": "/work/proj/a.py"}
+        for _ in range(2):
+            assert self._edit(live_plugin, parameters=edit, workspace_roots=["/work/proj"]) is None
+
+    def test_editing_a_second_file_is_blocked_until_a_feature_is_written(self, live_plugin: MemoryPlugin) -> None:
+        roots = ["/work/proj"]
+        assert self._edit(live_plugin, parameters={"path": "/work/proj/a.py"}, workspace_roots=roots) is None
+        second = {"parameters": {"path": "/work/proj/b.py"}, "workspace_roots": roots}
+        assert "feature/" in self._assert_blocked(live_plugin, **second)
+        _write_entity(live_plugin, "feature")
+        assert self._edit(live_plugin, **second) is None
+
+    def test_creating_a_file_is_blocked_but_overwriting_an_existing_first_file_is_not(
+        self, live_plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        roots = [str(tmp_path)]
+        self._assert_blocked(live_plugin, "write_to_file", {"path": str(tmp_path / "new.py")}, workspace_roots=roots)
+        existing = tmp_path / "old.py"
+        existing.write_text("x")
+        assert self._edit(live_plugin, "write_to_file", {"path": str(existing)}, workspace_roots=roots) is None
+
+    def test_block_shows_the_inline_relation_and_task_in_one_create_entities_call(
+        self, live_plugin: MemoryPlugin
+    ) -> None:
+        block = self._assert_blocked(live_plugin)
+        assert "relations:[{target:'project/<p>', type:'part-of'}]" in block
+        assert "not as a separate create_relations call" in block
+        assert "`task/` that `implements` the `feature/`" in block
+        assert "in the script running the final check, once it passes, or with the last memory write" in block
+
+    def test_first_read_warns_about_the_feature_once_before_any_edit(self, live_plugin: MemoryPlugin) -> None:
+        def read() -> HookResult | None:
+            return live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="read_file", parameters={})
+
+        first = read()
+        assert first is not None
+        assert "feature/" in first.notes[0]
+        first_sentence = first.notes[0].split(". ")[0]
+        assert "`feature/`" in first_sentence
+        assert "`task/`" in first_sentence
+        assert "never in a turn of its own" in first_sentence
+        assert "A fix to one existing file may instead write both with its final check" in first.notes[0]
+        assert "is blocked" not in first.notes[0]
+        assert read() is None
+
+    def test_prompt_warns_about_the_feature_once_per_task(self, live_plugin: MemoryPlugin) -> None:
+        first = live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="add a tag filter")
+        assert first is not None
+        assert "feature/" in first.notes[0]
+        assert live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="and more") is None
+
+    def test_subagent_prompt_gets_no_feature_note(self, live_plugin: MemoryPlugin) -> None:
+        assert live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="add a filter", agent_id="sub-1") is None
+
+    def test_prompt_note_carries_the_same_rules_as_the_block(self, live_plugin: MemoryPlugin) -> None:
+        block = self._assert_blocked(live_plugin)
+        note = live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="add a tag filter")
+        assert note is not None
+        for rule in (
+            "never holds a status line, task text or the ask",
+            "implementation detail (file names, internals, test layout)",
+            "one caller-view line",
+            "user's stated decisions about the capability with their reasons",
+            "never as a `feature/` observation",
+            "`knowledge/`",
+        ):
+            assert rule in block
+            assert rule in note.notes[0]
+
+    def test_feature_written_inside_a_script_lifts_the_gate_for_an_edit_in_the_same_script(
+        self, live_plugin: MemoryPlugin
+    ) -> None:
+        _write_entity(live_plugin, "feature", parent_tool_call_id="c1")
+        assert self._edit(live_plugin, "write_to_file", parent_tool_call_id="c1") is None
+
+    def test_first_read_after_the_prompt_note_gets_no_repeat(self, live_plugin: MemoryPlugin) -> None:
+        live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="add a tag filter")
+        assert live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="read_file", parameters={}) is None
+
+    def test_prompt_and_first_read_after_a_feature_write_get_no_warning(self, live_plugin: MemoryPlugin) -> None:
+        _write_entity(live_plugin, "feature")
+        assert live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="add a tag filter") is None
+        assert live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="read_file", parameters={}) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo hi > notes.md",
+            "echo hi >> notes.md",
+            "echo hi | tee notes.md",
+            "echo hi | sudo tee -a notes.md",
+            "sed -i 's/a/b/' notes.md",
+            "sed -n -i -e 's/a/b/' notes.md",
+            "python3 -c \"open('notes.md', 'w').write('x')\"",
+            "python - <<'EOF'\nfrom pathlib import Path\nPath('notes.md').write_text('x')\nEOF",
+            "cat > notes.md <<'EOF'\nhello\nEOF",
+            "cat <<EOF > notes.md\nhello\nEOF",
+            "echo hi > /work/proj/notes.md",
+            "cp old.py notes.md",
+            "sudo mv -f old.py notes.md",
+            "cp -t notes old.py",
+            "python - <<'EOF'\nfrom pathlib import Path\npath = Path('notes.md')\npath.write_text('x')\nEOF",
+        ],
+    )
+    def test_shell_file_write_is_blocked_until_a_feature_is_written(
+        self, live_plugin: MemoryPlugin, command: str
+    ) -> None:
+        write = {"parameters": {"command": command}, "workspace_roots": ["/work/proj"]}
+        assert "feature/" in self._assert_blocked(live_plugin, "execute_command", **write)
+        _write_entity(live_plugin, "feature")
+        assert self._edit(live_plugin, "execute_command", **write) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rg tee src",
+            "cat notes.md",
+            "make test > /dev/null 2>&1",
+            "make test &> /dev/null",
+            "echo oops >&2",
+            "rg 'a>b' src",
+            'echo "a > b"',
+            "cat <<EOF\nx > y\nEOF",
+            "echo hi > /tmp/scratch.txt",
+            "printf x 2> err.log",
+            "echo hi | tee /dev/null",
+            "git -P log --format=%h | head",
+            "cp notes.md /tmp/backup.md",
+            "cp -r src /dev/null",
+        ],
+    )
+    def test_shell_command_without_a_workspace_file_write_is_not_gated(
+        self, live_plugin: MemoryPlugin, command: str
+    ) -> None:
+        result = self._edit(
+            live_plugin, "execute_command", parameters={"command": command}, workspace_roots=["/work/proj"]
+        )
+        assert result is None
+
+    def test_shell_and_edit_writes_share_the_one_free_existing_file(
+        self, live_plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        first, second = tmp_path / "a.txt", tmp_path / "b.txt"
+        first.write_text("x")
+        second.write_text("x")
+        roots = [str(tmp_path)]
+        assert (
+            self._edit(live_plugin, "execute_command", {"command": "echo hi >> a.txt"}, workspace_roots=roots) is None
+        )
+        assert self._edit(live_plugin, parameters={"path": str(first)}, workspace_roots=roots) is None
+        shell = {"command": "sed -i s/x/y/ b.txt"}
+        block = self._assert_blocked(live_plugin, "execute_command", shell, workspace_roots=roots)
+        assert f"This writes a second file, `{second}`" in block
+
+    def test_block_names_a_created_file(self, live_plugin: MemoryPlugin, tmp_path: Path) -> None:
+        shell = {"command": "echo hi > new.md"}
+        block = self._assert_blocked(live_plugin, "execute_command", shell, workspace_roots=[str(tmp_path)])
+        assert f"This creates `{tmp_path / 'new.md'}`" in block
+
+    def test_python_write_to_a_path_held_in_a_variable_counts_as_a_write_to_an_unnamed_file(
+        self, live_plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        (tmp_path / "a.py").write_text("x")
+        command = (
+            "cat >> a.py <<'EOF'\nx = 1\nEOF\n"
+            "python - <<'EOF'\npath = 'b.py'\nwith open(path, 'w') as handle:\n    handle.write('y')\nEOF"
+        )
+        block = self._assert_blocked(
+            live_plugin, "execute_command", {"command": command}, workspace_roots=[str(tmp_path)]
+        )
+        assert "This edit names no file" in block
+
+    def test_shell_write_to_a_gitignored_file_is_not_gated(self, live_plugin: MemoryPlugin, tmp_path: Path) -> None:
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)  # ruff: ignore[start-process-with-partial-path]
+        (tmp_path / ".gitignore").write_text("out.txt\n")
+        write = {"parameters": {"command": "echo hi > out.txt"}, "workspace_roots": [str(tmp_path)]}
+        assert self._edit(live_plugin, "execute_command", **write) is None
+
+    @pytest.mark.parametrize("tool_name", ["execute_command", "read_file", "plan_mode_respond"])
+    def test_only_file_edits_are_gated(self, live_plugin: MemoryPlugin, tool_name: str) -> None:
+        assert self._edit(live_plugin, tool_name) is None
+
+    def test_feature_write_inside_a_wrapper_lifts_the_gate(self, live_plugin: MemoryPlugin) -> None:
+        arguments = {"project": "proj", "entityName": "feature/proj/thing", "observations": ["x"]}
+        _post(live_plugin, "mcp__memory__add_observations", arguments, parent_tool_call_id="call-1")
+        assert self._edit(live_plugin, "write_to_file", parent_tool_call_id="call-2") is None
+
+    def test_failed_feature_write_does_not_lift_the_gate(self, live_plugin: MemoryPlugin) -> None:
+        error = json.dumps({"error": "Entity type 'feature' requires at least one relation"})
+        _write_entity(live_plugin, "feature", tool_result=error)
+        self._assert_blocked(live_plugin)
+
+    def test_task_write_does_not_lift_the_gate(self, live_plugin: MemoryPlugin) -> None:
+        _post(
+            live_plugin, "mcp__memory__set_entity_status", {"project": "proj", "name": "task/x", "status": "resolved"}
+        )
+        self._assert_blocked(live_plugin)
+
+    def test_edit_is_allowed_with_a_note_when_the_server_is_down(self, live_plugin: MemoryPlugin) -> None:
+        with patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=False):
+            result = self._edit(live_plugin)
+        assert result is not None
+        assert result.block is None
+        assert "unreachable" in result.notes[0]
+
+    def test_subagent_edit_is_not_gated(self, live_plugin: MemoryPlugin) -> None:
+        assert self._edit(live_plugin, agent_id="sub-1", is_teammate=False) is None
+
+
+class TestFeatureFirstIsANoteByDefault:
+    def test_a_second_file_edit_gets_the_note_once_and_is_never_blocked(self, live_plugin: MemoryPlugin) -> None:
+        def edit(name: str) -> HookResult | None:
+            return live_plugin.on_hook(
+                "PreToolUse",
+                task_id="t1",
+                tool_name="replace_in_file",
+                parameters={"path": f"/work/proj/{name}"},
+                workspace_roots=["/work/proj"],
+            )
+
+        assert edit("a.py") is None
+        note = edit("b.py")
+        assert note is not None
+        assert note.block is None
+        assert "This writes a second file" in note.notes[0]
+        assert "feature/" in note.notes[0]
+        assert edit("c.py") is None
+
+
+class TestGotchaNudgeAfterWorkaround:
+    _NUDGE = "If you just worked around something a new session would hit too, add it as a gotcha on the feature now."
+
+    @staticmethod
+    def _fail(plugin: MemoryPlugin, tool_name: str, **kwargs: object) -> None:
+        plugin.on_hook("ToolFailed", task_id="t1", tool_name=tool_name, parameters={}, **kwargs)
+
+    @staticmethod
+    def _succeed(plugin: MemoryPlugin) -> HookResult | None:
+        return plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
+
+    def test_a_shell_failure_then_success_gets_the_nudge_once(self, live_plugin: MemoryPlugin) -> None:
+        self._fail(live_plugin, "execute_command")
+        first = self._succeed(live_plugin)
+        assert first is not None
+        assert first.notes == [self._NUDGE]
+        assert self._succeed(live_plugin) is None
+
+    def test_a_non_shell_failure_gets_no_nudge(self, live_plugin: MemoryPlugin) -> None:
+        self._fail(live_plugin, "read_file")
+        assert self._succeed(live_plugin) is None
+
+    def test_a_subagent_failure_gets_no_nudge(self, live_plugin: MemoryPlugin) -> None:
+        self._fail(live_plugin, "execute_command", agent_id="sub-1")
+        assert self._succeed(live_plugin) is None
+
+
+def _commit(plugin: MemoryPlugin) -> None:
+    _post(plugin, "replace_in_file", {})
+    _post(plugin, "execute_command", {"command": "git commit -m x"})
+
+
+class TestTasksRequiredAtCompletion:
+    @pytest.mark.parametrize("hook", ["AttemptCompletion", "Stop"])
+    def test_finishing_after_edits_without_a_task_is_blocked_until_one_is_written(
+        self, live_plugin: MemoryPlugin, hook: str
+    ) -> None:
+        _commit(live_plugin)
+        blocked = live_plugin.on_hook(hook, task_id="t1")
+        assert blocked is not None
+        assert blocked.block is not None
+        assert "task/" in blocked.block
+        assert "git can't show" in blocked.block
+        assert "no outcome line" in blocked.block
+
+        _write_entity(live_plugin, "task")
+        result = live_plugin.on_hook(hook, task_id="t1")
+        assert result is None or result.block is None
+
+    def test_failed_task_write_does_not_lift_the_stop_block(self, live_plugin: MemoryPlugin) -> None:
+        _commit(live_plugin)
+        _write_entity(live_plugin, "task", tool_result=json.dumps({"error": "Target entity not found"}))
+        blocked = live_plugin.on_hook("Stop", task_id="t1")
+        assert blocked is not None
+        assert blocked.block is not None
+
+    @pytest.mark.parametrize(
+        ("tool", "arguments"),
+        [
+            ("create_entities", {"project": "proj", "entities": [{"name": "task/a", "observations": []}]}),
+            ("create_entities", {"project": "proj", "entities": [{"name": "feature/proj/a", "observations": ["x"]}]}),
+            ("create_entities", {"project": "other", "entities": [{"name": "task/a", "observations": ["x"]}]}),
+            ("add_observations", {"project": "proj", "entityName": "task/a", "observations": [" "]}),
+            ("set_entity_status", {"project": "proj", "name": "task/a", "status": None}),
+            ("set_entity_status", {"project": "proj", "name": "feature/proj/a", "status": "resolved"}),
+            ("rename_entity", {"project": "proj", "old_name": "task/a", "new_name": "task/b"}),
+        ],
+    )
+    def test_a_write_that_records_no_task_for_this_work_does_not_lift_the_stop_block(
+        self, live_plugin: MemoryPlugin, tool: str, arguments: dict[str, object]
+    ) -> None:
+        set_scope("t1", "proj")
+        _commit(live_plugin)
+        _post(live_plugin, f"mcp__memory__{tool}", arguments)
+        blocked = live_plugin.on_hook("Stop", task_id="t1")
+        assert blocked is not None
+        assert blocked.block is not None
+
+    @pytest.mark.parametrize(
+        ("tool", "arguments"),
+        [
+            ("add_observations", {"project": "proj", "entityName": "task/a", "observations": ["decision"]}),
+            ("set_entity_status", {"project": "proj", "name": "task/a", "status": "resolved"}),
+        ],
+    )
+    def test_updating_a_task_in_the_work_s_project_lifts_the_stop_block(
+        self, live_plugin: MemoryPlugin, tool: str, arguments: dict[str, object]
+    ) -> None:
+        set_scope("t1", "proj")
+        _commit(live_plugin)
+        _post(live_plugin, f"mcp__memory__{tool}", arguments)
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    @pytest.mark.parametrize("hook", ["AttemptCompletion", "Stop"])
+    def test_finishing_after_a_small_edit_needs_no_task(self, live_plugin: MemoryPlugin, hook: str) -> None:
+        _post(live_plugin, "replace_in_file", {})
+        result = live_plugin.on_hook(hook, task_id="t1")
+        assert result is None or result.block is None
+
+    @pytest.mark.parametrize(
+        "command", ["git commit -m x", "cd sub && git -C repo commit --amend", "git add . && git commit"]
+    )
+    def test_a_commit_makes_the_work_need_a_task(self, live_plugin: MemoryPlugin, command: str) -> None:
+        _post(live_plugin, "replace_in_file", {})
+        _post(live_plugin, "execute_command", {"command": command})
+        blocked = live_plugin.on_hook("Stop", task_id="t1")
+        assert blocked is not None
+        assert "task/" in (blocked.block or "")
+
+    @pytest.mark.parametrize("tool", ["plan_mode_respond", "exit_plan_mode"])
+    def test_a_plan_makes_the_following_edit_need_a_task(self, live_plugin: MemoryPlugin, tool: str) -> None:
+        _post(live_plugin, tool, {})
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+        _post(live_plugin, "replace_in_file", {})
+        blocked = live_plugin.on_hook("Stop", task_id="t1")
+        assert blocked is not None
+        assert "task/" in (blocked.block or "")
+
+    def test_a_command_that_only_mentions_commit_is_not_wide_work(self, live_plugin: MemoryPlugin) -> None:
+        _post(live_plugin, "replace_in_file", {})
+        _post(live_plugin, "execute_command", {"command": "git log --grep commit"})
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    def test_stop_without_edits_does_nothing(self, live_plugin: MemoryPlugin) -> None:
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    def test_stop_is_not_blocked_when_the_server_is_down(self, live_plugin: MemoryPlugin) -> None:
+        _commit(live_plugin)
+        with patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=False):
+            assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    def test_subagent_stop_is_not_blocked(self, live_plugin: MemoryPlugin) -> None:
+        _commit(live_plugin)
+        assert live_plugin.on_hook("Stop", task_id="t1", agent_id="sub-1") is None
+
+
+class TestWorkLifecycle:
+    @staticmethod
+    def _stop(plugin: MemoryPlugin) -> HookResult | None:
+        return plugin.on_hook("Stop", task_id="t1")
+
+    def _assert_stop_blocks(self, plugin: MemoryPlugin) -> str:
+        blocked = self._stop(plugin)
+        assert blocked is not None
+        assert blocked.block is not None
+        return blocked.block
+
+    def test_next_piece_of_work_is_gated_again_after_a_stop_that_passes_with_a_task(
+        self, live_plugin: MemoryPlugin
+    ) -> None:
+        _commit(live_plugin)
+        _write_entity(live_plugin, "task")
+        assert self._stop(live_plugin) is None
+
+        _commit(live_plugin)
+        self._assert_stop_blocks(live_plugin)
+
+    def test_next_prompt_resets_work_finished_in_a_forced_turn(self, live_plugin: MemoryPlugin) -> None:
+        _commit(live_plugin)
+        _write_entity(live_plugin, "task")
+        live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="now something else")
+
+        _commit(live_plugin)
+        assert self._stop(live_plugin) is not None
+
+    def test_next_prompt_keeps_work_that_still_lacks_its_feature(self, live_plugin: MemoryPlugin) -> None:
+        _write_entity(live_plugin, "task")
+        self._edit(live_plugin, "a.py")
+        self._edit(live_plugin, "b.py")
+        live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="carry on")
+        assert "`feature/`" in self._assert_stop_blocks(live_plugin)
+
+    def test_compaction_keeps_the_work_state(self, live_plugin: MemoryPlugin) -> None:
+        _commit(live_plugin)
+        live_plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[], source="compact")
+        self._assert_stop_blocks(live_plugin)
+
+    def test_lead_delegating_work_is_gated_at_stop_but_a_subagent_is_not(self, live_plugin: MemoryPlugin) -> None:
+        _post(live_plugin, "spawn_agent", {}, agent_id="sub-1")
+        assert self._stop(live_plugin) is None
+
+        _post(live_plugin, "spawn_agent", {})
+        self._assert_stop_blocks(live_plugin)
+
+    @pytest.mark.parametrize("key", ["subagent_type", "definition"])
+    def test_delegating_to_a_read_only_agent_is_not_work(self, live_plugin: MemoryPlugin, key: str) -> None:
+        _post(live_plugin, "spawn_agent", {key: "Explore"})
+        assert self._stop(live_plugin) is None
+
+    @staticmethod
+    def _edit(plugin: MemoryPlugin, name: str) -> None:
+        kwargs = {"task_id": "t1", "tool_name": "replace_in_file", "parameters": {"path": f"/work/proj/{name}"}}
+        plugin.on_hook("PreToolUse", workspace_roots=["/work/proj"], **kwargs)
+        plugin.on_hook("PostToolUse", workspace_roots=["/work/proj"], **kwargs)
+
+    def test_a_small_fix_that_ends_without_a_task_does_not_make_the_next_fix_wide(
+        self, live_plugin: MemoryPlugin
+    ) -> None:
+        self._edit(live_plugin, "a.py")
+        assert self._stop(live_plugin) is None
+
+        self._edit(live_plugin, "b.py")
+        assert self._stop(live_plugin) is None
+
+    def test_stop_asks_for_a_feature_when_work_past_one_file_wrote_only_a_task(self, live_plugin: MemoryPlugin) -> None:
+        _write_entity(live_plugin, "task")
+        self._edit(live_plugin, "a.py")
+        self._edit(live_plugin, "b.py")
+        assert "`feature/`" in self._assert_stop_blocks(live_plugin)
+
+        _write_entity(live_plugin, "feature")
+        assert self._stop(live_plugin) is None
+
+    def test_stop_asks_for_a_feature_when_a_shell_command_wrote_past_one_file(self, live_plugin: MemoryPlugin) -> None:
+        _write_entity(live_plugin, "task")
+        command = "python - <<'EOF'\npath = 'a.py'\nopen(path, 'w').write('x')\nEOF"
+        kwargs = {"task_id": "t1", "tool_name": "execute_command", "parameters": {"command": command}}
+        live_plugin.on_hook("PreToolUse", workspace_roots=["/work/proj"], **kwargs)
+        live_plugin.on_hook("PostToolUse", workspace_roots=["/work/proj"], **kwargs)
+        assert "`feature/`" in self._assert_stop_blocks(live_plugin)
+
+    def test_stop_asks_for_the_task_and_the_feature_in_one_turn(self, live_plugin: MemoryPlugin) -> None:
+        self._edit(live_plugin, "a.py")
+        self._edit(live_plugin, "b.py")
+        block = self._assert_stop_blocks(live_plugin)
+        assert "`task/`" in block
+        assert "new one" in block
+
+    def test_stop_does_not_ask_for_a_feature_after_a_one_file_edit(self, live_plugin: MemoryPlugin) -> None:
+        _write_entity(live_plugin, "task")
+        self._edit(live_plugin, "a.py")
+        self._edit(live_plugin, "a.py")
+        assert self._stop(live_plugin) is None
+
+    def test_second_piece_of_work_needs_its_own_feature(self, live_plugin: MemoryPlugin) -> None:
+        _write_entity(live_plugin, "feature")
+        _write_entity(live_plugin, "task")
+        self._edit(live_plugin, "a.py")
+        self._edit(live_plugin, "b.py")
+        assert self._stop(live_plugin) is None
+
+        live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="now add another thing")
+        _write_entity(live_plugin, "task")
+        self._edit(live_plugin, "c.py")
+        self._edit(live_plugin, "d.py")
+        assert "`feature/`" in self._assert_stop_blocks(live_plugin)
+
+    def test_stop_forces_at_most_one_turn_per_piece_of_work(self, live_plugin: MemoryPlugin) -> None:
+        _commit(live_plugin)
+        assert self._stop(live_plugin) is not None
+        assert self._stop(live_plugin) is None
+
+
+_PI_EDIT_EVENT = {"hook_event_name": "tool_call", "tool_name": "edit", "tool_input": {"path": "a.py", "edits": []}}
+_PI_SECOND_EDIT_EVENT = {
+    "hook_event_name": "tool_call",
+    "tool_name": "edit",
+    "tool_input": {"path": "b.py", "edits": []},
+}
+_PI_FEATURE = {"name": "feature/proj/thing", "entityType": "feature", "observations": ["x"]}
+_HOOK_BLOCKED_EXIT_CODE = 2
+
+
+class TestFeatureFirstThroughTheHookBinary:
+    """Drives the real `cline_hooks` entry point with the pi bridge's JSON payloads."""
+
+    @pytest.fixture
+    def hook_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:
+        """Environment for the hook process, with a listening port standing in for the memory server."""
+        with TCPServer(("127.0.0.1", 0), BaseRequestHandler) as server_socket:
+            threading.Thread(target=server_socket.serve_forever, daemon=True).start()
+            monkeypatch.setenv("MCP_MEMORY_URL", f"http://127.0.0.1:{server_socket.server_address[1]}/mcp")
+            monkeypatch.setenv("CLINE_HOOKS_FRONTEND", "pi")
+            monkeypatch.setenv("MCP_MEMORY_FEATURE_FIRST_BLOCK", "1")
+            monkeypatch.setenv("CLINE_HOOKS_DATA_DIR", str(tmp_path / "hooks"))
+            yield dict(os.environ)
+            server_socket.shutdown()
+
+    @staticmethod
+    def _run(env: dict[str, str], **payload: object) -> int:
+        """Run one bridge event through the hook entry point and return its exit code."""
+        cwd = str(Path(env["MCP_MEMORY_DB_PATH"]).parent)
+        identity = {"session_id": "lead", "cwd": cwd, "session_name": "", "agent_id": ""}
+        result = subprocess.run(
+            [sys.executable, "-m", "cline_hooks"],
+            input=json.dumps({**identity, **payload}),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.returncode
+
+    def _write_feature(self, env: dict[str, str], tool_result: str) -> None:
+        self._run(
+            env,
+            hook_event_name="tool_result",
+            tool_name="mcp__memory__create_entities",
+            tool_input={"project": "proj", "entities": [_PI_FEATURE]},
+            tool_response={"success": True, "result": tool_result},
+        )
+
+    def test_lead_second_file_edit_is_blocked_until_a_feature_write_succeeds(self, hook_env: dict[str, str]) -> None:
+        assert self._run(hook_env, **_PI_EDIT_EVENT) == 0
+        assert self._run(hook_env, **_PI_SECOND_EDIT_EVENT) == _HOOK_BLOCKED_EXIT_CODE
+
+        self._write_feature(hook_env, json.dumps({"error": "Entity type 'feature' requires at least one relation"}))
+        assert self._run(hook_env, **_PI_SECOND_EDIT_EVENT) == _HOOK_BLOCKED_EXIT_CODE
+
+        self._write_feature(hook_env, json.dumps({"created": 1}))
+        assert self._run(hook_env, **_PI_SECOND_EDIT_EVENT) == 0
+
+    def test_subagent_edits_are_not_gated_by_the_lead_but_need_an_identity(self, hook_env: dict[str, str]) -> None:
+        for event in (_PI_EDIT_EVENT, _PI_SECOND_EDIT_EVENT):
+            assert self._run(hook_env, session_id="child", agent_id="run-1", **event) == 0
+            assert self._run(hook_env, session_id="child-2", session_name="worker#deadbeef", **event) == 0
+        assert self._run(hook_env, session_id="child-3", **_PI_EDIT_EVENT) == 0
+        assert self._run(hook_env, session_id="child-3", **_PI_SECOND_EDIT_EVENT) == _HOOK_BLOCKED_EXIT_CODE

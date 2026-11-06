@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # memory-review
 
-**MUST run only when explicitly asked, or at a genuine lull (session wind-down, no active task)** - a long, heavyweight audit, invoked only via the user's explicit `/memory-review`. The periodic "review due" hook reminder is a nudge to mention to the user, not an instruction to launch this skill automatically; MUST surface it and let the user decide.
+**MUST run only when explicitly asked, or at a genuine lull (session wind-down, no active task)** (`/memory-review`) - a long, heavyweight audit. The periodic "review due" hook reminder is a nudge: MUST surface it and let the user decide, not launch this skill automatically.
 
 MUST work through this checklist to audit and clean up the memory graph. The `/visualise` endpoint gives a visual overview, but auditors MUST read the graph data via the **read-only memory MCP tools** (`read_graph`, `search_nodes`, `get_entity_with_relations`), NOT via `curl`/`Read` of `/api/graph`.
 
@@ -37,14 +37,14 @@ The "MEMORY UPDATE REQUIRED" gate (in mcp-memory's own hook plugin, `hooks/plugi
 `create_entities` now rejects new unprefixed names and any mis-named/second `project` entity at creation time (a name must start with `<entityType>/`, and a `project` entity must be named exactly `project/<scope>`). The checks below therefore target **legacy entities created before that enforcement** - new ones can no longer be made.
 
 The audit's `orphans`, `misused_project_type`, `unprefixed`, and `ghost_scopes` keys enumerate these deterministically:
-- **Orphan entities** (`orphans`) - nodes with zero relations (these float disconnected in the graph)
-- **Misused `project` type** (`misused_project_type`) - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` is the only type exempt from the relation requirement, so a legacy work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. This is usually a modeling mistake: MUST rename_entity it to a `task/`, `feature/`, or `pattern/` name (add a relation first), or delete it if superseded.
-- **Unprefixed entities** (`unprefixed`) - names not starting with a standard prefix (`project/`, `feature/`, `task/`, `user-preferences/`, `pattern/`, `knowledge/`)
-- **Ghost project scopes** (`ghost_scopes`) - scopes that exist but contain zero entities (from auto-generated sessions, old renames)
+- **Orphan entities** (`orphans`) - nodes with zero relations
+- **Misused `project` type** (`misused_project_type`) - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` is the only type exempt from the relation requirement, so a legacy work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. This is usually a modeling mistake: MUST rename_entity it to a `task/`, `feature/`, or `pattern/` name (the type follows; add a relation first), or delete it if superseded or a task/feature already covers it.
+- **Unprefixed entities** (`unprefixed`) - names without a standard prefix (`project/`, `feature/`, `task/`, `user-preferences/`, `pattern/`, `knowledge/`)
+- **Ghost project scopes** (`ghost_scopes`) - scopes with zero entities (auto-generated sessions, old renames)
 
 **Duplicate entities** - same concept stored with and without prefix (e.g. `MyProject` and `project/MyProject`) - are a judgement call the audit does not make: MUST cross-reference the `unprefixed` list against prefixed names in the same scope.
 
-Fix (your judgement): MUST rename with proper prefix using `rename_entity` (preserves observations and relations - no delete+recreate needed), link orphans, or delete if stale. For a misused `project` entity, MUST rename_entity it to the correct type prefix (the type follows; add a relation first), or delete it if a task/feature already covers it.
+Fix (your judgement): MUST rename with proper prefix using `rename_entity` (preserves observations and relations - no delete+recreate needed), link orphans, or delete if stale.
 
 ## 2. Consolidate duplicates
 
@@ -58,11 +58,11 @@ MUST look for:
 ## 3. Trim bloated entities
 
 Project and task entities accumulate session-level detail over time. MUST trim them:
-- **`project/` entities** SHOULD contain only current-state facts (tooling, paths, config, active TODOs) - not commit SHAs, resolved work detail, or session logs
-- **Resolved `task/` entities** SHOULD be 1-3 observations max (outcome summary) - not a play-by-play of the implementation. If a feature entity captures the result, the task can have zero observations. SHOULD use `trim_observations_to_outcome(project, name, keep_hashes)` to trim an oversized resolved entity down to the kept observations in one call rather than individual `delete_observations`.
-- **`feature/` entities** SHOULD describe the current state of the feature, not its development history
+- **`project/` entities** SHOULD contain only current-state facts (tooling, paths, config) - TODOs are `task/` entities - not commit SHAs, resolved work detail, or session logs
+- **Resolved `task/` entities** SHOULD hold only an instruction carrying what the user asked (not how-detail outside the ask: file names, test styles, past tense), a decision and why, and an outcome line only for what git can't show (where it landed: PR or CR number, merged, deployed; what is unverified; a surprise), else none (0-3 observations) - not a play-by-play of the implementation. SHOULD move each open follow-up to its own `planned` `task/`. SHOULD use `trim_observations_to_outcome(project, name, keep_hashes)` to trim an oversized resolved entity to the kept observations in one call rather than `delete_observations`.
+- **`feature/` entities** MUST hold the user's stated decisions with their reasons, gotchas and decisions binding later work, and MAY hold one caller-view line (what the capability does for its caller) - no status line, task text, the ask, implementation detail (file names, internals, test layout) or history. MUST move a fact serving no capability to `knowledge/`, a how-to to `pattern/`
 - **`user-preferences/` entities** SHOULD contain only preferences NOT already encoded in steering files/skills (which are always loaded). Observations duplicating rule file content are pure waste.
-- SHOULD move reusable learnings to `pattern/` entities in global scope
+- SHOULD move how-tos reusable elsewhere to `pattern/` entities: project scope if reusable only in the project, else `global`
 
 ### Size targets
 
@@ -80,11 +80,11 @@ The audit's `oversized` key lists every entity over its ceiling (with `count` an
 ## 4. Extract patterns from mega-entities
 
 When a `user-preferences/` or `project/` entity has observations spanning unrelated domains, MUST extract them into focused `pattern/` entities:
-- Technical gotchas (CDK, AWS, DDB) -> `pattern/<service>-gotchas`
+- Reusable technical how-tos (CDK, AWS, DDB) -> `pattern/<service>-gotchas`, `part-of` its closest broader pattern. A gotcha for one capability goes on its `feature/`
 - CLI command recipes -> `pattern/<tool>-commands`
 - Workflow recipes (CR, deployment, testing) -> `pattern/<workflow>-<aspect>`
 
-Each pattern entity SHOULD be independently searchable - someone searching for "CDK alarm" should hit the pattern directly, not wade through a 50-observation preferences blob.
+Each pattern entity SHOULD be independently searchable (a search for "CDK alarm" hits the pattern directly).
 
 ## 5. Clean up stale entities
 
@@ -104,8 +104,8 @@ Each pattern entity SHOULD be independently searchable - someone searching for "
 The audit flags the two mechanical relation faults for you: `orphans` (entities with zero relations, from section 1) and `relation_violations` (`task belongs-to project` edges). MUST work those keys, then apply the judgement checks below the audit cannot make:
 - Every non-exempt entity SHOULD have at least one relation (see `orphans`)
 - `task/` entities MUST have `implements` relation(s) to the feature(s) they modify - NOT `belongs-to` project (see `relation_violations`)
-- `feature/` entities MUST have `belongs-to` relation to their parent project or knowledge hub
-- `pattern/` entities SHOULD be linked to relevant `user-preferences/` or `project/` entities
+- `feature/` entities MUST have `belongs-to` relation to their `project/`
+- `pattern/` entities MUST form a tree per scope: `part-of` the closest broader pattern (a top-level one `part-of` `project/<project>`, or `project/global` in `global`), never a hub
 - `knowledge/` entities SHOULD be linked to relevant projects or preferences
 - SHOULD use specific relation types (`implements`, `depends-on`) over generic ones (`relates-to`)
 - MUST check for overlapping entities that SHOULD be cross-linked (e.g. two patterns covering related topics)
@@ -113,15 +113,15 @@ The audit flags the two mechanical relation faults for you: `orphans` (entities 
 ## 6a. Fix star graphs
 
 A common anti-pattern is every task linking directly to the project root, creating a star graph - the audit's `star_graph_tasks` key lists every `task -> project` edge (both the `belongs-to` violations and any other direct link). MUST fix this by:
-- Ensuring feature entities exist for each major area of the project
+- Ensuring feature entities exist for each capability (`feature/<project>/<capability>`)
 - Replacing `task belongs-to project` with `task implements feature`
-- Tasks are still reachable from the project via feature traversal (feature belongs-to project)
-- MAY link a task directly to a project only if no relevant feature entity exists yet
+- Tasks stay reachable from the project via their feature
+- MUST create a feature when none fits, never link a task directly to a project
 
 ## 7. Check global vs project scope
 
 - **Global scope** SHOULD contain only: user preferences, cross-project patterns, cross-project knowledge
-- **Project scope** SHOULD contain: detailed project facts, features, tasks, and project-specific preferences
+- **Project scope** SHOULD contain: detailed project facts, features, tasks, project-only patterns, and project-specific preferences
 - If a global entity has more than ~20 observations, it's probably bloated - SHOULD trim or extract patterns
 - Observations about the same topic SHOULD live on ONE entity, not be scattered across multiple (consolidate overlaps)
 

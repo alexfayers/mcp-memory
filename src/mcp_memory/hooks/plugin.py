@@ -8,21 +8,24 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
-import random
 import re
 import socket
+import subprocess
 from urllib.parse import urlparse
 
-from cline_hooks.core.parameters import FileEditParameters, ReadParameters
+from cline_hooks.core.parameters import FileEditParameters, ReadParameters, ShellParameters
 from cline_hooks.core.plugin import HookResult, HooksPlugin, collect_contributions, hookimpl, hookspec, is_subagent
 from cline_hooks.core.vocabulary import (
+    AGENT_SPAWN_TOOLS,
     BOOKKEEPING_TOOLS,
     FILE_EDIT_TOOLS,
     FILE_READ_TOOLS,
     MESSAGE_TOOLS,
+    PLAN_EXIT_TOOLS,
     SHELL_TOOLS,
     SKILL_TOOLS,
     CanonicalTool,
+    TaskSource,
 )
 from cline_hooks.plugins.startup_blocks import StartupBlock
 
@@ -33,18 +36,29 @@ from mcp_memory.hooks.review_tracker import (
     reset as reset_review,
     should_nudge,
 )
+from mcp_memory.hooks.shell_writes import shell_write_targets
 from mcp_memory.hooks.tracker import (
+    claim_edit_path,
+    claim_once,
     clear,
-    get_reminder_chance,
     get_scope,
     get_window,
     has_edited,
     has_scope_blocked,
+    has_wide_edit,
+    has_wide_work,
+    has_written,
     increment,
     mark_edited,
+    mark_failed,
     mark_scope_blocked,
+    mark_wide_edit,
+    mark_wide_work,
+    mark_written,
+    pop_failed,
     reset,
-    set_reminder_chance,
+    reset_context_window,
+    reset_work,
     set_scope,
     should_block,
     should_warn,
@@ -59,30 +73,83 @@ _MEMORY_WRITE_CALL = re.compile(rf"_(?:{'|'.join(map(re.escape, MUTATING_TOOLS))
 
 _MEMORY_READ_TOOL_NAMES = frozenset(READ_ONLY_TOOLS)
 
-_MEMORY_REMINDER_TOOLS = FILE_EDIT_TOOLS | SHELL_TOOLS | {CanonicalTool.PLAN_MODE_RESPOND}
-
 _MEMORY_REPLACE_CLAUSE = (
     "If this replaces or contradicts an observation, search_nodes then edit_observation it instead of appending."
 )
+_MEMORY_LASTING_FACT_KINDS = "a decision and why, gotcha, preference, where something lives"
 _MEMORY_REMINDER_TEMPLATE = (
-    "MEMORY UPDATE REQUIRED: MUST update the `{project}` project and `global`"
-    " scopes in the memory server now.\n"
-    "MUST record what you just did and why. MUST write one fact per observation. " + _MEMORY_REPLACE_CLAUSE
+    "MEMORY CHECK: if you just learned something a new session can't get from code or git ("
+    + _MEMORY_LASTING_FACT_KINDS
+    + "), record it in the `{project}` project or `global` scope now. "
+    "Don't record what you changed or that tests pass. " + _MEMORY_REPLACE_CLAUSE
 )
-_MEMORY_REMINDER_CHANCE = 0.6
-_MEMORY_COOLDOWN_STEPS = 5
 _MEMORY_BLOCK_TEMPLATE = (
-    "MEMORY UPDATE REQUIRED: MUST update the `{project}` project and `global` scopes in the memory server "
-    "before continuing. " + _MEMORY_REPLACE_CLAUSE
+    "MEMORY UPDATE REQUIRED: before continuing, record any lasting fact (" + _MEMORY_LASTING_FACT_KINDS + ") in the"
+    " `{project}` project or `global` scope, or set the task's status if there is none. " + _MEMORY_REPLACE_CLAUSE
 )
 _MEMORY_SERVER_DOWN_NOTE = (
     "Memory server appears to be unreachable ({url}) - skipping the memory-update "
     "block so you aren't stuck. Let the user know memory is currently unavailable."
 )
-_MEMORY_COMPLETION_REMINDER = (
-    "REQUIRED before completing:\n1. Update `memory`\n2. One observation per fact (what changed, why, TODOs)"
+_TRACKED_ENTITY_KINDS = ("feature", "task")
+_FEATURE_RULES = (
+    "A `feature/` records the user's stated decisions about the capability with their reasons, its gotchas, "
+    "and every decision binding later work on it. It may also hold one caller-view line: what the capability "
+    "does for its caller, written from the caller's side so search finds it. A `feature/` never holds a status "
+    "line, task text or the ask, or implementation detail (file names, internals, test layout). "
+    "A learning serving no capability is no `feature/`: a how-to goes in a `pattern/`, "
+    "a standalone fact in `knowledge/`. "
 )
-_MEMORY_COMPACT_WARNING = "Save any important context, decisions, or progress to memory NOW before it's lost."
+_FEATURE_RELATION = (
+    "Pass the `feature/`'s relation inline, not as a separate create_relations call (the entity is not created "
+    "without it): entities:[{name:'feature/<p>/<capability>', entityType:'feature', observations:['<fact>'], "
+    "relations:[{target:'project/<p>', type:'part-of'}]}]. "
+)
+_FEATURE_FIRST_BLOCK = (
+    "Create or update the `feature/` for this work before editing a second file or creating one. "
+    + _FEATURE_RULES
+    + _FEATURE_RELATION
+    + "In that same call add one small `task/` that `implements` "
+    "the `feature/` for this work. Set that `task/` `resolved` with its `status`, never as a `feature/` observation, "
+    "in the script running the final check, once it passes, or with the last memory write. "
+    "If the work is planned, add one per step."
+)
+_FEATURE_REQUIRED_BLOCK = (
+    "Before finishing, write the `feature/` for the capability this work adds or changes: search for one first, "
+    "add to it only if it already covers that capability, otherwise create a new one. "
+    + _FEATURE_RULES
+    + _FEATURE_RELATION
+    + "Make this work's `task/` `implements` it."
+)
+_FEATURE_FIRST_NOTE = (
+    "Write this work's `feature/` and `task/` in one `create_entities` call, in the same message or script as your "
+    "first file reads or edits, never in a turn of its own. "
+    "Write them before editing a second file, creating a file or writing a file from the shell. "
+    "A fix to one existing file may instead write both with its final check. " + _FEATURE_FIRST_BLOCK
+)
+_TASKS_REQUIRED_BLOCK = (
+    "Before finishing, record this work's `task/` entities (one small step each, `implements` the `feature/`): "
+    "create any missing one, add its decisions, make each open follow-up its own `planned` `task/`, and set "
+    "each finished one `resolved`. Add an outcome line only for what git can't show: where it landed (PR or CR "
+    "number, merged, deployed), what is still unverified, or a surprise. With none, write no outcome line."
+)
+_MEMORY_COMPLETION_REMINDER = (
+    "REQUIRED before completing:\n1. Update `memory`\n"
+    "2. One observation per lasting fact (decision and why, gotcha, preference, where things live), "
+    "not change narration. Capability gotchas and lasting decisions go on its `feature/` "
+    "(never implementation detail), step decisions on the `task/`, reusable how-tos in a "
+    "`pattern/` tree (project scope, or `global` if reusable across projects)\n"
+    "3. Set each finished `task/` `resolved`, and make each open follow-up its own `planned` `task/`. "
+    "Add an outcome line only for what git can't show: where it landed (PR or CR number, merged, deployed), "
+    "what is still unverified, or a surprise. With none, write no outcome line"
+)
+_WORKAROUND_GOTCHA_NUDGE = (
+    "If you just worked around something a new session would hit too, add it as a gotcha on the feature now."
+)
+_MEMORY_COMPACT_WARNING = (
+    "Save any lasting decisions and gotchas to memory NOW, make each open follow-up a `planned` `task/`, and set "
+    "task statuses, before they're lost."
+)
 _MEMORY_REVIEW_NUDGE = (
     "MEMORY REVIEW DUE: many memory writes have accumulated since the last review. "
     "Mention this to the user and let them run `/memory-review` when they choose - "
@@ -117,6 +184,9 @@ _AUTO_REGISTER_UNKNOWN_NOTE = (
 _DEFAULT_READ_ONLY_AGENT_TYPES = frozenset({"Explore", "Plan"})
 _READ_ONLY_AGENTS_ENV = "MCP_MEMORY_READONLY_AGENTS"
 
+_FEATURE_FIRST_BLOCK_ENV = "MCP_MEMORY_FEATURE_FIRST_BLOCK"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
 _FILE_EDIT_TOOLS_ENV = "MCP_MEMORY_EDIT_TOOLS"
 _EDIT_TOOL_WEIGHT = 0.25
 
@@ -137,6 +207,34 @@ def _read_only_agent_types() -> frozenset[str]:
 def _is_exempt_agent(agent_type: str) -> bool:
     """Return True if a read-only subagent type is exempt from the memory gate."""
     return bool(agent_type) and agent_type in _read_only_agent_types()
+
+
+_GIT_COMMIT = re.compile(r"(?:^|[|;&(\n])\s*git(?:\s+-\S+(?:\s+[^-\s]\S*)?)*\s+commit\b")
+_SPAWNED_AGENT_KEYS = ("subagent_type", "definition", "agent_type", "agent")
+
+
+def _delegates_work(tool_name: str, parameters: dict[str, object]) -> bool:
+    """Return True if the call hands work to an agent that is not read-only."""
+    return tool_name in AGENT_SPAWN_TOOLS and not any(
+        _is_exempt_agent(str(parameters.get(key, ""))) for key in _SPAWNED_AGENT_KEYS
+    )
+
+
+def _commits(tool_name: str, parameters: dict[str, object]) -> bool:
+    """Return True if the call is a shell command that runs `git commit`."""
+    return tool_name in SHELL_TOOLS and _GIT_COMMIT.search(ShellParameters.build(parameters).command) is not None
+
+
+def _missing_record_blocks(task_id: str) -> list[str]:
+    """Return the blocks for the `task/` and `feature/` records the task's work still lacks."""
+    return [
+        block
+        for block, missing in (
+            (_TASKS_REQUIRED_BLOCK, not has_written(task_id, "task")),
+            (_FEATURE_REQUIRED_BLOCK, has_wide_edit(task_id) and not has_written(task_id, "feature")),
+        )
+        if missing
+    ]
 
 
 def _is_wrapper_tool(tool_name: str) -> bool:
@@ -169,17 +267,6 @@ def _file_edit_tool_names() -> frozenset[str]:
 def _is_file_edit(tool_name: str) -> bool:
     """Return True if a tool call is a reduced-weight file-edit operation."""
     return _extract_mcp_suffix(tool_name) in _file_edit_tool_names()
-
-
-def _reminder_due(task_id: str) -> bool:
-    """Step the task's reminder chance, roll it, and reset the chance when a reminder is due."""
-    chance = min(
-        _MEMORY_REMINDER_CHANCE,
-        get_reminder_chance(task_id, _MEMORY_REMINDER_CHANCE) + _MEMORY_REMINDER_CHANCE / _MEMORY_COOLDOWN_STEPS,
-    )
-    due = random.random() < chance
-    set_reminder_chance(task_id, 0.0 if due else chance)
-    return due
 
 
 def _extract_mcp_suffix(tool_name: str) -> str:
@@ -325,6 +412,60 @@ def _parse_mcp_arguments(
     return parameters
 
 
+_ENTITY_NAME_KEYS = {
+    "add_observations": "entityName",
+    "edit_observation": "entityName",
+    "set_entity_status": "name",
+}
+
+
+def _has_text(values: list[str]) -> bool:
+    """Return True if any of the texts is not blank."""
+    return any(value.strip() for value in values)
+
+
+def _recorded_entity_names(name: str, args: dict[str, object]) -> list[tuple[str, bool]]:
+    """Return each entity a memory write fills in, with whether the write only sets a status."""
+    if name == "create_entities":
+        entities = args.get("entities")
+        filled = [e for e in entities if isinstance(e, dict) and "name" in e] if isinstance(entities, list) else []
+        return [(str(e["name"]), False) for e in filled if _has_text(_str_list(e.get("observations")))]
+    entity = args.get(_ENTITY_NAME_KEYS.get(name, ""))
+    if not isinstance(entity, str):
+        return []
+    if name == "set_entity_status":
+        return [(entity, True)] if args.get("status") else []
+    texts = _str_list(args.get("observations") if name == "add_observations" else [args.get("newText") or ""])
+    return [(entity, False)] if _has_text(texts) else []
+
+
+def _record_written_kinds(task_id: str, project_scope: str, tool_name: str, parameters: dict[str, object]) -> None:
+    """Record which entity kinds (`feature/`, `task/`) a memory write filled in for the work's project.
+
+    An empty write, a rename, a write to another project, or a status set on a `feature/` records nothing.
+    """
+    name = _resolve_memory_tool(tool_name, parameters)
+    args = _parse_mcp_arguments(tool_name, parameters)
+    project = str(args.get("project", ""))
+    if project_scope not in {"unknown", project}:
+        return
+    for entity, only_status in _recorded_entity_names(name, args):
+        for kind in _TRACKED_ENTITY_KINDS:
+            if entity.startswith(f"{kind}/") and (kind == "task" or not only_status):
+                mark_written(task_id, kind)
+
+
+def _is_error_result(tool_result: object) -> bool:
+    """Return True when a memory tool result is a JSON object carrying an `error` key."""
+    if not isinstance(tool_result, str):
+        return False
+    try:
+        parsed = json.loads(tool_result)
+    except ValueError:
+        return False
+    return isinstance(parsed, dict) and "error" in parsed
+
+
 _OBSERVATION_TEXT_TOOLS = frozenset({"create_entities", "add_observations", "edit_observation"})
 
 
@@ -442,13 +583,90 @@ def _is_memory_server_reachable() -> bool:
         return False
 
 
+def _block_unless_server_down(reason: str) -> HookResult:
+    """Return a block with this reason, or a server-down note when the memory server is unreachable."""
+    if not _is_memory_server_reachable():
+        return HookResult(notes=[_MEMORY_SERVER_DOWN_NOTE.format(url=get_memory_url())])
+    return HookResult(block=reason)
+
+
 def _check_block(task_id: str, project_scope: str) -> HookResult | None:
     """Return a block result if the task has exceeded the memory update threshold."""
     if not should_block(task_id):
         return None
-    if not _is_memory_server_reachable():
-        return HookResult(notes=[_MEMORY_SERVER_DOWN_NOTE.format(url=get_memory_url())])
-    return HookResult(block=_MEMORY_BLOCK_TEMPLATE.format(project=project_scope))
+    return _block_unless_server_down(_MEMORY_BLOCK_TEMPLATE.format(project=project_scope))
+
+
+def _written_paths(tool_name: str, parameters: dict[str, object], workspace_roots: list[str]) -> list[str]:
+    """Return the paths a file edit or shell call writes, minus a shell write's gitignored and log targets."""
+    if _is_file_edit(tool_name):
+        return [FileEditParameters.build(parameters).path]
+    if tool_name not in SHELL_TOOLS:
+        return []
+    targets = shell_write_targets(ShellParameters.build(parameters).command, workspace_roots)
+    base = Path(_workspace_base(workspace_roots))
+    return [target for target in targets if not target or not _is_ignored_target(base, base / target)]
+
+
+def _workspace_base(workspace_roots: list[str]) -> str:
+    """Return the directory relative write targets resolve against."""
+    return workspace_roots[0] if workspace_roots else "."
+
+
+def _is_ignored_target(base: Path, target: Path) -> bool:
+    """Return True if a write target is a log file or git ignores it."""
+    if target.suffix == ".log":
+        return True
+    if not base.is_dir():
+        return False
+    command = ["git", "check-ignore", "-q", str(target)]
+    return subprocess.run(command, cwd=base, capture_output=True, check=False).returncode == 0
+
+
+def _feature_first_trigger(
+    task_id: str, tool_name: str, parameters: dict[str, object], workspace_roots: list[str]
+) -> str | None:
+    """Return what makes this call need the `feature/` first, or None when it is free.
+
+    One existing file's edits are free. A second file, a created file or an edit with no path is not.
+    """
+    paths = _written_paths(tool_name, parameters, workspace_roots)
+    if has_written(task_id, "feature") or not paths:
+        return None
+    if not all(paths):
+        return "This edit names no file"
+    targets = [Path(_workspace_base(workspace_roots), path) for path in paths]
+    creates_when_missing = not _is_file_edit(tool_name) or _extract_mcp_suffix(tool_name) == CanonicalTool.WRITE
+    if creates_when_missing and (missing := next((t for t in targets if not t.exists()), None)):
+        return f"This creates `{missing}`"
+    second = next((t for t in targets if not claim_edit_path(task_id, os.path.normpath(t))), None)
+    return None if second is None else f"This writes a second file, `{second}`"
+
+
+def _check_feature_first(
+    task_id: str, tool_name: str, parameters: dict[str, object], workspace_roots: list[str]
+) -> HookResult | None:
+    """Return a block, or a one-off note unless blocking is on, for work past one existing file before a `feature/`."""
+    trigger = _feature_first_trigger(task_id, tool_name, parameters, workspace_roots)
+    if trigger is None:
+        return None
+    mark_wide_edit(task_id)
+    message = f"{trigger}. {_FEATURE_FIRST_BLOCK}"
+    if os.environ.get(_FEATURE_FIRST_BLOCK_ENV, "").strip().lower() in _TRUTHY:
+        return _block_unless_server_down(message)
+    return HookResult(notes=[message]) if claim_once(task_id, "feature_edit_note") else None
+
+
+def _feature_first_note(task_id: str, tool_name: str | None = None) -> HookResult | None:
+    """Return a one-off note when no `feature/` has been written in the task.
+
+    Fires on the user prompt (no tool name) or on the first file read.
+    """
+    if tool_name is not None and tool_name not in FILE_READ_TOOLS:
+        return None
+    if has_written(task_id, "feature") or not claim_once(task_id, "feature_note"):
+        return None
+    return HookResult(notes=[_FEATURE_FIRST_NOTE])
 
 
 def _task_scope(task_id: str, workspace_roots: list[str]) -> str:
@@ -643,8 +861,10 @@ class MemoryPlugin(HooksPlugin):
             "PreToolUse": self._on_pre_tool_use,
             "PreMcpToolUse": self._on_pre_mcp_tool_use,
             "PostToolUse": self._on_post_tool_use,
+            "ToolFailed": self._on_tool_failed,
             "UserPromptSubmit": self._on_user_prompt_submit,
-            "AttemptCompletion": lambda **_: HookResult(notes=[_MEMORY_COMPLETION_REMINDER]),
+            "AttemptCompletion": self._on_attempt_completion,
+            "Stop": self._on_stop,
             "PreCompact": lambda **_: HookResult(notes=[_MEMORY_COMPACT_WARNING]),
         }
 
@@ -675,8 +895,10 @@ class MemoryPlugin(HooksPlugin):
     def _on_task_start(self, **kwargs: object) -> HookResult:
         task_id = str(kwargs.get("task_id", ""))
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
-        clear(task_id)
-        set_reminder_chance(task_id, 0.0)
+        if kwargs.get("source") == TaskSource.COMPACT:
+            reset_context_window(task_id)
+        else:
+            clear(task_id)
         auto_note = self._maybe_auto_register(workspace_roots)
         if workspace_roots:
             set_scope(task_id, _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name)
@@ -707,6 +929,31 @@ class MemoryPlugin(HooksPlugin):
             return _AUTO_REGISTER_UNKNOWN_NOTE.format(anchor=anchor)
         return _AUTO_REGISTERED_NOTE.format(project=project, anchor=anchor)
 
+    def _on_attempt_completion(self, **kwargs: object) -> HookResult:
+        return self._tasks_required(**kwargs) or HookResult(notes=[_MEMORY_COMPLETION_REMINDER])
+
+    def _on_stop(self, **kwargs: object) -> HookResult | None:
+        task_id = str(kwargs.get("task_id", ""))
+        blocked = self._tasks_required(**kwargs)
+        if blocked and not claim_once(task_id, "stop_block"):
+            return None
+        if blocked is None and has_edited(task_id):
+            reset_work(task_id)
+        return blocked
+
+    def _tasks_required(self, **kwargs: object) -> HookResult | None:
+        """Block finishing wide work without a `task/`, or without a `feature/` once work went past one file."""
+        task_id = str(kwargs.get("task_id", ""))
+        if (
+            _is_exempt_agent(str(kwargs.get("agent_type", "")))
+            or is_subagent(kwargs)
+            or not (has_edited(task_id) and has_wide_work(task_id))
+            or not _is_memory_server_reachable()
+        ):
+            return None
+        blocks = _missing_record_blocks(task_id)
+        return HookResult(block=" ".join(blocks)) if blocks else None
+
     def _on_task_end(self, **kwargs: object) -> None:
         clear(str(kwargs.get("task_id", "")))
 
@@ -716,7 +963,7 @@ class MemoryPlugin(HooksPlugin):
         return HookResult(notes=[note]) if note else None
 
     def _on_user_prompt_submit(self, **kwargs: object) -> HookResult | None:
-        """Nudge on a memory-review backlog or on a profanity/shouting frustration signal."""
+        """Nudge on a memory-review backlog, a frustration signal, or a missing `feature/` for the task."""
         notes: list[str] = []
         if should_nudge():
             reset_review()
@@ -724,6 +971,11 @@ class MemoryPlugin(HooksPlugin):
         frustration_note = self._frustration_note(str(kwargs.get("message", "")))
         if frustration_note:
             notes.append(frustration_note)
+        task_id = str(kwargs.get("task_id", ""))
+        if has_written(task_id, "task") and not _missing_record_blocks(task_id):
+            reset_work(task_id)
+        if not is_subagent(kwargs) and (feature_note := _feature_first_note(task_id)):
+            notes.extend(feature_note.notes)
         return HookResult(notes=notes) if notes else None
 
     def _frustration_note(self, message: str) -> str | None:
@@ -746,14 +998,18 @@ class MemoryPlugin(HooksPlugin):
         task_id = str(kwargs.get("task_id", ""))
         tool_name = str(kwargs.get("tool_name", ""))
         parameters = _str_dict(kwargs.get("parameters", {}))
-        project_scope = _task_scope(task_id, _str_list(kwargs.get("workspace_roots", [])))
+        roots = _str_list(kwargs.get("workspace_roots", []))
+        project_scope = _task_scope(task_id, roots)
         if _is_memory_write(tool_name, parameters):
             return _check_memory_write(task_id, project_scope, tool_name, parameters)
+        feature_first = None if is_subagent(kwargs) else _check_feature_first(task_id, tool_name, parameters, roots)
+        if feature_first and feature_first.block:
+            return feature_first
         if _is_memory_read(tool_name, parameters) or _is_uncounted_call(tool_name, parameters, kwargs):
-            return None
+            return feature_first
         if is_subagent(kwargs):
             return None
-        return _check_block(task_id, project_scope)
+        return _check_block(task_id, project_scope) or feature_first
 
     def _on_pre_mcp_tool_use(self, **kwargs: object) -> HookResult | None:
         result = self._gate_mcp_tool_use(**kwargs)
@@ -788,6 +1044,15 @@ class MemoryPlugin(HooksPlugin):
             return None
         return _check_block(task_id, project_scope)
 
+    def _on_tool_failed(self, **kwargs: object) -> None:
+        """Remember a failed shell command so the next successful one can prompt for a gotcha."""
+        if (
+            not _is_exempt_agent(str(kwargs.get("agent_type", "")))
+            and not is_subagent(kwargs)
+            and str(kwargs.get("tool_name", "")) in SHELL_TOOLS
+        ):
+            mark_failed(str(kwargs.get("task_id", "")))
+
     def _on_post_tool_use(self, **kwargs: object) -> HookResult | None:
         agent_type = str(kwargs.get("agent_type", ""))
         if _is_exempt_agent(agent_type) or is_subagent(kwargs):
@@ -798,13 +1063,20 @@ class MemoryPlugin(HooksPlugin):
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
         _task_scope(task_id, workspace_roots)
 
-        if _is_file_edit(tool_name):
+        is_wide = _delegates_work(tool_name, parameters) or _commits(tool_name, parameters)
+        if is_wide or _is_file_edit(tool_name) or _written_paths(tool_name, parameters, workspace_roots):
             mark_edited(task_id)
+        if is_wide or tool_name in PLAN_EXIT_TOOLS:
+            mark_wide_work(task_id)
+
+        if tool_name in SHELL_TOOLS and pop_failed(task_id):
+            return HookResult(notes=[_WORKAROUND_GOTCHA_NUDGE])
 
         if _is_memory_write(tool_name, parameters):
-            reset(task_id)
-            set_reminder_chance(task_id, 0.0)
-            record_write()
+            if not _is_error_result(kwargs.get("tool_result")):
+                _record_written_kinds(task_id, _task_scope(task_id, workspace_roots), tool_name, parameters)
+                reset(task_id)
+                record_write()
             return None
 
         if (
@@ -820,12 +1092,10 @@ class MemoryPlugin(HooksPlugin):
             increment(task_id)
         _record_scope_from_parameters(task_id, tool_name, parameters)
 
-        if should_warn(task_id) or (
-            tool_name in _MEMORY_REMINDER_TOOLS and has_edited(task_id) and _reminder_due(task_id)
-        ):
+        if should_warn(task_id):
             reminder = _MEMORY_REMINDER_TEMPLATE.format(
                 project=_task_scope(task_id, workspace_roots),
             )
             return HookResult(notes=[reminder])
 
-        return None
+        return _feature_first_note(task_id, tool_name)
