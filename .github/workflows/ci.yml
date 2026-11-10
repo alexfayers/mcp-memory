@@ -121,6 +121,13 @@ jobs:
           git commit --message "chore: update benchmark badges for $GITHUB_SHA"
           git push --force "https://x-access-token:${{ github.token }}@github.com/$GITHUB_REPOSITORY" HEAD:benchmark-badge
 
+  prompt-checks:
+    permissions:
+      contents: read
+    uses: alexfayers/llm-prompts/.github/workflows/prompt-checks.yml@main
+    with:
+      prompts-root: src/mcp_memory/prompts
+
   pr-template-check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
