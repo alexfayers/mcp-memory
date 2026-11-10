@@ -38,3 +38,8 @@ Single-line, conventional-commit style: `feat:`, `fix:`, `docs:`, `refactor:`, `
 - State WHAT changed and WHY, not HOW.
 - No restating the diff, no process commentary, no filler.
 - List a PR that must merge first as a `Depends on <PR URL>` line; the `check-dependencies` check fails until it merges and re-checks when that PR closes.
+
+## Copilot review
+
+- The four files under `.github/instructions` (`review`, `python`, `typescript` and `prompts`) are copies of the central files in `alexfayers/llm-prompts`, updated by a bot PR (`bot/copilot-review-rules`). Edit them there.
+- Copilot approvals do not count toward `min-reviews` labels.
