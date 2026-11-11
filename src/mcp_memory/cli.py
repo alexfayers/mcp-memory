@@ -17,6 +17,8 @@ import sys
 import textwrap
 from typing import Any
 
+from cline_hooks.core.user_install import resolve_user_binary, user_path
+
 from . import api_client
 from .config import (
     _DEFAULT_PORT,
@@ -68,7 +70,7 @@ def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
     if "MCP_MEMORY_SURFACED_RETENTION_DAYS" in os.environ:
         env["MCP_MEMORY_SURFACED_RETENTION_DAYS"] = os.environ["MCP_MEMORY_SURFACED_RETENTION_DAYS"]
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_DREAM_")})
-    path = os.environ.get("PATH")
+    path = user_path()
     if path:
         env["PATH"] = path
     return _ServiceSpec(
@@ -85,12 +87,12 @@ def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
 
 
 def _find_binary(name: str) -> str:
-    """Find a console-script binary path, or exit with an error."""
-    path = shutil.which(name)
+    """Find a console-script binary of the user-wide install, or exit with an error."""
+    path = resolve_user_binary(name)
     if not path:
-        print(f"Error: {name} not found in PATH", file=sys.stderr)
+        print(f"Error: {name} not found in PATH outside virtual environments", file=sys.stderr)
         sys.exit(1)
-    return path
+    return str(path)
 
 
 def _plist_env_entries(env: dict[str, str]) -> str:
