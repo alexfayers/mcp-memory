@@ -1,0 +1,33 @@
+name: Review instructions parity
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+    paths:
+      - .github/instructions/review.instructions.md
+      - .github/instructions/python.instructions.md
+      - .github/instructions/typescript.instructions.md
+      - .github/instructions/prompts.instructions.md
+
+permissions: {}
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    env:
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Compare review instructions with alexfayers/llm-prompts main
+        run: |
+          if [ "$HEAD_REF" = "bot/copilot-review-rules" ]; then
+            echo "Bot PR carries the update, skipping."
+            exit 0
+          fi
+          for name in review python typescript prompts; do
+            path=.github/instructions/$name.instructions.md
+            curl -fsSL "https://raw.githubusercontent.com/alexfayers/llm-prompts/main/$path" -o "canonical-$name.md"
+            curl -fsSL "https://raw.githubusercontent.com/$HEAD_REPO/$HEAD_SHA/$path" -o "mirrored-$name.md"
+            cmp "canonical-$name.md" "mirrored-$name.md"
+          done
