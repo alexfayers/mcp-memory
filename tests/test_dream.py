@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from mcp_memory import dream, dream_status, server, tool_names
+from mcp_memory.config import get_db_path
+from mcp_memory.storage import open_writable
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -707,6 +709,10 @@ class TestRunDreamPass:
 
 
 class TestRunHeavyDreamPass:
+    @pytest.fixture(autouse=True)
+    def _database(self) -> None:
+        open_writable(get_db_path()).connection.close()
+
     def test_returns_audit_summary_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
         monkeypatch.setattr(dream, "get_dream_heavy_model", lambda: _MODEL)
@@ -729,6 +735,41 @@ class TestRunHeavyDreamPass:
         assert isinstance(command, list)
         assert "mcp__memory__merge_entities" not in command
         assert "mcp__memory__vote" not in command
+
+    def test_backs_up_the_database_before_the_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
+
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+        ) -> str:
+            assert len(list((get_db_path().parent / "backups").glob("memory-*.db"))) == 1
+            return _dream_payload("[p/task/x] - merged")
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        monkeypatch.setattr(dream, "get_dream_heavy_model", lambda: _MODEL)
+        asyncio.run(dream.run_heavy_dream_pass())
+
+    def test_skips_the_backup_when_backups_are_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: None)
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+        asyncio.run(dream.run_heavy_dream_pass())
+        assert not (get_db_path().parent / "backups").exists()
+
+    def test_aborts_the_pass_when_the_backup_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
+
+        def fail() -> None:
+            raise OSError("disk full")
+
+        async def must_not_spawn(*_: object, **__: object) -> str:
+            raise AssertionError("spawned without a backup")
+
+        monkeypatch.setattr(dream.backup, "backup_database", fail)
+        monkeypatch.setattr(dream, "_spawn_agent", must_not_spawn)
+        assert asyncio.run(dream.run_heavy_dream_pass()).startswith("dream ")
 
     def test_reports_missing_claude_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream.shutil, "which", lambda _: None)

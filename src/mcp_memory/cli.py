@@ -73,11 +73,12 @@ class _ServiceSpec:
 def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
     """Service spec for the mcp-memory data server."""
     env = {"MCP_MEMORY_DB_PATH": str(db_path), "MCP_MEMORY_PORT": port}
-    # Carry any soft-delete purge, GC, and surfaced-retention settings through so
-    # `MCP_MEMORY_PURGE_*/MCP_MEMORY_GC_*/MCP_MEMORY_SURFACED_RETENTION_DAYS
+    # Carry any soft-delete purge, GC, backup, and surfaced-retention settings through so
+    # `MCP_MEMORY_PURGE_*/MCP_MEMORY_GC_*/MCP_MEMORY_BACKUP_*/MCP_MEMORY_SURFACED_RETENTION_DAYS
     # mcp-memory setup-service` sticks in the installed service.
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_PURGE_")})
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_GC_")})
+    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_BACKUP_")})
     if "MCP_MEMORY_SURFACED_RETENTION_DAYS" in os.environ:
         env["MCP_MEMORY_SURFACED_RETENTION_DAYS"] = os.environ["MCP_MEMORY_SURFACED_RETENTION_DAYS"]
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_DREAM_")})

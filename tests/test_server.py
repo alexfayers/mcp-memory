@@ -1482,6 +1482,45 @@ class TestSweepLoop:
         assert len(calls) >= 2
 
 
+class TestBackupLoop:
+    def test_cancels_cleanly_and_backs_up_repeatedly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "get_backup_interval_seconds", lambda: 0.0)
+        calls: list[bool] = []
+        monkeypatch.setattr(server.backup, "backup_database", lambda: calls.append(True))
+
+        async def drive() -> None:
+            task = asyncio.create_task(server._backup_loop())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(drive())
+        assert len(calls) >= 2
+
+    def test_exception_from_one_iteration_does_not_kill_the_loop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "get_backup_interval_seconds", lambda: 0.0)
+        calls: list[bool] = []
+
+        def _backup_database() -> None:
+            calls.append(True)
+            if len(calls) == 1:
+                raise OSError("disk full")
+
+        monkeypatch.setattr(server.backup, "backup_database", _backup_database)
+        monkeypatch.setattr(server.logger, "exception", lambda *_args, **_kwargs: None)
+
+        async def drive() -> None:
+            task = asyncio.create_task(server._backup_loop())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(drive())
+        assert len(calls) >= 2
+
+
 class TestServe:
     @staticmethod
     def _wire_serve(monkeypatch: pytest.MonkeyPatch, started: list[str]) -> None:
@@ -1500,6 +1539,24 @@ class TestServe:
         self._wire_serve(monkeypatch, started)
         asyncio.run(server._serve())
         assert started == ["sweeping"]
+
+    def test_starts_backup_loop_only_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        started: list[str] = []
+        self._wire_serve(monkeypatch, started)
+
+        async def fake_backup_loop() -> None:
+            started.append("backing up")
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(server, "_backup_loop", fake_backup_loop)
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+        asyncio.run(server._serve())
+        assert started == ["sweeping"]
+
+        started.clear()
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "true")
+        asyncio.run(server._serve())
+        assert sorted(started) == ["backing up", "sweeping"]
 
     def test_serves_on_the_configured_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
         served: dict[str, Any] = {}
