@@ -69,12 +69,14 @@ class RelationRepository:
                 if source_type == "task" and target_type == "project" and relation.relation_type == "belongs-to":
                     raise ValueError(
                         "task -> project 'belongs-to' relations are not allowed; link the task "
-                        "to the feature it implements instead."
+                        "to the feature it implements with 'implements'. If no feature fits, "
+                        "create one named for the capability (feature/<project>/<capability>) in the same "
+                        "create_entities call when the task is new."
                     )
                 if get_strict_policy_enabled() and source_type == "task" and target_type == "project":
                     raise ValueError(
                         "Direct task -> project relations are forbidden when MCP_MEMORY_STRICT_POLICY "
-                        "is enabled; use a feature or knowledge entity as the parent instead."
+                        "is enabled; link the task to its feature with 'implements' instead."
                     )
                 relation_type = normalize_relation_type(relation.relation_type)
                 if relation_type not in VALID_RELATION_TYPES:
