@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mcp_memory.migrations.runner import run_migrations
-from mcp_memory.migrations.schema import MIGRATIONS, _relation_type_backfill_statements
+from mcp_memory.migrations.schema import MIGRATIONS, Migration, _relation_type_backfill_statements
 from mcp_memory.models import MAX_VOTE_MAGNITUDE, Entity, Observation, Relation
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _wire_entity
@@ -196,6 +196,26 @@ class TestMigrations:
         reopened = open_writable(db_path)
         assert reopened.projects.get_project_for_path(str(repo)) == "platform"
         reopened.connection.close()
+
+    def test_failed_migration_leaves_no_partial_change(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        db = sqlite3.connect(tmp_path / "broken.db")
+        db.row_factory = sqlite3.Row
+        failing = Migration(
+            version=1,
+            statements=[
+                "CREATE TABLE t (a INTEGER)",
+                "ALTER TABLE t ADD COLUMN b TEXT",
+                "ALTER TABLE missing ADD COLUMN c",
+            ],
+        )
+        monkeypatch.setattr("mcp_memory.migrations.runner.MIGRATIONS", [failing])
+
+        with pytest.raises(sqlite3.OperationalError):
+            run_migrations(db)
+
+        tables = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE name = 't'")]
+        assert tables == []
+        assert db.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0
 
     def test_vote_score_backfills_to_zero(self, tmp_path: Path) -> None:
         db_path = tmp_path / "memory.db"

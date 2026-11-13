@@ -22,7 +22,8 @@ def run_migrations(db: sqlite3.Connection) -> None:
 
     if has_entities and has_version is None:
         logger.info("Existing database without version tracking detected, marking as v1")
-        db.execute("INSERT INTO schema_version (version) VALUES (?)", (1,))
+        with db:
+            db.execute("INSERT INTO schema_version (version) VALUES (?)", (1,))
         has_version = 1
 
     current_version = has_version or 0
@@ -38,6 +39,7 @@ def run_migrations(db: sqlite3.Connection) -> None:
         for migration in pending:
             logger.info("Applying migration v%d", migration.version)
             with db:
+                db.execute("BEGIN")
                 for statement in migration.statements:
                     db.execute(statement)
                 db.execute(
