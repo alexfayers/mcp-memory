@@ -6,6 +6,7 @@ import argparse
 import functools
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -586,6 +587,13 @@ class TestMemorySpec:
         spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
         assert spec.env["PATH"] == "/custom/bin:/usr/bin"
 
+    def test_baked_path_leaves_out_venv_directories(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        venv_bin = _make_bin_dir(tmp_path, "venv", venv=True)
+        user_bin = _make_bin_dir(tmp_path, "user", venv=False)
+        monkeypatch.setenv("PATH", f"{venv_bin}:{user_bin}")
+        spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
+        assert spec.env["PATH"] == str(user_bin)
+
     def test_propagates_dream_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_DREAM_ENABLED", "false")
         monkeypatch.setenv("MCP_DREAM_IDLE_SECONDS", "60")
@@ -599,6 +607,31 @@ class TestMemorySpec:
         spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
         assert spec.env["MCP_DREAM_HEAVY_ENABLED"] == "true"
         assert spec.env["MCP_DREAM_HEAVY_INTERVAL_SECONDS"] == "90"
+
+
+def _make_bin_dir(parent: Path, name: str, *, venv: bool) -> Path:
+    """Create `<parent>/<name>/bin/tool`, with a `pyvenv.cfg` beside `bin` where venv is set."""
+    bin_dir = parent / name / "bin"
+    bin_dir.mkdir(parents=True)
+    tool = bin_dir / "tool"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    if venv:
+        (parent / name / "pyvenv.cfg").write_text("")
+    return bin_dir
+
+
+class TestFindBinary:
+    def test_returns_the_user_wide_binary_not_venv_one(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        venv_bin = _make_bin_dir(tmp_path, "venv", venv=True)
+        user_bin = _make_bin_dir(tmp_path, "user", venv=False)
+        monkeypatch.setenv("PATH", f"{venv_bin}:{user_bin}")
+        assert cli._find_binary("tool") == str(user_bin / "tool")
+
+    def test_exits_when_only_a_venv_has_the_binary(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PATH", str(_make_bin_dir(tmp_path, "venv", venv=True)))
+        with pytest.raises(SystemExit):
+            cli._find_binary("tool")
 
 
 class TestRenderPlist:
