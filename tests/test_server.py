@@ -697,6 +697,14 @@ class TestStatusObservationsRejected:
         assert "error" not in tools.create_entities("proj", [created])
 
 
+class TestAddObservationsDescription:
+    def test_description_asks_for_what_code_and_git_cannot_show(self) -> None:
+        tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "add_observations")
+        assert "MUST store only what code and git can't show" in (tool.description or "")
+        assert "implementation narration" in (tool.description or "")
+        assert "external outcome" in (tool.description or "")
+
+
 class TestDeleteObservationsTool:
     def test_delete_by_content(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])

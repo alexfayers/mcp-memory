@@ -14,14 +14,15 @@ Unless a `Startup block: recent memory` is present, `read_graph`. Then `search_n
 
 ## Working
 
-- MUST write silently as you go, never batched: edits, discoveries, decisions, feedback, facts; failures and insights to `global`.
+- MUST write silently as you go, never batched: discoveries, decisions, feedback, facts; failures and insights to `global`.
+- MUST record only what code and git can't show: a decision and why, a gotcha, a preference, where something lives, an external outcome (merge, deploy, close). MUST NOT narrate implementation steps or that tests pass. Memory holds the why: for what changed or how it works, MUST read the code and `git log`/`git blame`.
 - Each piece of work and user follow-up MUST be its own related `task/` entity, created before code.
 - New information that replaces or contradicts an observation: MUST `search_nodes` for it first, then `edit_observation` it in place. MUST edit or delete a contradicted observation in the same step.
 - MUST record a confirmed external change (merge, deploy, close) in the same response; plans MUST include memory updates.
 - Subagents MUST NOT write; main writes after a fresh read.
 - A memory hook block MUST get a real memory write on the NEXT tool call, never a placeholder shell command.
 - MUST render a presented `vote_score` as stars (e.g. ★3), not the raw number.
-- Before you {{TOOL_COMPLETE}}: record what changed, why, caveats, follow-ups; reusable lessons to `global`; set task `resolved`.
+- Before you {{TOOL_COMPLETE}}: MUST record lasting facts only. MUST record reusable lessons in `global`. MUST set the task `resolved`.
 
 ## Recommending
 
