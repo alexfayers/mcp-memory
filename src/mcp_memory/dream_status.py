@@ -49,6 +49,7 @@ def _classify_action(reason: str) -> str:
 _configs: dict[str, DreamConfig] = {}
 _last_pass: PassRecord | None = None
 _running: str | None = None
+_progress: PassProgress = {"reads": 0, "calls": []}
 
 
 class Operation(TypedDict):
@@ -67,6 +68,18 @@ class Operation(TypedDict):
     hash: NotRequired[str]
 
 
+class PassMetrics(TypedDict, total=False):
+    """Agent usage a pass reported: tokens, turns, cost and agent run time. Empty when unreported."""
+
+    duration_ms: int | None
+    num_turns: int | None
+    cost_usd: float | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_read_tokens: int | None
+    cache_creation_tokens: int | None
+
+
 class PassRecord(TypedDict):
     """The outcome of a single dream curation pass."""
 
@@ -75,6 +88,14 @@ class PassRecord(TypedDict):
     tier: str
     audit_text: str
     operations: list[Operation]
+    metrics: NotRequired[PassMetrics]
+
+
+class PassProgress(TypedDict):
+    """Memory tool calls the latest pass has made: a read count plus one line per mutating call."""
+
+    reads: int
+    calls: list[str]
 
 
 class DreamConfig(TypedDict):
@@ -92,6 +113,7 @@ class DreamStatus(TypedDict):
     configs: dict[str, DreamConfig]
     last_pass: PassRecord | None
     running: str | None
+    progress: PassProgress
 
 
 def parse_operations(audit_text: str) -> list[Operation]:
@@ -151,12 +173,22 @@ def record_startup(
 
 def record_pass_start(tier: str) -> None:
     """Mark a curation pass of ``tier`` as in flight, for the visualiser's live indicator."""
-    global _running  # ruff: ignore[global-statement]
+    global _running, _progress  # ruff: ignore[global-statement]
     _running = tier
+    _progress = {"reads": 0, "calls": []}
     _write()
 
 
-def record_pass(audit_text: str, *, ok: bool, tier: str = "light") -> None:
+def record_progress(tool: str, args: str, *, mutating: bool) -> None:
+    """Record one memory tool call the in-flight pass made: a line when mutating, else a read count."""
+    if mutating:
+        _progress["calls"].append(f"{tool} {args}".strip())
+    else:
+        _progress["reads"] += 1
+    _write()
+
+
+def record_pass(audit_text: str, *, ok: bool, tier: str = "light", metrics: PassMetrics | None = None) -> None:
     """Record the most recent dream pass (raw audit plus parsed operations) and clear ``running``.
 
     ``tier`` names which curation tier ran the pass ("light" or "heavy"); the two
@@ -169,6 +201,7 @@ def record_pass(audit_text: str, *, ok: bool, tier: str = "light") -> None:
         "tier": tier,
         "audit_text": audit_text,
         "operations": parse_operations(audit_text),
+        "metrics": metrics or {},
     }
     _running = None
     _write()
@@ -181,10 +214,11 @@ def read_status() -> DreamStatus | None:
 
 def clear() -> None:
     """Reset the in-memory config, pass, and running flag (for test isolation)."""
-    global _configs, _last_pass, _running  # ruff: ignore[global-statement]
+    global _configs, _last_pass, _running, _progress  # ruff: ignore[global-statement]
     _configs = {}
     _last_pass = None
     _running = None
+    _progress = {"reads": 0, "calls": []}
 
 
 def _status_path() -> Path:
@@ -204,6 +238,7 @@ def _write() -> None:
         "configs": _configs,
         "last_pass": _last_pass,
         "running": _running,
+        "progress": _progress,
     }
     with contextlib.suppress(OSError):
         write_json_atomic(_status_path(), status)
@@ -230,7 +265,15 @@ def _read_file() -> DreamStatus | None:
         "configs": _normalise_configs(raw),
         "last_pass": _normalise_last_pass(raw.get("last_pass")),
         "running": running if isinstance(running, str) else None,
+        "progress": _normalise_progress(raw.get("progress")),
     }
+
+
+def _normalise_progress(progress: object) -> PassProgress:
+    """Return the persisted progress, or an empty one when the marker predates it."""
+    if not isinstance(progress, dict):
+        return {"reads": 0, "calls": []}
+    return cast("PassProgress", {"reads": progress.get("reads", 0), "calls": progress.get("calls", [])})
 
 
 def _tier_config(raw: dict[str, object]) -> DreamConfig:
