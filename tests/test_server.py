@@ -6,10 +6,11 @@ import asyncio
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
+from datetime import UTC, datetime
 from pathlib import Path
 import threading
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,6 +21,7 @@ from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _GLOBAL_PROJECT, _ensure_project_root, _validate_and_extract_relations
 from mcp_memory.storage import open_writable
+from mcp_memory.storage.pure import rows
 from mcp_memory.storage.pure.rows import hash_observation
 from tests import obs_contents, soft_delete_store
 
@@ -615,6 +617,79 @@ class TestAddObservationsTool:
         result = tools.add_observations("proj", "e1", ["b", "c"])
         assert result["count"] == 2
         assert result["hashes"] == [hash_observation("b"), hash_observation("c")]
+
+
+class TestStatusObservationsRejected:
+    _REJECTED: ClassVar[list[str]] = ["status: in-progress", "  Status: resolved", "STATUS:x"]
+
+    @pytest.fixture
+    def entity(self, server_db: Storage) -> Storage:
+        server_db.entities.create("proj", [{"name": "task/e1", "entityType": "task", "observations": ["seed"]}])
+        return server_db
+
+    @staticmethod
+    def _observations(db: Storage, name: str = "task/e1") -> list[str]:
+        return obs_contents(db.reads.get_entity("proj", name))
+
+    @pytest.mark.parametrize("text", _REJECTED)
+    def test_add_observations_rejects_and_writes_nothing(self, entity: Storage, text: str) -> None:
+        result = tools.add_observations("proj", "task/e1", ["fine", text])
+        assert "set_entity_status" in result["error"]
+        assert self._observations(entity) == ["seed"]
+
+    @pytest.mark.parametrize("text", _REJECTED)
+    def test_create_entities_rejects_and_writes_nothing(self, server_db: Storage, text: str) -> None:
+        entities = [
+            {"name": "feature/proj/a", "entityType": "feature", "observations": ["fine"], "relations": []},
+            {"name": "task/b", "entityType": "task", "observations": ["fine", text]},
+        ]
+        result = tools.create_entities("proj", entities)
+        assert "set_entity_status" in result["error"]
+        assert server_db.reads.search("proj", "fine")["entities"] == []
+
+    def test_a_status_observation_behind_todays_date_label_is_rejected(
+        self, entity: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        today = datetime(2026, 9, 8, tzinfo=UTC)
+        monkeypatch.setattr(rows, "datetime", SimpleNamespace(now=lambda **_: today))
+        text = f"{today:%Y-%m-%d}: status: resolved"
+        assert "set_entity_status" in tools.add_observations("proj", "task/e1", [text])["error"]
+        created = tools.create_entities("proj", [{"name": "task/e3", "entityType": "task", "observations": [text]}])
+        assert "set_entity_status" in created["error"]
+        assert self._observations(entity) == ["seed"]
+
+    @pytest.mark.parametrize("text", _REJECTED)
+    def test_edit_observation_rejects_and_keeps_the_text(self, entity: Storage, text: str) -> None:
+        result = tools.edit_observation("proj", "task/e1", hash_observation("seed"), text)
+        assert "set_entity_status" in result["error"]
+        assert self._observations(entity) == ["seed"]
+
+    def test_edit_observation_rejects_a_partial_edit_that_makes_the_result_start_with_status(
+        self, server_db: Storage
+    ) -> None:
+        server_db.entities.create("proj", [{"name": "task/e2", "entityType": "task", "observations": ["State: done"]}])
+        result = tools.edit_observation("proj", "task/e2", hash_observation("State: done"), "Status", oldText="State")
+        assert "set_entity_status" in result["error"]
+        assert self._observations(server_db, "task/e2") == ["State: done"]
+
+    def test_edit_observation_accepts_a_partial_edit_whose_fragment_starts_with_status(
+        self, server_db: Storage
+    ) -> None:
+        server_db.entities.create("proj", [{"name": "task/e2", "entityType": "task", "observations": ["Note: old"]}])
+        result = tools.edit_observation("proj", "task/e2", hash_observation("Note: old"), "status: new", oldText="old")
+        assert "error" not in result
+
+    @pytest.mark.parametrize("text", ["statuses are listed in the report", "Status code 404 handling"])
+    def test_other_text_is_accepted_on_every_path(self, entity: Storage, text: str) -> None:
+        assert "error" not in tools.add_observations("proj", "task/e1", [text])
+        assert "error" not in tools.edit_observation("proj", "task/e1", hash_observation(text), text + " v2")
+        created = {
+            "name": "feature/proj/ok",
+            "entityType": "feature",
+            "observations": [text],
+            "relations": [{"target": "project/proj", "type": "part-of"}],
+        }
+        assert "error" not in tools.create_entities("proj", [created])
 
 
 class TestDeleteObservationsTool:

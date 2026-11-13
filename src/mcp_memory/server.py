@@ -10,7 +10,7 @@ import functools
 import inspect
 import logging
 import os
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import anyio
 from mcp.server.mcpserver import MCPServer
@@ -30,6 +30,7 @@ from .models import (
 )
 from .payload import compact_json
 from .storage import GraphResult, NodeList, open_writable
+from .storage.pure.rows import reject_status_observation, strip_today_date_prefix
 from .visualise import register_visualise_routes
 
 if TYPE_CHECKING:
@@ -518,6 +519,15 @@ def _relation_from_dict(rel: dict[str, str], default_source: str | None = None) 
     return Relation(source=str(source), target=str(target), relation_type=_validate_relation_type(str(raw_type)))
 
 
+def _reject_status_observations(observations: list[str] | None) -> None:
+    """Raise if any observation text starts with ``status:``, since status has its own field."""
+    if not isinstance(observations, list):
+        return
+    for text in observations:
+        if isinstance(text, str):
+            reject_status_observation(strip_today_date_prefix(text))
+
+
 def _validate_entity_type_and_name(project: str, entity_type: object, name: str) -> None:
     """Enforce entity-type validity and the type-prefix naming convention.
 
@@ -572,6 +582,8 @@ def _create_entities(
     project: str, entities: list[dict[str, str | list[str] | list[dict[str, str]] | None]]
 ) -> dict[str, str]:
     """Validate relations, guard cross-scope duplicates, then create the entities and their relations."""
+    for entity_data in entities:
+        _reject_status_observations(cast("list[str] | None", entity_data.get("observations")))
     db = _get_db()
     _ensure_project_root(db, project)
     all_relations = _validate_and_extract_relations(project, entities)
@@ -1140,6 +1152,7 @@ def add_observations(
 ) -> dict[str, object]:
     """Append deduplicated observations to an existing entity."""
     try:
+        _reject_status_observations(observations)
         db = _get_db()
         hashes = db.observations.add(project, entityName, observations)
         return {
