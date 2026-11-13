@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import functools
+import io
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -694,6 +696,94 @@ class TestSetupSystemd:
         assert exc_info.value.code == 1
         assert calls == []
         assert str(unit) in capsys.readouterr().err
+
+
+class TestCmdDream:
+    @staticmethod
+    def _fake_urlopen(monkeypatch: pytest.MonkeyPatch, *responses: object) -> list[cli.urllib.request.Request]:
+        """Serve the responses in order (an exception is raised), recording each request."""
+        requests: list[cli.urllib.request.Request] = []
+        queue = list(responses)
+
+        def fake_urlopen(request: cli.urllib.request.Request, timeout: float) -> object:
+            requests.append(request)
+            response = queue.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return io.BytesIO(json.dumps(response).encode())
+
+        monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+        return requests
+
+    @staticmethod
+    def _conflict(reason: str) -> cli.urllib.error.HTTPError:
+        body = io.BytesIO(json.dumps({"started": False, "reason": reason}).encode())
+        return cli.urllib.error.HTTPError("http://x", 409, "Conflict", None, body)  # type: ignore[arg-type]
+
+    def test_posts_the_tier_and_reports_started(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_URL", "http://example.test:4321/mcp")
+        monkeypatch.setenv("MCP_MEMORY_PORT", "9999")
+        requests = self._fake_urlopen(monkeypatch, {"started": True})
+
+        cli._cmd_dream(argparse.Namespace(tier="heavy", wait=False))
+
+        assert requests[0].full_url == "http://example.test:4321/api/dream/trigger"
+        assert requests[0].get_method() == "POST"
+        assert json.loads(requests[0].data) == {"tier": "heavy"}  # type: ignore[arg-type]
+        assert "heavy" in capsys.readouterr().out
+
+    def test_refusal_prints_the_reason_and_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._fake_urlopen(monkeypatch, self._conflict("already running"))
+
+        with pytest.raises(SystemExit) as exit_info:
+            cli._cmd_dream(argparse.Namespace(tier="light", wait=False))
+
+        assert exit_info.value.code == 1
+        assert "already running" in capsys.readouterr().err
+
+    def test_server_down_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._fake_urlopen(monkeypatch, cli.urllib.error.URLError("refused"))
+
+        with pytest.raises(SystemExit) as exit_info:
+            cli._cmd_dream(argparse.Namespace(tier="light", wait=False))
+
+        assert exit_info.value.code == 1
+        assert "not running" in capsys.readouterr().err
+
+    def test_wait_polls_until_the_pass_finishes_then_prints_it(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None))
+        requests = self._fake_urlopen(
+            monkeypatch,
+            {"started": True},
+            {"running": {"tier": "light"}, "last_pass": None},
+            {"running": None, "last_pass": {"tier": "light", "summary": "LAST-PASS-MARK"}},
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="light", wait=True))
+
+        assert [r.full_url.rsplit("/api/", 1)[1] for r in requests] == ["dream/trigger", "dream", "dream"]
+        assert "LAST-PASS-MARK" in capsys.readouterr().out
+
+    def test_wait_prints_a_count_per_action(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None))
+        operations = [{"action": "merge"}, {"action": "merge"}, {"action": "trim"}]
+        self._fake_urlopen(
+            monkeypatch, {"started": True}, {"running": None, "last_pass": {"tier": "heavy", "operations": operations}}
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="heavy", wait=True))
+
+        assert "actions: merge 2, trim 1" in capsys.readouterr().out
 
 
 class TestCmdRestart:
