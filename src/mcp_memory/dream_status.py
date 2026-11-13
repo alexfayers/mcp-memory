@@ -29,33 +29,55 @@ _OPERATION_RE = re.compile(r"\[([^/\]]+)/([^\]#]+)(?:#([0-9a-f]+))?\]")
 _OBSERVATION_WORD_RE = re.compile(r"\bobservations?\b|\bobs\b")
 
 
-def _classify_action(reason: str) -> str:
-    """Classify an audit reason into demote / merge / obs-demote / obs-merge.
+_PREFIX_ACTIONS = (
+    ("renamed", "rename"),
+    ("linked", "relink"),
+    ("unlinked", "unlink"),
+    ("archived", "archive"),
+    ("trimmed", "trim"),
+    ("created", "create"),
+    ("restored", "restore"),
+)
+_ENTITY_PREFIX_ACTIONS = (("deleted", "delete"), ("merged", "merge"))
+_OBSERVATION_ACTIONS = (("merge", "obs-merge"), ("delet", "obs-delete"))
 
-    Observation-level ops are flagged by an "observation"/"obs" word in the reason;
-    a merge is flagged by a "merge" word (entity merges begin with "merged").
+
+def _classify_action(reason: str) -> str:
+    """Classify an audit reason into one of the Operation actions.
+
+    Rename, relink, unlink, archive, trim, create and restore reasons begin with "renamed",
+    "linked", "unlinked", "archived", "trimmed", "created" and "restored". Observation-level ops
+    are flagged by an "observation"/"obs" word in the reason, checked before the entity-level
+    "deleted" and "merged" prefixes; a merge is flagged by a "merge" word and a delete by a "delet" word.
     """
     lowered = reason.lower()
-    is_observation = bool(_OBSERVATION_WORD_RE.search(lowered))
-    if is_observation and "merge" in lowered:
-        return "obs-merge"
-    if is_observation:
-        return "obs-demote"
-    if lowered.startswith("merged"):
-        return "merge"
+    for prefix, action in _PREFIX_ACTIONS:
+        if lowered.startswith(prefix):
+            return action
+    if _OBSERVATION_WORD_RE.search(lowered):
+        return next((action for word, action in _OBSERVATION_ACTIONS if word in lowered), "obs-demote")
+    for prefix, action in _ENTITY_PREFIX_ACTIONS:
+        if lowered.startswith(prefix):
+            return action
     return "demote"
 
 
 _configs: dict[str, DreamConfig] = {}
 _last_pass: PassRecord | None = None
 _running: str | None = None
+_progress: PassProgress = {"reads": 0, "calls": []}
 
 
 class Operation(TypedDict):
     """One entity or observation the dream reported acting on, parsed from its audit line.
 
     ``action`` is one of ``"demote"`` (entity downvote), ``"merge"`` (entity merge),
-    ``"obs-demote"`` (observation downvote), or ``"obs-merge"`` (observation merge).
+    ``"obs-demote"`` (observation downvote), ``"obs-merge"`` (observation merge),
+    ``"obs-delete"`` (observation soft-deleted), ``"delete"`` (entity soft-deleted),
+    ``"rename"`` (entity rename), ``"relink"`` (relation added), ``"unlink"``
+    (relation soft-deleted), ``"archive"`` (task set to archived), ``"trim"``
+    (observations soft-deleted down to the outcome), ``"create"`` (entity created by a split)
+    or ``"restore"`` (soft-deleted item restored).
     ``hash`` is the observation's content_hash when the line addressed one, absent
     for entity-level ops.
     """
@@ -67,6 +89,29 @@ class Operation(TypedDict):
     hash: NotRequired[str]
 
 
+PASS_METRIC_KEYS = (
+    "duration_ms",
+    "num_turns",
+    "cost_usd",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_creation_tokens",
+)
+
+
+class PassMetrics(TypedDict, total=False):
+    """Agent usage a pass reported: tokens, turns, cost and agent run time. Empty when unreported."""
+
+    duration_ms: int | None
+    num_turns: int | None
+    cost_usd: float | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_read_tokens: int | None
+    cache_creation_tokens: int | None
+
+
 class PassRecord(TypedDict):
     """The outcome of a single dream curation pass."""
 
@@ -75,6 +120,14 @@ class PassRecord(TypedDict):
     tier: str
     audit_text: str
     operations: list[Operation]
+    metrics: NotRequired[PassMetrics]
+
+
+class PassProgress(TypedDict):
+    """Memory tool calls the latest pass has made: a read count plus one line per mutating call."""
+
+    reads: int
+    calls: list[str]
 
 
 class DreamConfig(TypedDict):
@@ -92,6 +145,7 @@ class DreamStatus(TypedDict):
     configs: dict[str, DreamConfig]
     last_pass: PassRecord | None
     running: str | None
+    progress: PassProgress
 
 
 def parse_operations(audit_text: str) -> list[Operation]:
@@ -101,7 +155,9 @@ def parse_operations(audit_text: str) -> list[Operation]:
     does not produce spurious entries. The entity name keeps its type prefix, and an
     optional ``#hash`` suffix on the slug (e.g. ``[project/entity#a1b2c3d4]``) is
     captured as the observation's content_hash. The action is classified into
-    demote / merge / obs-demote / obs-merge (see ``_classify_action``).
+    demote / merge / delete / unlink / obs-demote / obs-merge / obs-delete / rename / relink /
+    archive / trim / create / restore
+    (see ``_classify_action``).
     """
     operations: list[Operation] = []
     for line in audit_text.splitlines():
@@ -151,12 +207,22 @@ def record_startup(
 
 def record_pass_start(tier: str) -> None:
     """Mark a curation pass of ``tier`` as in flight, for the visualiser's live indicator."""
-    global _running  # ruff: ignore[global-statement]
+    global _running, _progress  # ruff: ignore[global-statement]
     _running = tier
+    _progress = {"reads": 0, "calls": []}
     _write()
 
 
-def record_pass(audit_text: str, *, ok: bool, tier: str = "light") -> None:
+def record_progress(tool: str, args: str, *, mutating: bool) -> None:
+    """Record one memory tool call the in-flight pass made: a line when mutating, else a read count."""
+    if mutating:
+        _progress["calls"].append(f"{tool} {args}".strip())
+    else:
+        _progress["reads"] += 1
+    _write()
+
+
+def record_pass(audit_text: str, *, ok: bool, tier: str = "light", metrics: PassMetrics | None = None) -> None:
     """Record the most recent dream pass (raw audit plus parsed operations) and clear ``running``.
 
     ``tier`` names which curation tier ran the pass ("light" or "heavy"); the two
@@ -169,6 +235,7 @@ def record_pass(audit_text: str, *, ok: bool, tier: str = "light") -> None:
         "tier": tier,
         "audit_text": audit_text,
         "operations": parse_operations(audit_text),
+        "metrics": metrics or {},
     }
     _running = None
     _write()
@@ -181,10 +248,11 @@ def read_status() -> DreamStatus | None:
 
 def clear() -> None:
     """Reset the in-memory config, pass, and running flag (for test isolation)."""
-    global _configs, _last_pass, _running  # ruff: ignore[global-statement]
+    global _configs, _last_pass, _running, _progress  # ruff: ignore[global-statement]
     _configs = {}
     _last_pass = None
     _running = None
+    _progress = {"reads": 0, "calls": []}
 
 
 def _status_path() -> Path:
@@ -197,13 +265,16 @@ def _write() -> None:
 
     The running flag is written on every pass boundary and read by the separate
     mcp-memory process, so a plain write could expose a torn file; ``replace`` swaps
-    it in atomically.
+    it in atomically. Configs already on disk for tiers this process has not recorded
+    are kept, so a separate process (with empty ``_configs``) cannot wipe them.
     """
+    on_disk = _read_file()
     status: DreamStatus = {
         "schema": _SCHEMA,
-        "configs": _configs,
+        "configs": {**(on_disk["configs"] if on_disk else {}), **_configs},
         "last_pass": _last_pass,
         "running": _running,
+        "progress": _progress,
     }
     with contextlib.suppress(OSError):
         write_json_atomic(_status_path(), status)
@@ -230,7 +301,15 @@ def _read_file() -> DreamStatus | None:
         "configs": _normalise_configs(raw),
         "last_pass": _normalise_last_pass(raw.get("last_pass")),
         "running": running if isinstance(running, str) else None,
+        "progress": _normalise_progress(raw.get("progress")),
     }
+
+
+def _normalise_progress(progress: object) -> PassProgress:
+    """Return the persisted progress, or an empty one when the marker predates it."""
+    if not isinstance(progress, dict):
+        return {"reads": 0, "calls": []}
+    return cast("PassProgress", {"reads": progress.get("reads", 0), "calls": progress.get("calls", [])})
 
 
 def _tier_config(raw: dict[str, object]) -> DreamConfig:

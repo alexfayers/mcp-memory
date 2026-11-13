@@ -2,28 +2,34 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
 import re
 
 _DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
 _DEFAULT_PORT = "8000"
-_DEFAULT_DREAM_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+_DEFAULT_DREAM_MODEL = "claude-sonnet-5-5"
+_DEFAULT_DREAM_HEAVY_MODEL = "claude-opus-5-5"
 _DEFAULT_AUTO_VOTE_WINDOW_SECONDS = "1800"
 _DEFAULT_AUTO_VOTE_MAX_PER_DAY = "3"
 _DEFAULT_DREAM_IDLE_SECONDS = "1800"
 _DEFAULT_DREAM_POLL_SECONDS = "300"
-_DEFAULT_DREAM_TIMEOUT = "300"
-_DEFAULT_DREAM_MAX_VOTES = "15"
+_DEFAULT_DREAM_TIMEOUT = "900"
+_DEFAULT_DREAM_MAX_VOTES = "50"
 _DEFAULT_DREAM_HEAVY_IDLE_SECONDS = "5400"
 _DEFAULT_DREAM_HEAVY_POLL_SECONDS = "900"
-_DEFAULT_DREAM_HEAVY_TIMEOUT = "600"
-_DEFAULT_DREAM_HEAVY_MAX_OPS = "10"
+_DEFAULT_DREAM_HEAVY_TIMEOUT = "3600"
+_DEFAULT_DREAM_HEAVY_MAX_OPS = "100"
 _DEFAULT_PURGE_GRACE_DAYS = "30"
 _DEFAULT_SURFACED_RETENTION_DAYS = "-1"
 _DEFAULT_CALL_METRICS_RETENTION_DAYS = "90"
 _DEFAULT_SWEEP_INTERVAL_SECONDS = "43200"
 _DEFAULT_EVAL_CACHE_TTL_SECONDS = "300"
+_DEFAULT_BACKUP_INTERVAL_SECONDS = "21600"
+_DEFAULT_BACKUP_KEEP_DAILY = "7"
+_DEFAULT_BACKUP_KEEP_WEEKLY = "4"
+_DEFAULT_BACKUP_KEEP_MONTHLY = "6"
 _DEFAULT_MAX_OBSERVATION_CHARS = "2000"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -114,9 +120,18 @@ def get_dream_poll_seconds() -> float:
     return float(os.environ.get("MCP_DREAM_POLL_SECONDS", _DEFAULT_DREAM_POLL_SECONDS))
 
 
+def _resolve_model(name: str) -> str:
+    """Return the id this Claude Code install requests for a model name, else the name."""
+    try:
+        claude_models = importlib.import_module("llm_prompts.claude_models")
+    except ImportError:
+        return name
+    return str(claude_models.resolve_model(name))
+
+
 def get_dream_model() -> str:
     """Return the model id used for dream spawns."""
-    return os.environ.get("MCP_DREAM_MODEL") or _DEFAULT_DREAM_MODEL
+    return os.environ.get("MCP_DREAM_MODEL") or _resolve_model(_DEFAULT_DREAM_MODEL)
 
 
 def get_dream_timeout() -> float:
@@ -154,13 +169,13 @@ def get_dream_heavy_poll_seconds() -> float:
 
 
 def get_dream_heavy_model() -> str:
-    """Return the model id for heavy dream spawns, defaulting to the light dream model.
+    """Return the model id for heavy dream spawns, defaulting to Opus.
 
-    Structural curation (merges) benefits from a stronger model, so set
-    MCP_DREAM_HEAVY_MODEL to a fully-qualified id (e.g. a Sonnet id); a bare alias
-    silently remaps to Opus. The light-model default is only a safe fallback.
+    Structural curation (merges) benefits from a stronger model than the light pass.
+    MCP_DREAM_HEAVY_MODEL overrides it with a fully-qualified id; a bare alias
+    silently remaps to Opus.
     """
-    return os.environ.get("MCP_DREAM_HEAVY_MODEL") or get_dream_model()
+    return os.environ.get("MCP_DREAM_HEAVY_MODEL") or _resolve_model(_DEFAULT_DREAM_HEAVY_MODEL)
 
 
 def get_dream_heavy_timeout() -> float:
@@ -224,6 +239,37 @@ def get_call_metrics_retention_days() -> int:
 def get_sweep_interval_seconds() -> float:
     """Return how often the server's background loop runs the maintenance sweeps."""
     return float(os.environ.get("MCP_MEMORY_SWEEP_INTERVAL_SECONDS", _DEFAULT_SWEEP_INTERVAL_SECONDS))
+
+
+def get_backup_enabled() -> bool:
+    """Return whether the server backs up the database periodically and before each heavy dream pass."""
+    return os.environ.get("MCP_MEMORY_BACKUP_ENABLED", "true").strip().lower() in _TRUTHY
+
+
+def get_backup_dir() -> Path:
+    """Return the directory holding database backups, defaulting to ``backups`` beside the database."""
+    configured = os.environ.get("MCP_MEMORY_BACKUP_DIR")
+    return Path(configured).expanduser() if configured else get_data_dir() / "backups"
+
+
+def get_backup_interval_seconds() -> float:
+    """Return how often the server's background loop backs up the database."""
+    return float(os.environ.get("MCP_MEMORY_BACKUP_INTERVAL_SECONDS", _DEFAULT_BACKUP_INTERVAL_SECONDS))
+
+
+def get_backup_keep_daily() -> int:
+    """Return how many days keep their newest backup once past the last 24 hours."""
+    return int(os.environ.get("MCP_MEMORY_BACKUP_KEEP_DAILY", _DEFAULT_BACKUP_KEEP_DAILY))
+
+
+def get_backup_keep_weekly() -> int:
+    """Return how many ISO weeks keep their newest backup."""
+    return int(os.environ.get("MCP_MEMORY_BACKUP_KEEP_WEEKLY", _DEFAULT_BACKUP_KEEP_WEEKLY))
+
+
+def get_backup_keep_monthly() -> int:
+    """Return how many months keep their newest backup."""
+    return int(os.environ.get("MCP_MEMORY_BACKUP_KEEP_MONTHLY", _DEFAULT_BACKUP_KEEP_MONTHLY))
 
 
 def get_eval_cache_ttl_seconds() -> int:

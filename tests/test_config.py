@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from mcp_memory import config
+
+
+@pytest.fixture
+def claude_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr("llm_prompts.claude_models.user_home", lambda: tmp_path)
+    monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
+    return tmp_path
+
+
+def _write_claude_settings(home: Path, settings: dict[str, object]) -> None:
+    (home / ".claude").mkdir(exist_ok=True)
+    (home / ".claude" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 
 
 class TestMemoryUrl:
@@ -58,21 +71,33 @@ class TestDreamConfig:
         monkeypatch.setenv("MCP_DREAM_POLL_SECONDS", "5")
         assert config.get_dream_poll_seconds() == 5.0
 
-    def test_model_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_model_default_and_override(self, monkeypatch: pytest.MonkeyPatch, claude_home: Path) -> None:
         monkeypatch.delenv("MCP_DREAM_MODEL", raising=False)
-        assert config.get_dream_model() == config._DEFAULT_DREAM_MODEL
+        _write_claude_settings(claude_home, {"availableModels": ["claude-sonnet-5-5"]})
+        assert config.get_dream_model() == "claude-sonnet-5-5"
         monkeypatch.setenv("MCP_DREAM_MODEL", "some-model")
         assert config.get_dream_model() == "some-model"
 
+    def test_model_defaults_resolve_to_bedrock_ids(self, monkeypatch: pytest.MonkeyPatch, claude_home: Path) -> None:
+        monkeypatch.delenv("MCP_DREAM_MODEL", raising=False)
+        monkeypatch.delenv("MCP_DREAM_HEAVY_MODEL", raising=False)
+        overrides = {
+            "claude-sonnet-5-5": "gateway.claude-sonnet-5-5",
+            "claude-opus-5-5": "gateway.claude-opus-5-5",
+        }
+        _write_claude_settings(claude_home, {"modelOverrides": overrides})
+        assert config.get_dream_model() == "gateway.claude-sonnet-5-5"
+        assert config.get_dream_heavy_model() == "gateway.claude-opus-5-5"
+
     def test_timeout_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_TIMEOUT", raising=False)
-        assert config.get_dream_timeout() == 300.0
+        assert config.get_dream_timeout() == 900.0
         monkeypatch.setenv("MCP_DREAM_TIMEOUT", "10")
         assert config.get_dream_timeout() == 10.0
 
     def test_max_votes_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_MAX_VOTES", raising=False)
-        assert config.get_dream_max_votes() == 15
+        assert config.get_dream_max_votes() == 50
         monkeypatch.setenv("MCP_DREAM_MAX_VOTES", "3")
         assert config.get_dream_max_votes() == 3
 
@@ -104,21 +129,23 @@ class TestDreamHeavyConfig:
         monkeypatch.setenv("MCP_DREAM_HEAVY_POLL_SECONDS", "5")
         assert config.get_dream_heavy_poll_seconds() == 5.0
 
-    def test_model_defaults_to_dream_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_model_default_is_opus_not_light_model(self, monkeypatch: pytest.MonkeyPatch, claude_home: Path) -> None:
         monkeypatch.delenv("MCP_DREAM_HEAVY_MODEL", raising=False)
-        assert config.get_dream_heavy_model() == config.get_dream_model()
+        monkeypatch.setenv("MCP_DREAM_MODEL", "some-light-model")
+        _write_claude_settings(claude_home, {})
+        assert config.get_dream_heavy_model() == "claude-opus-5-5"
         monkeypatch.setenv("MCP_DREAM_HEAVY_MODEL", "some-heavy-model")
         assert config.get_dream_heavy_model() == "some-heavy-model"
 
     def test_timeout_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_HEAVY_TIMEOUT", raising=False)
-        assert config.get_dream_heavy_timeout() == 600.0
+        assert config.get_dream_heavy_timeout() == 3600.0
         monkeypatch.setenv("MCP_DREAM_HEAVY_TIMEOUT", "30")
         assert config.get_dream_heavy_timeout() == 30.0
 
     def test_max_ops_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_HEAVY_MAX_OPS", raising=False)
-        assert config.get_dream_heavy_max_ops() == 10
+        assert config.get_dream_heavy_max_ops() == 100
         monkeypatch.setenv("MCP_DREAM_HEAVY_MAX_OPS", "2")
         assert config.get_dream_heavy_max_ops() == 2
 

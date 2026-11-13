@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mcp_memory import server
+from mcp_memory import dream, server
 from mcp_memory.config import get_max_observation_chars
 from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
@@ -617,11 +617,43 @@ class TestAddObservationsTool:
         assert result["hashes"] == [hash_observation("b"), hash_observation("c")]
 
 
+class TestDeleteEntityTool:
+    def _seed(self, db: Storage) -> None:
+        db.entities.create(
+            "proj",
+            [
+                {"name": "project/proj", "entityType": "project", "observations": ["root"]},
+                {"name": "feature/f", "entityType": "feature", "observations": ["x"]},
+                {"name": "task/t", "entityType": "task", "observations": ["y"]},
+            ],
+        )
+        db.relations.create(
+            "proj",
+            [
+                Relation(source="feature/f", target="project/proj", relation_type="belongs-to"),
+                Relation(source="task/t", target="feature/f", relation_type="implements"),
+            ],
+        )
+
+    def test_delete_refused_for_entity_with_structural_edges(self, server_db: Storage) -> None:
+        self._seed(server_db)
+
+        result = tools.delete_entity("proj", "task/t")
+
+        assert "implements -> feature/f" in result["error"]
+        assert server_db.reads.get_entity("proj", "task/t") is not None
+
+    def test_context_is_not_part_of_the_tool_schema(self) -> None:
+        tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "delete_entity")
+        assert set(tool.input_schema["properties"]) == {"project", "name"}
+
+
 class TestDeleteObservationsTool:
     def test_delete_by_content(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
         result = tools.delete_observations("proj", "e1", observations=["a"])
         assert result["count"] == 1
+        assert result["hashes"] == [hash_observation("a")]
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["b"]
 
     def test_delete_by_hash(self, server_db: Storage) -> None:
@@ -631,12 +663,68 @@ class TestDeleteObservationsTool:
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["b"]
 
 
+class TestRestoreObservationsTool:
+    def test_restores_deleted_observations_by_hash_and_content(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
+        deleted = tools.delete_observations("proj", "e1", observations=["a", "b"])["hashes"]
+        by_hash = tools.restore_observations("proj", "e1", observationHashes=[deleted[0]])
+        assert by_hash["count"] == 1
+        assert by_hash["hashes"] == [deleted[0]]
+        by_content = tools.restore_observations("proj", "e1", observations=["b"])
+        assert by_content["hashes"] == [deleted[1]]
+        assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a", "b"]
+
+    def test_missing_entity_returns_error(self, server_db: Storage) -> None:
+        assert "error" in tools.restore_observations("proj", "nope", observationHashes=["x"])
+
+
+class TestRestoreRelationTool:
+    def test_restore_makes_deleted_relation_visible(self, server_db: Storage) -> None:
+        server_db.entities.create(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        server_db.relations.create("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
+        tools.delete_relation("proj", "a", "b", "belongs-to")
+        result = tools.restore_relation("proj", "a", "b", "belongs-to")
+        assert result == {"message": "Restored relation 'a' -> 'b' (belongs-to) in project 'proj'."}
+        assert len(server_db.reads.get_entity_with_relations("proj", "a")["relations"]) == 1
+
+    def test_unknown_relation_returns_error(self, server_db: Storage) -> None:
+        assert "error" in tools.restore_relation("proj", "a", "b", "belongs-to")
+
+
 class TestTrimObservationsToOutcomeTool:
     def test_trim_returns_deleted_count(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}])
         result = tools.trim_observations_to_outcome("proj", "e1", [hash_observation("a")])
-        assert result == {"message": "Trimmed 2 observation(s) from 'e1'.", "deleted": 2}
+        assert result["message"] == "Trimmed 2 observation(s) from 'e1'."
+        assert result["deleted"] == 2
+        assert sorted(result["hashes"]) == sorted([hash_observation("b"), hash_observation("c")])
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a"]
+
+    def test_dream_trim_keeps_user_corrections(self, server_db: Storage) -> None:
+        server_db.entities.create(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "User pushed back on b", "c"]}]
+        )
+        dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+        result = tools.trim_observations_to_outcome("proj", "e1", [hash_observation("a")], ctx=dream_ctx)
+        assert result["hashes"] == [hash_observation("c")]
+        assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a", "User pushed back on b"]
+
+    def test_non_dream_trim_may_drop_corrections(self, server_db: Storage) -> None:
+        server_db.entities.create(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "User pushed back on b"]}]
+        )
+        tools.trim_observations_to_outcome("proj", "e1", [hash_observation("a")])
+        assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a"]
+
+    def test_context_is_not_part_of_the_trim_schema(self) -> None:
+        tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "trim_observations_to_outcome")
+        assert set(tool.input_schema["properties"]) == {"project", "name", "keep_hashes"}
 
     def test_empty_keep_hashes_returns_error(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
@@ -901,6 +989,7 @@ class TestMergeObservationsTool:
         result = tools.merge_observations("proj", "e1", hashes["source"], hashes["target"])
         assert result["message"] == "Merged observation into target in 'e1'."
         assert result["merged"] == 1
+        assert result["hashes"] == [hashes["source"]]
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["target"]
 
     def test_unknown_hash_returns_error(self, server_db: Storage) -> None:
@@ -1407,6 +1496,45 @@ class TestSweepLoop:
         assert len(calls) >= 2
 
 
+class TestBackupLoop:
+    def test_cancels_cleanly_and_backs_up_repeatedly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "get_backup_interval_seconds", lambda: 0.0)
+        calls: list[bool] = []
+        monkeypatch.setattr(server.backup, "backup_database", lambda: calls.append(True))
+
+        async def drive() -> None:
+            task = asyncio.create_task(server._backup_loop())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(drive())
+        assert len(calls) >= 2
+
+    def test_exception_from_one_iteration_does_not_kill_the_loop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "get_backup_interval_seconds", lambda: 0.0)
+        calls: list[bool] = []
+
+        def _backup_database() -> None:
+            calls.append(True)
+            if len(calls) == 1:
+                raise OSError("disk full")
+
+        monkeypatch.setattr(server.backup, "backup_database", _backup_database)
+        monkeypatch.setattr(server.logger, "exception", lambda *_args, **_kwargs: None)
+
+        async def drive() -> None:
+            task = asyncio.create_task(server._backup_loop())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(drive())
+        assert len(calls) >= 2
+
+
 class TestServe:
     @staticmethod
     def _wire_serve(monkeypatch: pytest.MonkeyPatch, started: list[str]) -> None:
@@ -1425,6 +1553,24 @@ class TestServe:
         self._wire_serve(monkeypatch, started)
         asyncio.run(server._serve())
         assert started == ["sweeping"]
+
+    def test_starts_backup_loop_only_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        started: list[str] = []
+        self._wire_serve(monkeypatch, started)
+
+        async def fake_backup_loop() -> None:
+            started.append("backing up")
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(server, "_backup_loop", fake_backup_loop)
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+        asyncio.run(server._serve())
+        assert started == ["sweeping"]
+
+        started.clear()
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "true")
+        asyncio.run(server._serve())
+        assert sorted(started) == ["backing up", "sweeping"]
 
     def test_serves_on_the_configured_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
         served: dict[str, Any] = {}

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from mcp_memory import cli
+from mcp_memory import cli, server
 from mcp_memory.audit import audit_graph, propose_plan
 from mcp_memory.models import Relation
 from mcp_memory.storage.services.ids import (
@@ -222,6 +222,22 @@ class TestRelationViolationsAndStarGraph:
         stars = cast("list[dict[str, object]]", report["star_graph_tasks"])
         assert [v["task"] for v in stars] == ["task/t"]
 
+    def test_deleted_relation_is_not_reported(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "project/proj", "entityType": "project", "observations": ["o"]},
+                {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
+                {"name": "task/t", "entityType": "task", "observations": ["o"]},
+            ],
+        )
+        store.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
+        _insert_relation_row(store, "proj", Relation("task/t", "project/proj", "belongs-to"))
+        store.relations.delete("proj", "task/t", "project/proj", "belongs-to")
+        report = audit_graph(store, "proj")
+        assert report["relation_violations"] == []
+        assert report["star_graph_tasks"] == []
+
     def test_task_implements_feature_is_neither(self, store: Storage) -> None:
         store.entities.create(
             "proj",
@@ -309,6 +325,32 @@ class TestProposePlan:
 
         again = self._plan(store, "proj")[0]
         assert again["arguments"]["keep_hashes"] == step["arguments"]["keep_hashes"]  # type: ignore[index]
+
+    def test_trim_keeps_user_corrections_and_lessons_past_the_ceiling(self, store: Storage) -> None:
+        protected = [
+            "Correction: remote is public",
+            "user corrected the claim",
+            "User pushed back on a guess",
+            "User decided to ship",
+            "User chose option B",
+            "Lesson: verify first",
+        ]
+        store.entities.create(
+            "proj",
+            [
+                {
+                    "name": "task/big",
+                    "entityType": "task",
+                    "observations": [*protected, "filler one", "filler two", "RESOLVED: done"],
+                    "status": "resolved",
+                }
+            ],
+        )
+
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "task/big"))}
+        keep = set(self._plan(store, "proj")[0]["arguments"]["keep_hashes"])  # type: ignore[index]
+        assert {by_content[text] for text in protected} <= keep
+        assert by_content["filler one"] not in keep
 
     def test_trim_uses_full_observation_list_not_budgeted(self, store: Storage) -> None:
         store.entities.create(
@@ -404,7 +446,7 @@ class TestProposePlan:
                 {
                     "name": "feature/f",
                     "entityType": "feature",
-                    "observations": [f"fact {i}" for i in range(11)],
+                    "observations": [f"distinct fact number {chr(97 + i)}" for i in range(11)],
                 },
             ],
         )
@@ -451,7 +493,22 @@ class TestProposePlan:
         step = next(s for s in self._plan(store, "proj") if s.get("tool") == "trim_observations_to_outcome")
         assert step["needs_review"] is True
 
-    def test_trim_dropping_only_near_duplicates_stays_auto_applied(self, store: Storage) -> None:
+    def test_trim_always_needs_review(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {
+                    "name": "task/many",
+                    "entityType": "task",
+                    "observations": ["RESOLVED: shipped", "alpha detail", "bravo detail", "charlie detail"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "trim_observations_to_outcome")
+        assert step["needs_review"] is True
+
+    def test_near_duplicates_merge_instead_of_trim(self, store: Storage) -> None:
         store.entities.create(
             "proj",
             [
@@ -468,27 +525,174 @@ class TestProposePlan:
                 }
             ],
         )
-        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "trim_observations_to_outcome")
+        steps = self._plan(store, "proj")
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "task/dupes"))}
+        merges = [s for s in steps if s.get("tool") == "merge_observations"]
+        assert {m["arguments"]["sourceHash"] for m in merges} == {  # type: ignore[index]
+            by_content["shipped the graph-hygiene tools"],
+            by_content["graph-hygiene tools"],
+            by_content["hygiene tools"],
+        }
+        assert {m["arguments"]["targetHash"] for m in merges} == {
+            by_content["RESOLVED: shipped the graph-hygiene tools"]
+        }  # type: ignore[index]
+        assert all(m["needs_review"] is True for m in merges)
+        assert not any(s.get("tool") == "trim_observations_to_outcome" for s in steps)
+
+    def test_observation_merge_runs_on_non_oversized_entity(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [{"name": "feature/f", "entityType": "feature", "observations": ["Uses WAL mode", "uses wal mode always"]}],
+        )
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "feature/f"))}
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "merge_observations")
+        assert step["arguments"] == {
+            "project": "proj",
+            "entityName": "feature/f",
+            "sourceHash": by_content["Uses WAL mode"],
+            "targetHash": by_content["uses wal mode always"],
+        }
+        assert step["needs_review"] is True
+
+    def test_case_only_difference_needs_review(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [{"name": "feature/f", "entityType": "feature", "observations": ["Use API_TOKEN", "Use api_token"]}],
+        )
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "merge_observations")
+        assert step["needs_review"] is True
+
+    def test_contradicting_container_needs_review(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [{"name": "feature/f", "entityType": "feature", "observations": ["Use TLS", "Do not use TLS"]}],
+        )
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "merge_observations")
+        assert step["needs_review"] is True
+
+    def test_unrelated_observations_are_not_merged(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [{"name": "feature/f", "entityType": "feature", "observations": ["alpha fact", "bravo fact"]}],
+        )
+        assert not any(s.get("tool") == "merge_observations" for s in self._plan(store, "proj"))
+
+    def test_unprefixed_with_existing_prefixed_twin_merges(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "foo", "entityType": "task", "observations": ["o"]},
+                {"name": "task/foo", "entityType": "task", "observations": ["p"]},
+            ],
+        )
+        steps = self._plan(store, "proj")
+        step = next(s for s in steps if s.get("tool") == "merge_entities")
+        assert step["arguments"] == {"project": "proj", "source": "foo", "target": "task/foo"}
         assert step["needs_review"] is False
+        assert not any(s.get("tool") == "rename_entity" for s in steps)
+
+    def test_unprefixed_project_type_is_not_auto_renamed(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "foo", "entityType": "project", "observations": ["o"]}])
+        assert not any(s.get("tool") == "rename_entity" for s in self._plan(store, "proj"))
+
+    def test_orphan_feature_relinks_to_project_root(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "project/proj", "entityType": "project", "observations": ["o"]},
+                {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
+            ],
+        )
+        steps = self._plan(store, "proj")
+        step = next(s for s in steps if s.get("tool") == "create_relations")
+        assert step["arguments"] == {
+            "project": "proj",
+            "relations": [{"source": "feature/f", "relationType": "belongs-to", "target": "project/proj"}],
+        }
+        assert step["needs_review"] is False
+        assert len([s for s in steps if s.get("tool") == "create_relations"]) == 1
+
+    def test_orphan_feature_without_project_root_needs_review(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "feature/f", "entityType": "feature", "observations": ["o"]}])
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "create_relations")
+        assert step["needs_review"] is True
+
+    def test_orphan_task_still_needs_review_with_project_root(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "project/proj", "entityType": "project", "observations": ["o"]},
+                {"name": "task/t", "entityType": "task", "observations": ["o"]},
+            ],
+        )
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "create_relations")
+        assert step["needs_review"] is True
 
 
 class TestAuditCommand:
+    def test_apply_archives_only_the_scoped_project(
+        self, live_server: None, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = server._get_db()
+        for project in ("proj", "other"):
+            db.entities.create(
+                project, [{"name": "task/old", "entityType": "task", "observations": ["o"], "status": "resolved"}]
+            )
+        with db.connection.transaction():
+            db.connection.write("UPDATE entities SET updated_at = datetime('now', '-400 days')")
+
+        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False, apply=True))
+        capsys.readouterr()
+
+        assert db.reads.get_entity("proj", "task/old").status == "archived"
+        assert db.reads.get_entity("other", "task/old").status == "resolved"
+
     def test_prints_the_report_for_the_scope(self, api: FakeApi, capsys: pytest.CaptureFixture[str]) -> None:
         api.results["audit"] = {"project": "proj", "orphans": []}
 
-        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False))
+        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False, apply=False))
 
-        assert api.calls == [("audit", {"project": "proj", "plan": False})]
+        assert api.calls == [("audit", {"project": "proj", "plan": False, "apply": False})]
         assert json.loads(capsys.readouterr().out)["project"] == "proj"
 
     def test_propose_plan_asks_for_all_projects_plan(self, api: FakeApi) -> None:
         api.results["audit"] = {"steps": []}
 
-        cli._cmd_audit(cli.argparse.Namespace(project=None, all_projects=True, propose_plan=True))
+        cli._cmd_audit(cli.argparse.Namespace(project=None, all_projects=True, propose_plan=True, apply=False))
 
-        assert api.calls == [("audit", {"project": None, "plan": True})]
+        assert api.calls == [("audit", {"project": None, "plan": True, "apply": False})]
+
+    def test_does_not_archive_stale_entities(self, live_server: None, capsys: pytest.CaptureFixture[str]) -> None:
+        db = server._get_db()
+        db.entities.create(
+            "proj", [{"name": "task/old", "entityType": "task", "observations": ["o"], "status": "resolved"}]
+        )
+        with db.connection.transaction():
+            db.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days')")
+
+        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False, apply=False))
+        capsys.readouterr()
+
+        assert db.reads.get_entity("proj", "task/old").status == "resolved"
+
+    def test_apply_runs_safe_steps_and_reports_the_rest(
+        self, live_server: None, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        server._get_db().entities.create("proj", [{"name": "RandomThing", "entityType": "task", "observations": ["o"]}])
+
+        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False, apply=True))
+
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["applied"] == [
+            "[proj/RandomThing] - renamed to task/RandomThing: name 'RandomThing' lacks a standard type prefix (auto)"
+        ]
+        assert "rename_entity" not in [s["tool"] for s in payload["steps"]]
+        assert server._get_db().reads.get_entity("proj", "task/RandomThing") is not None
+
+    def test_parser_accepts_apply_with_a_scope(self) -> None:
+        assert cli._build_parser().parse_args(["utils", "audit", "--all-projects", "--apply"]).apply is True
 
     def test_parser_requires_a_scope(self) -> None:
         parser = cli._build_parser()
         with pytest.raises(SystemExit):
-            parser.parse_args(["audit"])
+            parser.parse_args(["utils", "audit"])

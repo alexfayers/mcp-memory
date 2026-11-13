@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from mcp_memory.config import get_strict_policy_enabled
 from mcp_memory.models import VALID_RELATION_TYPES, Relation, normalize_relation_type
 from mcp_memory.storage.pure.rows import build_relation
-from mcp_memory.storage.pure.sql import placeholders
+from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.ids import (
     get_entity_id,
     get_entity_type_name,
@@ -38,7 +38,7 @@ def _relation_select(placeholders_sql: str, *, project_scoped: bool) -> str:
         f"JOIN relation_types rt ON r.relation_type_id = rt.id "
         f"{project_join}"
         f"WHERE {project_filter}"
-        f"e_src.deleted_at IS NULL AND e_tgt.deleted_at IS NULL "
+        f"r.deleted_at IS NULL AND e_src.deleted_at IS NULL AND e_tgt.deleted_at IS NULL "
         f"AND (r.source_id IN ({placeholders_sql}) "
         f"OR r.target_id IN ({placeholders_sql}))"
     )
@@ -51,7 +51,7 @@ class RelationRepository:
         self._conn = connection
 
     def create(self, project: str, relations: list[Relation]) -> None:
-        """Create relations between entities, ignoring duplicates."""
+        """Create relations between entities, ignoring duplicates and reviving soft-deleted ones."""
         project_id = get_or_create_project_id(self._conn, project)
 
         with self._conn.transaction():
@@ -85,12 +85,13 @@ class RelationRepository:
                     )
                 relation_type_id = get_or_create_relation_type_id(self._conn, relation_type)
                 self._conn.write(
-                    "INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
+                    "INSERT INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?) "
+                    + REVIVE_RELATION_ON_CONFLICT,
                     (source_id, target_id, relation_type_id),
                 )
 
     def delete(self, project: str, source: str, target: str, relation_type: str) -> None:
-        """Delete a specific relation between two entities."""
+        """Soft-delete a specific relation between two entities."""
         project_id = get_or_create_project_id(self._conn, project)
         source_id = get_entity_id(self._conn, source, project_id)
         if source_id is None:
@@ -116,8 +117,30 @@ class RelationRepository:
 
         with self._conn.transaction():
             cursor = self._conn.write(
-                "DELETE FROM relations WHERE source_id = ? AND target_id = ? AND relation_type_id = ?",
+                "UPDATE relations SET deleted_at = CURRENT_TIMESTAMP "
+                "WHERE source_id = ? AND target_id = ? AND relation_type_id = ? AND deleted_at IS NULL",
                 (source_id, target_id, row["id"]),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Relation '{source}' -> '{target}' ({relation_type}) not found in project '{project}'"
+                )
+
+    def restore(self, project: str, source: str, target: str, relation_type: str) -> None:
+        """Clear a relation's soft-deleted mark, making it visible again. Restoring a live relation is a no-op."""
+        project_id = get_or_create_project_id(self._conn, project)
+        source_id = get_entity_id(self._conn, source, project_id)
+        if source_id is None:
+            raise ValueError(f"Source entity '{source}' not found in project '{project}'")
+        target_id = get_entity_id(self._conn, target, project_id)
+        if target_id is None:
+            raise ValueError(f"Target entity '{target}' not found in project '{project}'")
+
+        with self._conn.transaction():
+            cursor = self._conn.write(
+                "UPDATE relations SET deleted_at = NULL WHERE source_id = ? AND target_id = ? "
+                "AND relation_type_id = (SELECT id FROM relation_types WHERE name = ?)",
+                (source_id, target_id, relation_type),
             )
             if cursor.rowcount == 0:
                 raise ValueError(

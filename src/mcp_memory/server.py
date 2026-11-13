@@ -13,14 +13,14 @@ import os
 from typing import TYPE_CHECKING, Annotated, Any
 
 import anyio
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 from pydantic import WithJsonSchema
 
-from . import dream, metrics, usefulness
+from . import backup, dream, metrics, usefulness
 from .activity import record_tool
 from .api import register_api_routes
-from .config import get_db_path, get_sweep_interval_seconds
+from .config import get_backup_enabled, get_backup_interval_seconds, get_db_path, get_sweep_interval_seconds
 from .dedupe import dedupe_read
 from .models import (
     VALID_RELATION_TYPES,
@@ -49,8 +49,8 @@ def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> CallToolResult:
         result = fn(*args, **kwargs)
         try:
-            bound = inspect.signature(fn).bind_partial(*args, **kwargs)
-            arguments = dict(bound.arguments)
+            bound = inspect.signature(fn).bind_partial(*args, **kwargs).arguments
+            arguments = {key: value for key, value in bound.items() if not isinstance(value, Context)}
             record_tool(fn.__name__, arguments, result)
             usefulness.observe(_get_db(), fn.__name__, arguments, result)
             metrics.record(_get_db(), fn.__name__, arguments, result)
@@ -209,19 +209,24 @@ CREATE_RELATIONS_DESC = (
     "project, pattern used-in project."
 )
 DELETE_ENTITY_DESC = (
-    "Delete an entity and all its associated observations and relations from a project. "
-    "Use sparingly for stale, incorrect or misleading memory - prefer marking it deprecated "
-    "or a downvote unless it would mislead."
+    "Soft-delete an entity with its observations and relations (restorable with restore_entity until a "
+    "grace-window purge). Use sparingly for stale, incorrect or misleading memory - prefer marking it deprecated "
+    "or a downvote unless it would mislead. Refused while it has live incoming relations or live implements or "
+    "depends-on relations - delete or retarget those first, then retry."
 )
 DELETE_RELATION_DESC = (
-    "Delete a specific relation between two entities in a project. "
-    "Use sparingly, for a relation that is wrong or misleading."
+    "Soft-delete a relation (restorable with restore_relation until a grace-window purge). "
+    "Use sparingly, for a wrong or misleading relation."
 )
 RESTORE_ENTITY_DESC = (
-    "Restore a soft-deleted entity, making it visible to reads again. Soft-deleted "
-    "entities (e.g. the loser of a merge_entities call) are hidden but kept intact until "
-    "a grace-window purge; restore reverses the hiding while the entity still exists."
+    "Restore a soft-deleted entity (a delete_entity target or a merge_entities loser). "
+    "Observations and relations deleted separately beforehand stay deleted."
 )
+RESTORE_OBSERVATIONS_DESC = (
+    "Restore soft-deleted observations by content_hash (observationHashes) and/or exact content (observations). "
+    "Hashes with a live copy are skipped. Returns the restored count and hashes."
+)
+RESTORE_RELATION_DESC = "Restore a soft-deleted relation between two live entities. Throws if it never existed."
 GET_ENTITY_WITH_RELATIONS_DESC = (
     "Get an entity along with all its relations and related entities within a project. "
     "Traverses the graph to discover linked context. "
@@ -243,14 +248,11 @@ ADD_OBSERVATIONS_DESC = (
     "The server timestamps each observation; do NOT embed a date in the text."
 )
 DELETE_OBSERVATIONS_DESC = (
-    "Delete specific observations from an existing entity by exact content match "
-    "(observations) and/or by content_hash (observationHashes - the cheap alternative that "
-    "avoids pasting full content; hashes come from read output). "
-    "Returns the count of deleted observations. Throws if the entity does not exist. "
-    "For an observation that is stale but not wrong enough to remove, prefer vote "
-    "(downvote to sink it) over deletion. "
-    "Use this, not a downvote, for an observation that is outright wrong. "
-    "To correct one, use edit_observation."
+    "Soft-delete observations by exact content (observations) and/or content_hash (observationHashes - cheaper). "
+    "Returns the count and hashes deleted (restorable with restore_observations until a grace-window purge). "
+    "Throws if the entity does not exist. "
+    "For a stale but not wrong observation, prefer vote (downvote). "
+    "Use this, not a downvote, for an outright wrong one. To correct one, use edit_observation."
 )
 EDIT_OBSERVATION_DESC = (
     "Edit one observation in place by content_hash, keeping its votes and timestamp. "
@@ -259,10 +261,10 @@ EDIT_OBSERVATION_DESC = (
     "oldText matches more than once, or the result duplicates another observation."
 )
 TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
-    "Delete all observations on an entity except those whose content_hash is in keep_hashes. "
-    "Use this to trim an oversized resolved entity down to its outcome summary deterministically. "
-    "keep_hashes must be non-empty (an entity must retain at least its outcome observation). "
-    "Returns the number of observations deleted."
+    "Soft-delete all observations on an entity except those in keep_hashes (content_hash). "
+    "Use to trim an oversized resolved entity down to its ask, a decision and why, and any outcome line. "
+    "keep_hashes must be non-empty. Returns the count and hashes trimmed (restorable with restore_observations "
+    "until a grace-window purge)."
 )
 RENAME_ENTITY_DESC = (
     "Rename a single entity in place within a project scope. "
@@ -349,14 +351,11 @@ MERGE_ENTITIES_DESC = (
     "Both entities must already exist in the same project."
 )
 MERGE_OBSERVATIONS_DESC = (
-    "Fold a duplicate observation (source) into another (target) WITHIN THE SAME ENTITY, "
-    "addressed by their content_hash. The target keeps the higher of the two vote scores and "
-    "its own timestamp; the source observation is removed (hard-deleted, like "
-    "delete_observations). Only merges observations inside one entity - never across entities. "
-    "Raises if either hash matches no observation, or if source and target hashes are equal. "
-    "Use this only for genuine duplicates within one entity, since it hard-deletes the "
-    "source. Where one observation is merely more useful than another rather than a "
-    "duplicate, use `vote` instead."
+    "Fold a duplicate observation (source) into another (target) WITHIN THE SAME ENTITY, by content_hash. "
+    "The target keeps the higher vote score and its own timestamp. The source is soft-deleted (its hash is "
+    "returned, restorable with restore_observations until a grace-window purge, without lowering the target's "
+    "vote score). Never merges across entities. Raises if either hash matches no observation or the hashes are "
+    "equal. Only for genuine duplicates: for a merely more useful one, use `vote`."
 )
 
 SEARCH_ALL_PROJECTS_DESC = (
@@ -1029,7 +1028,10 @@ def delete_entity(
     project: str,
     name: str,
 ) -> dict[str, str]:
-    """Delete an entity and all its observations and relations."""
+    """Soft-delete an entity, hiding it and its observations and relations.
+
+    Refused while the entity has live incoming relations or live implements or depends-on relations.
+    """
     try:
         db = _get_db()
         db.entities.delete(project, name)
@@ -1060,6 +1062,56 @@ def restore_entity(
 
 
 @mcp.tool(
+    description=RESTORE_OBSERVATIONS_DESC,
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    ),
+    title="Restore deleted observations",
+)
+@_track
+def restore_observations(
+    project: str,
+    entityName: str,
+    observationHashes: list[str] | None = None,
+    observations: list[str] | None = None,
+) -> dict[str, str | int | list[str]]:
+    """Restore soft-deleted observations by content_hash and/or exact content."""
+    try:
+        db = _get_db()
+        hashes = db.observations.restore(project, entityName, observations=observations, hashes=observationHashes)
+        return {
+            "message": f"Restored {len(hashes)} observations on '{entityName}'.",
+            "count": len(hashes),
+            "hashes": hashes,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(
+    description=RESTORE_RELATION_DESC,
+    annotations=ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    ),
+    title="Restore deleted relation",
+)
+@_track
+def restore_relation(
+    project: str,
+    source: str,
+    target: str,
+    type: str,
+) -> dict[str, str]:
+    """Restore a soft-deleted relation between two entities."""
+    try:
+        db = _get_db()
+        db.relations.restore(project, source, target, type)
+        return {"message": f"Restored relation '{source}' -> '{target}' ({type}) in project '{project}'."}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(
     description=DELETE_RELATION_DESC,
     annotations=ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
@@ -1073,7 +1125,7 @@ def delete_relation(
     target: str,
     type: str,
 ) -> dict[str, str]:
-    """Delete a specific relation between two entities."""
+    """Soft-delete a specific relation between two entities."""
     try:
         db = _get_db()
         db.relations.delete(project, source, target, type)
@@ -1164,12 +1216,16 @@ def delete_observations(
     entityName: str,
     observations: list[str] | None = None,
     observationHashes: list[str] | None = None,
-) -> dict[str, str | int]:
-    """Delete observations by exact content match and/or by content_hash."""
+) -> dict[str, str | int | list[str]]:
+    """Soft-delete observations by exact content match and/or by content_hash."""
     try:
         db = _get_db()
-        count = db.observations.delete(project, entityName, observations=observations, hashes=observationHashes)
-        return {"message": f"Deleted {count} observations from '{entityName}'.", "count": count}
+        hashes = db.observations.delete(project, entityName, observations=observations, hashes=observationHashes)
+        return {
+            "message": f"Deleted {len(hashes)} observations from '{entityName}'.",
+            "count": len(hashes),
+            "hashes": hashes,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -1207,12 +1263,23 @@ def edit_observation(
     meta=_ALWAYS_LOAD_META,
 )
 @_track
-def trim_observations_to_outcome(project: str, name: str, keep_hashes: list[str]) -> dict[str, object]:
-    """Delete all observations on an entity except those in keep_hashes."""
+def trim_observations_to_outcome(
+    project: str, name: str, keep_hashes: list[str], ctx: Context | None = None
+) -> dict[str, object]:
+    """Soft-delete all observations on an entity except those in keep_hashes.
+
+    A dream-spawned call also keeps user corrections, decisions and lessons.
+    """
     try:
         db = _get_db()
-        deleted = db.observations.trim_to_outcome(project, name, keep_hashes)
-        return {"message": f"Trimmed {deleted} observation(s) from '{name}'.", "deleted": deleted}
+        hashes = db.observations.trim_to_outcome(
+            project, name, keep_hashes, protect_corrections=dream.is_dream_request(ctx)
+        )
+        return {
+            "message": f"Trimmed {len(hashes)} observation(s) from '{name}'.",
+            "deleted": len(hashes),
+            "hashes": hashes,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -1361,15 +1428,30 @@ async def _sweep_loop() -> None:
         await asyncio.sleep(get_sweep_interval_seconds())
 
 
-async def _serve() -> None:
-    """Serve over streamable HTTP, running the maintenance sweep loop and dream coordinator alongside.
+async def _backup_loop() -> None:
+    """Back up the database once on start, then periodically forever.
 
-    The sweep loop and dream coordinator are explicit background tasks rather than an MCPServer ``lifespan``:
+    Each iteration is individually guarded and logged so one failed backup (e.g. a full disk)
+    does not stop later ones.
+    """
+    while True:
+        try:
+            await asyncio.to_thread(backup.backup_database)
+        except Exception:
+            logger.exception("Database backup failed")
+        await asyncio.sleep(get_backup_interval_seconds())
+
+
+async def _serve() -> None:
+    """Serve over streamable HTTP, running the maintenance sweep loop, backup loop and dream coordinator alongside.
+
+    The background loops and dream coordinator are explicit background tasks rather than an MCPServer ``lifespan``:
     this server runs with ``stateless_http=True``, where a lifespan-attached task is
     spawned and cancelled per client session rather than once globally, which is wrong
     for a singleton periodic job. Cancelled cleanly on shutdown.
     """
     sweeper = asyncio.create_task(_sweep_loop())
+    backer = asyncio.create_task(_backup_loop()) if get_backup_enabled() else None
     dreamer = dream.start_coordinator()
     try:
         await mcp.run_streamable_http_async(
@@ -1378,7 +1460,7 @@ async def _serve() -> None:
             json_response=True,
         )
     finally:
-        for task in (sweeper, dreamer):
+        for task in (sweeper, backer, dreamer):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

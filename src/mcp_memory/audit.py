@@ -9,8 +9,12 @@ only finds the violations. Never mutates the graph.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import sqlite3
 from typing import TYPE_CHECKING, cast
+
+from .models import is_protected_observation
+from .storage.pure.rows import build_observation
 
 if TYPE_CHECKING:
     from .models import Observation
@@ -54,12 +58,12 @@ _NEGATIVE_VOTE_THRESHOLD = -5
 _ENTITY_SQL = (
     "SELECT e.id AS entity_id, e.name, et.name AS entity_type, e.status, e.vote_score, "
     "p.name AS project, "
-    "(SELECT COUNT(*) FROM observations o WHERE o.entity_id = e.id) AS obs_count, "
+    "(SELECT COUNT(*) FROM observations o WHERE o.entity_id = e.id AND o.deleted_at IS NULL) AS obs_count, "
     "(SELECT COUNT(*) FROM relations r "
     "JOIN entities se ON r.source_id = se.id "
     "JOIN entities te ON r.target_id = te.id "
     "WHERE (r.source_id = e.id OR r.target_id = e.id) "
-    "AND se.deleted_at IS NULL AND te.deleted_at IS NULL) AS rel_count "
+    "AND r.deleted_at IS NULL AND se.deleted_at IS NULL AND te.deleted_at IS NULL) AS rel_count "
     "FROM entities e "
     "JOIN entity_types et ON e.entity_type_id = et.id "
     "JOIN projects p ON e.project_id = p.id "
@@ -77,7 +81,7 @@ _RELATION_SQL = (
     "JOIN entity_types tt ON te.entity_type_id = tt.id "
     "JOIN relation_types rt ON r.relation_type_id = rt.id "
     "JOIN projects sp ON se.project_id = sp.id "
-    "WHERE se.deleted_at IS NULL AND te.deleted_at IS NULL"
+    "WHERE r.deleted_at IS NULL AND se.deleted_at IS NULL AND te.deleted_at IS NULL"
 )
 
 _SCOPE_COUNT_SQL = (
@@ -87,6 +91,35 @@ _SCOPE_COUNT_SQL = (
     "GROUP BY p.id, p.name "
     "ORDER BY p.name"
 )
+
+
+_OBSERVATION_SQL = (
+    "SELECT e.id AS entity_id, e.name, p.name AS project, "
+    "o.content, o.content_hash, o.vote_score, o.created_at "
+    "FROM observations o "
+    "JOIN entities e ON o.entity_id = e.id "
+    "JOIN projects p ON e.project_id = p.id "
+    "WHERE o.deleted_at IS NULL AND e.deleted_at IS NULL"
+)
+
+_LIVE_NAME_SQL = (
+    "SELECT p.name AS project, e.name FROM entities e JOIN projects p ON e.project_id = p.id WHERE e.deleted_at IS NULL"
+)
+
+
+@dataclass
+class _EntityObservations:
+    """An entity's live observations and the ones a containment merge folds away."""
+
+    project: str
+    name: str
+    observations: list[Observation] = field(default_factory=list)
+    absorbed: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def survivors(self) -> list[Observation]:
+        """Observations left once every containment merge is applied."""
+        return [o for o in self.observations if o.content_hash not in self.absorbed]
 
 
 def _ceiling_for(entity_type: str, status: str | None) -> int | None:
@@ -187,14 +220,15 @@ def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
 
 
 def _keep_hashes(observations: list[Observation], ceiling: int) -> list[str]:
-    """Deterministically pick which observations to keep when trimming to the ceiling."""
-    keep = {o.content_hash for o in observations if any(keyword in o.content for keyword in _OUTCOME_KEYWORDS)}
+    """Deterministically pick which observations to keep when trimming, never dropping a protected one."""
+    protected = {o.content_hash for o in observations if is_protected_observation(o.content)}
+    keep = protected | {o.content_hash for o in observations if any(k in o.content for k in _OUTCOME_KEYWORDS)}
     top = min(observations, key=lambda o: (-o.vote_score, o.content_hash))
     keep.add(top.content_hash)
 
-    ranked = sorted(observations, key=lambda o: (-o.vote_score, o.content_hash))
+    ranked = sorted(observations, key=lambda o: (o.content_hash not in protected, -o.vote_score, o.content_hash))
     ordered = [o.content_hash for o in ranked if o.content_hash in keep]
-    return ordered[:ceiling] if len(ordered) > ceiling else ordered
+    return ordered[: max(ceiling, len(protected))]
 
 
 def _outcome_obs_count(observations: list[Observation]) -> int:
@@ -220,45 +254,88 @@ def _findings(report: dict[str, object], key: str) -> list[Finding]:
     return cast("list[Finding]", report[key])
 
 
-def _is_subsumed(dropped: Observation, kept: list[Observation]) -> bool:
-    """Whether a dropped observation is a near-duplicate of some kept observation.
+def _observation_rank(observation: Observation) -> tuple[int, int, str]:
+    """Total order that decides which of two overlapping observations survives."""
+    return (len(observation.content), observation.vote_score, observation.content_hash)
 
-    Case-insensitive substring containment either way - cheap and, per the user's rule
-    that trim must never delete a distinct fact, deliberately conservative: anything not
-    caught here forces needs_review rather than risking a silent loss.
+
+def _absorbed_into(observations: list[Observation]) -> dict[str, str]:
+    """Map each observation whose text sits inside a higher-ranked one to the longest such container.
+
+    Case-insensitive containment. The longest container is never itself absorbed, so a merge
+    never targets an observation that another merge removes.
     """
-    dropped_text = dropped.content.casefold()
-    return any(dropped_text in k.content.casefold() or k.content.casefold() in dropped_text for k in kept)
+    folded = {o.content_hash: o.content.casefold() for o in observations}
+    absorbed: dict[str, str] = {}
+    for observation in observations:
+        containers = [
+            other
+            for other in observations
+            if _observation_rank(other) > _observation_rank(observation)
+            and folded[observation.content_hash] in folded[other.content_hash]
+        ]
+        if containers:
+            absorbed[observation.content_hash] = max(containers, key=_observation_rank).content_hash
+    return absorbed
 
 
-def _trim_step(db: Storage, entity: Finding) -> dict[str, object]:
-    """A trim step for one oversized entity - auto-applied only if every dropped
-    observation is a near-duplicate of a kept one, else flagged for review."""
+def _load_observations(db: Storage, project: str | None) -> dict[int, _EntityObservations]:
+    """Group every live observation by entity, with the containment merges already worked out."""
+    rows = db.connection.query_all(
+        _OBSERVATION_SQL + ("" if project is None else " AND p.name = ?") + " ORDER BY e.id, o.vote_score DESC, o.id",
+        () if project is None else (project,),
+    )
+    grouped: dict[int, _EntityObservations] = {}
+    for row in rows:
+        entity = grouped.setdefault(row["entity_id"], _EntityObservations(row["project"], row["name"]))
+        entity.observations.append(build_observation(row))
+    for entity in grouped.values():
+        entity.absorbed = _absorbed_into(entity.observations)
+    return grouped
+
+
+def _merge_observation_steps(grouped: dict[int, _EntityObservations]) -> list[dict[str, object]]:
+    """Steps folding each observation into the longer one that contains it.
+
+    Every merge needs review. Containment can flip the meaning ("Use TLS" inside "Do not use TLS")
+    and a case-only difference can separate distinct facts ("Use API_TOKEN" vs "Use api_token").
+    """
+    steps: list[dict[str, object]] = []
+    for entity in grouped.values():
+        steps.extend(
+            {
+                "tool": "merge_observations",
+                "arguments": {
+                    "project": entity.project,
+                    "entityName": entity.name,
+                    "sourceHash": source_hash,
+                    "targetHash": target_hash,
+                },
+                "reason": "observation text is contained in a longer observation of the same entity",
+                "needs_review": True,
+            }
+            for source_hash, target_hash in entity.absorbed.items()
+        )
+    return steps
+
+
+def _trim_step(entity: Finding, observations: list[Observation]) -> dict[str, object]:
+    """A trim step for one oversized entity - always flagged for review, since a trim drops facts."""
     ceiling = (
         _ceiling_for(cast("str", entity["entity_type"]), cast("str | None", entity["status"])) or _RESOLVED_TASK_CEILING
     )
-    observations = db.observations.for_entity(cast("int", entity["entity_id"]))
-    keep_hashes = _keep_hashes(observations, ceiling)
-    kept = [o for o in observations if o.content_hash in keep_hashes]
-    dropped = [o for o in observations if o.content_hash not in keep_hashes]
-    needs_review = not all(_is_subsumed(o, kept) for o in dropped)
     return {
         "tool": "trim_observations_to_outcome",
         "arguments": {
             "project": entity["project"],
             "name": entity["name"],
-            "keep_hashes": keep_hashes,
+            "keep_hashes": _keep_hashes(observations, ceiling),
         },
         "reason": (
             f"{entity['entity_type']} '{entity['name']}' has {entity['count']} "
-            f"observations (ceiling {ceiling})"
-            + (
-                "; some dropped observations are not near-duplicates of a kept one - review before applying"
-                if needs_review
-                else ""
-            )
+            f"observations (ceiling {ceiling}); review before applying"
         ),
-        "needs_review": needs_review,
+        "needs_review": True,
     }
 
 
@@ -301,39 +378,93 @@ def _review_step(entity: Finding) -> dict[str, object]:
     }
 
 
-def _oversized_step(db: Storage, entity: Finding) -> dict[str, object]:
-    """Propose a split for a resolved task bundling multiple outcomes, else a deterministic
-    trim - or, for non-task types, an advisory review step (see _review_step)."""
+def _oversized_step(entity: Finding, observations: list[Observation]) -> dict[str, object] | None:
+    """Propose a split for a resolved task bundling multiple outcomes, else a trim - or, for
+    non-task types, an advisory review step (see _review_step). None when the observations
+    left after merging fit the ceiling."""
     entity_type = cast("str", entity["entity_type"])
+    ceiling = _ceiling_for(entity_type, cast("str | None", entity["status"])) or _RESOLVED_TASK_CEILING
+    if len(observations) <= ceiling:
+        return None
     if entity_type != "task":
         return _review_step(entity)
-    ceiling = _ceiling_for(entity_type, cast("str | None", entity["status"])) or _RESOLVED_TASK_CEILING
-    observations = db.observations.for_entity(cast("int", entity["entity_id"]))
     outcome_count = _outcome_obs_count(observations)
     if outcome_count > ceiling:
         return _split_step(entity, ceiling, outcome_count)
-    return _trim_step(db, entity)
+    return _trim_step(entity, observations)
+
+
+def _alias_step(entity: Finding, live_names: set[tuple[str, str]]) -> dict[str, object] | None:
+    """A merge into the prefixed twin, or a rename when its name is free. None for a project-type entity."""
+    if entity["entity_type"] == "project":
+        return None
+    project, name = cast("str", entity["project"]), cast("str", entity["name"])
+    prefixed = f"{entity['entity_type']}/{name}"
+    if (project, prefixed) in live_names:
+        return {
+            "tool": "merge_entities",
+            "arguments": {"project": project, "source": name, "target": prefixed},
+            "reason": f"name '{name}' lacks a standard type prefix and '{prefixed}' already exists",
+            "needs_review": False,
+        }
+    return {
+        "tool": "rename_entity",
+        "arguments": {"project": project, "old_name": name, "new_name": prefixed},
+        "reason": f"name '{name}' lacks a standard type prefix",
+        "needs_review": False,
+    }
+
+
+def _orphan_step(entity: Finding, live_names: set[tuple[str, str]]) -> dict[str, object]:
+    """Relink an orphan feature to its project root, else a needs-review placeholder relation."""
+    project, name = cast("str", entity["project"]), cast("str", entity["name"])
+    root = f"project/{project}"
+    unambiguous = name.startswith("feature/") and (project, root) in live_names
+    return {
+        "tool": "create_relations",
+        "arguments": {
+            "project": project,
+            "relations": [
+                {
+                    "source": name,
+                    "relationType": "belongs-to" if unambiguous else "<RELATION_TBD>",
+                    "target": root if unambiguous else "<TARGET_TBD>",
+                }
+            ],
+        },
+        "reason": (
+            f"orphan feature belongs to its project root '{root}'"
+            if unambiguous
+            else "entity has no relations; link it to a feature/parent"
+        ),
+        "needs_review": not unambiguous,
+    }
 
 
 def propose_plan(db: Storage, report: dict[str, object]) -> list[dict[str, object]]:
     """Turn an audit report into a structured, deterministic list of fix-it tool calls."""
+    project = cast("str | None", report["project"])
+    grouped = _load_observations(db, project)
+    live_names = {
+        (row["project"], row["name"])
+        for row in db.connection.query_all(
+            _LIVE_NAME_SQL + ("" if project is None else " AND p.name = ?"), () if project is None else (project,)
+        )
+    }
     steps: list[dict[str, object]] = []
 
-    steps.extend(_oversized_step(db, e) for e in _findings(report, "oversized"))
+    for entity in _findings(report, "oversized"):
+        survivors = grouped[cast("int", entity["entity_id"])].survivors
+        step = _oversized_step(entity, survivors)
+        if step is not None:
+            steps.append(step)
 
-    steps.extend(
-        {
-            "tool": "rename_entity",
-            "arguments": {
-                "project": e["project"],
-                "old_name": e["name"],
-                "new_name": f"{e['entity_type']}/{e['name']}",
-            },
-            "reason": f"name '{e['name']}' lacks a standard type prefix",
-            "needs_review": False,
-        }
-        for e in _findings(report, "unprefixed")
-    )
+    steps.extend(_merge_observation_steps(grouped))
+
+    alias_steps = ((e, _alias_step(e, live_names)) for e in _findings(report, "unprefixed"))
+    alias_pairs = [(e, step) for e, step in alias_steps if step is not None]
+    steps.extend(step for _, step in alias_pairs)
+    merged_away = {(e["project"], e["name"]) for e, step in alias_pairs if step["tool"] == "merge_entities"}
 
     steps.extend(
         {
@@ -356,22 +487,9 @@ def propose_plan(db: Storage, report: dict[str, object]) -> list[dict[str, objec
     )
 
     steps.extend(
-        {
-            "tool": "create_relations",
-            "arguments": {
-                "project": e["project"],
-                "relations": [
-                    {
-                        "source": e["name"],
-                        "relationType": "<RELATION_TBD>",
-                        "target": "<TARGET_TBD>",
-                    }
-                ],
-            },
-            "reason": "entity has no relations; link it to a feature/parent",
-            "needs_review": True,
-        }
+        _orphan_step(e, live_names)
         for e in _findings(report, "orphans")
+        if (e["project"], e["name"]) not in merged_away
     )
 
     steps.extend(

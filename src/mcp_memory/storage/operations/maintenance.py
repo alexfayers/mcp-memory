@@ -13,7 +13,7 @@ from mcp_memory.config import (
     get_purge_grace_days,
     get_surfaced_retention_days,
 )
-from mcp_memory.models import STRUCTURAL_ENTITY_TYPES
+from mcp_memory.models import STRUCTURAL_ENTITY_TYPES, STRUCTURAL_RELATION_TYPES
 from mcp_memory.storage.pure.ranking import ARCHIVE_STALE_DAYS
 from mcp_memory.storage.pure.rows import hash_observation
 from mcp_memory.storage.pure.sql import days_ago, placeholders
@@ -49,23 +49,34 @@ class Maintenance:
                 )
 
     def _purge_soft_deleted(self, grace_days: int) -> int:
-        """Hard-delete entities soft-deleted longer than the grace window, returning the count."""
+        """Hard-delete entities, observations and relations soft-deleted longer than the grace window.
+
+        Returns the total number of rows removed.
+        """
         rows = self._conn.query_all(
             "SELECT e.id, e.name, p.name AS project FROM entities e "
             "JOIN projects p ON e.project_id = p.id "
             "WHERE e.deleted_at IS NOT NULL AND e.deleted_at < datetime('now', ?)",
             (days_ago(grace_days),),
         )
+        cutoff = (days_ago(grace_days),)
         with self._conn.transaction():
             for row in rows:
                 self._entities.hard_delete_row(row["id"], row["project"], row["name"])
-        return len(rows)
+            observations = self._conn.write(
+                "DELETE FROM observations WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?)", cutoff
+            )
+            relations = self._conn.write(
+                "DELETE FROM relations WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?)", cutoff
+            )
+        return len(rows) + observations.rowcount + relations.rowcount
 
     def _gc_downvoted_orphans(self, threshold: int = GC_DOWNVOTE_FLOOR) -> int:
         """Soft-delete downvoted orphan entities, returning the number reaped.
 
         Reaps an entity that is all of: live, at or below the downvote floor, not a
-        relation-exempt type, and with no live incoming relation. Removal is a reversible
+        relation-exempt type, with no live incoming relation and no live outgoing structural
+        relation to a live entity. Removal is a reversible
         soft-delete, so the grace-window purge stays the sole path to permanent removal.
         """
         with self._conn.transaction():
@@ -79,13 +90,24 @@ class Maintenance:
                 f"AND NOT EXISTS ("
                 f"SELECT 1 FROM relations r "
                 f"JOIN entities src ON r.source_id = src.id "
-                f"WHERE r.target_id = entities.id AND src.deleted_at IS NULL)",
-                (threshold, *STRUCTURAL_ENTITY_TYPES),
+                f"WHERE r.target_id = entities.id AND r.deleted_at IS NULL AND src.deleted_at IS NULL) "
+                f"AND NOT EXISTS ("
+                f"SELECT 1 FROM relations r "
+                f"JOIN relation_types rt ON r.relation_type_id = rt.id "
+                f"JOIN entities dst ON r.target_id = dst.id "
+                f"WHERE r.source_id = entities.id AND r.target_id != entities.id "
+                f"AND r.deleted_at IS NULL AND dst.deleted_at IS NULL "
+                f"AND rt.name IN ({placeholders(len(STRUCTURAL_RELATION_TYPES))}))",
+                (threshold, *STRUCTURAL_ENTITY_TYPES, *STRUCTURAL_RELATION_TYPES),
             )
         return cursor.rowcount
 
-    def _archive_stale_entities(self, threshold_days: int = ARCHIVE_STALE_DAYS) -> int:
-        """Auto-archive stale resolved entities, returning the number archived.
+    def archive_stale_entities(
+        self, threshold_days: int = ARCHIVE_STALE_DAYS, project: str | None = None
+    ) -> list[tuple[str, str]]:
+        """Auto-archive stale resolved entities, returning the archived (project, name) pairs.
+
+        Limited to one project when given, otherwise every project.
 
         Archives an entity that is all of: live, status='resolved', last updated more than
         threshold_days ago, and outside the never-evict set - entities ever acted on after
@@ -93,16 +115,21 @@ class Maintenance:
         retrieval bumps updated_at, so renewal is already handled elsewhere.
         """
         with self._conn.transaction():
-            cursor = self._conn.write(
-                "UPDATE entities SET status = 'archived' "
-                "WHERE deleted_at IS NULL "
-                "AND status = 'resolved' "
-                "AND updated_at < datetime('now', ?) "
-                "AND name NOT IN "
-                "(SELECT entity_name FROM surfaced_entities WHERE used_at IS NOT NULL)",
-                (days_ago(threshold_days),),
+            rows = self._conn.query_all(
+                "SELECT entities.id, p.name AS project, entities.name FROM entities "
+                "JOIN projects p ON entities.project_id = p.id "
+                "WHERE entities.deleted_at IS NULL "
+                "AND entities.status = 'resolved' "
+                "AND entities.updated_at < datetime('now', ?) "
+                "AND NOT EXISTS (SELECT 1 FROM surfaced_entities s WHERE s.used_at IS NOT NULL "
+                "AND s.project = p.name AND s.entity_name = entities.name)"
+                + ("" if project is None else " AND p.name = ?"),
+                (days_ago(threshold_days), *(() if project is None else (project,))),
             )
-        return cursor.rowcount
+            self._conn.write_many(
+                "UPDATE entities SET status = 'archived' WHERE id = ?", [(row["id"],) for row in rows]
+            )
+        return [(row["project"], row["name"]) for row in rows]
 
     def run_sweeps(self) -> None:
         """Run best-effort maintenance in a fixed order, tolerating lock contention.
@@ -130,4 +157,4 @@ class Maintenance:
         if get_purge_enabled():
             self._purge_soft_deleted(get_purge_grace_days())
         if get_archive_enabled():
-            self._archive_stale_entities()
+            self.archive_stale_entities()

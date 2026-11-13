@@ -13,6 +13,17 @@ VALID_STATUSES = get_args(EntityStatus)
 # Entity types exempt from autonomous orphan GC.
 STRUCTURAL_ENTITY_TYPES = frozenset({"project", "user-preferences"})
 
+# Observations recording a user correction, decision or lesson are never dropped by an automated trim.
+_PROTECTED_OBSERVATION = re.compile(
+    r"Correction|User corrected|pushed back|User decided|User chose|Lesson", re.IGNORECASE
+)
+
+
+def is_protected_observation(content: str) -> bool:
+    """Return whether an observation records a user correction, decision or lesson."""
+    return _PROTECTED_OBSERVATION.search(content) is not None
+
+
 MAX_VOTE_MAGNITUDE = 3
 
 VALID_RELATION_TYPES = (
@@ -25,6 +36,9 @@ VALID_RELATION_TYPES = (
     "used-by",
     "used-in",
 )
+
+# Relation types whose loss would sever a task from the feature or task it builds on.
+STRUCTURAL_RELATION_TYPES = ("implements", "depends-on")
 
 RELATION_TYPE_ALIASES = {
     "related-to": "relates-to",

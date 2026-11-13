@@ -15,6 +15,8 @@ MUTATING_TOOLS: tuple[str, ...] = (
     "merge_entities",
     "merge_observations",
     "restore_entity",
+    "restore_observations",
+    "restore_relation",
     "trim_observations_to_outcome",
     "rename_entity",
     "move_entity_cross_scope",

@@ -56,6 +56,18 @@ class TestParseOperations:
     def test_non_merge_reason_is_a_demote_action(self) -> None:
         assert dream_status.parse_operations("[p/task/old] - superseded")[0]["action"] == "demote"
 
+    @pytest.mark.parametrize(
+        ("line", "action"),
+        [
+            ("[p/task/old] - renamed to task/new", "rename"),
+            ("[p/task/a] - linked implements -> feature/b", "relink"),
+            ("[p/task/a] - archived: superseded", "archive"),
+        ],
+    )
+    def test_rename_relink_archive_actions(self, line: str, action: str) -> None:
+        result = dream_status.parse_operations(line)
+        assert result[0]["action"] == action
+
     def test_merge_classification_is_case_insensitive(self) -> None:
         result = dream_status.parse_operations("[p/task/old] - Merged into task/new")
         assert result[0]["action"] == "merge"
@@ -215,6 +227,12 @@ class TestRecordAndRead:
         assert last["audit_text"] == "[scratch/task/old] - stale"
         assert last["operations"] == [{"project": "scratch", "name": "task/old", "reason": "stale", "action": "demote"}]
 
+    def test_record_pass_stores_metrics(self) -> None:
+        dream_status.record_pass("nothing demoted", ok=True, metrics={"input_tokens": 5, "num_turns": 2})
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["last_pass"]["metrics"] == {"input_tokens": 5, "num_turns": 2}  # type: ignore[index]
+
     def test_record_pass_retains_raw_text_when_unparseable(self) -> None:
         dream_status.record_startup(enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
         dream_status.record_pass("nothing demoted", ok=True)
@@ -268,6 +286,15 @@ class TestRecordAndRead:
         assert status["configs"]["light"]["enabled"] is False
         assert status["last_pass"] is not None
         assert status["last_pass"]["operations"][0]["name"] == "task/x"
+
+    def test_write_keeps_on_disk_configs_for_tiers_this_process_has_not_recorded(self) -> None:
+        for tier in ("light", "heavy"):
+            dream_status.record_startup(tier=tier, enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
+        dream_status.clear()  # a separate process starts with empty in-memory configs
+        dream_status.record_pass("nothing demoted", ok=True)
+        status = dream_status.read_status()
+        assert status is not None
+        assert set(status["configs"]) == {"light", "heavy"}
 
     def test_corrupt_file_reads_as_none(self) -> None:
         path = dream_status._status_path()
@@ -328,3 +355,38 @@ class TestRunning:
         dream_status.record_pass_start("light")
         dream_status.clear()
         assert dream_status._running is None
+
+
+class TestProgress:
+    def test_pass_start_resets_progress(self) -> None:
+        dream_status.record_pass_start("heavy")
+        dream_status.record_progress("vote", "proj name -1", mutating=True)
+        dream_status.record_pass_start("heavy")
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"] == {"reads": 0, "calls": []}
+
+    def test_mutating_calls_are_listed_and_reads_counted(self) -> None:
+        dream_status.record_pass_start("heavy")
+        dream_status.record_progress("search_nodes", "q", mutating=False)
+        dream_status.record_progress("read_graph", "", mutating=False)
+        dream_status.record_progress("merge_entities", "proj a b", mutating=True)
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"] == {"reads": 2, "calls": ["merge_entities proj a b"]}
+
+    def test_progress_survives_the_end_of_the_pass(self) -> None:
+        dream_status.record_pass_start("light")
+        dream_status.record_progress("vote", "proj name -1", mutating=True)
+        dream_status.record_pass("nothing demoted", ok=True)
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"]["calls"] == ["vote proj name -1"]
+
+    def test_legacy_marker_reads_empty_progress(self) -> None:
+        path = dream_status._status_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema": 3, "configs": {}, "last_pass": None}), encoding="utf-8")
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"] == {"reads": 0, "calls": []}

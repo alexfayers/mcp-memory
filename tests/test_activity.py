@@ -91,6 +91,8 @@ class TestKindMapping:
             "create_relations": "create",
             "add_observations": "update",
             "delete_observations": "update",
+            "restore_observations": "update",
+            "restore_relation": "update",
             "edit_observation": "update",
             "set_entity_status": "update",
             "vote": "update",

@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from mcp_memory import dream, dream_status, server, tool_names
+from mcp_memory.config import get_db_path
+from mcp_memory.storage import open_writable
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from pathlib import Path
 
-_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+_MODEL = "gateway.claude-sonnet-5-5"
 
 
 @pytest.fixture(autouse=True)
@@ -49,14 +53,32 @@ def _dream_payload(
         "modelUsage": {model: {"inputTokens": 100, "outputTokens": 50}},
     }
     if metrics:
-        payload |= {"duration_ms": 15200, "num_turns": 6, "total_cost_usd": 0.09}
+        payload |= {
+            "duration_ms": 15200,
+            "num_turns": 6,
+            "total_cost_usd": 0.09,
+            "usage": {
+                "input_tokens": 120,
+                "output_tokens": 340,
+                "cache_read_input_tokens": 9000,
+                "cache_creation_input_tokens": 800,
+            },
+        }
     return json.dumps(payload)
 
 
 class TestBuildMcpConfig:
     def test_points_only_at_memory_server(self) -> None:
         config = dream.build_mcp_config("http://localhost:3000/mcp")
-        assert config == {"mcpServers": {"memory": {"type": "http", "url": "http://localhost:3000/mcp"}}}
+        assert config == {
+            "mcpServers": {
+                "memory": {
+                    "type": "http",
+                    "url": "http://localhost:3000/mcp",
+                    "headers": {dream.DREAM_CALLER_HEADER: "1"},
+                }
+            }
+        }
 
 
 class TestMemoryToolClassification:
@@ -94,7 +116,8 @@ class TestBuildDreamCommand:
         assert "--strict-mcp-config" in command
         assert command[command.index("--model") + 1] == _MODEL
         assert command[command.index("--mcp-config") + 1] == "/tmp/cfg.json"
-        assert command[command.index("--output-format") + 1] == "json"
+        assert command[command.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in command
 
     def test_prompt_is_downvote_only_and_embeds_the_cap(self) -> None:
         command = dream.build_dream_command(claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7)
@@ -157,19 +180,36 @@ class TestBuildDreamCommand:
 class TestBuildHeavyDreamCommand:
     def test_allows_vote_and_merge_but_denies_other_mutations(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10, audit="{}"
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
         assert "mcp__memory__vote" not in denied
         assert "mcp__memory__merge_entities" not in denied
-        assert "mcp__memory__delete_entity" in denied
-        assert "mcp__memory__create_entities" in denied
-        assert "mcp__memory__restore_entity" in denied
+        for tool in ("rename_entity", "create_relations", "create_entities", "add_observations"):
+            assert f"mcp__memory__{tool}" not in denied
+        for tool in ("delete_entity", "delete_observations", "delete_relation"):
+            assert f"mcp__memory__{tool}" not in denied
+        for tool in (
+            "trim_observations_to_outcome",
+            "restore_entity",
+            "restore_observations",
+            "restore_relation",
+        ):
+            assert f"mcp__memory__{tool}" not in denied
+        for tool in (
+            "set_entity_status",
+            "edit_observation",
+            "delete_project",
+            "move_project_entities",
+            "move_entity_cross_scope",
+            "set_metadata",
+        ):
+            assert f"mcp__memory__{tool}" in denied
 
     def test_still_denies_filesystem_and_web_read_builtins(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10, audit="{}"
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
@@ -178,33 +218,52 @@ class TestBuildHeavyDreamCommand:
 
     def test_isolates_and_pins_the_spawn(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10, audit="{}"
         )
         assert "--strict-mcp-config" in command
         assert command[command.index("--model") + 1] == _MODEL
         assert command[command.index("--mcp-config") + 1] == "/tmp/cfg.json"
-        assert command[command.index("--output-format") + 1] == "json"
+        assert command[command.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in command
 
     def test_prompt_covers_merge_and_downvote_and_embeds_the_cap(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit="{}"
         )
         prompt = command[command.index("-p") + 1]
         assert "4" in prompt
         assert "merge_entities" in prompt
-        assert "same project" in prompt
         assert "vote" in prompt
+
+    def test_prompt_embeds_the_live_memory_review_skill_and_audit(self) -> None:
+        skill = dream._memory_review_checklist()
+        heading = next(line for line in skill.splitlines() if line.startswith("# "))
+        command = dream.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit='{"report":"AUDIT-MARK"}'
+        )
+        prompt = command[command.index("-p") + 1]
+        assert heading in prompt
+        assert "disable-model-invocation" not in prompt
+        assert "AUDIT-MARK" in prompt
+
+    def test_new_audit_lines_round_trip_through_parse_operations(self) -> None:
+        lines = (
+            "[p/legacy] - renamed to task/legacy\n"
+            "[p/task/a] - linked implements -> feature/f\n"
+            "[p/task/b] - archived: superseded"
+        )
+        assert [op["name"] for op in dream_status.parse_operations(lines)] == ["legacy", "task/a", "task/b"]
 
     def test_prompt_interpolates_the_gc_downvote_floor(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit="{}"
         )
         prompt = command[command.index("-p") + 1]
         assert "-10" in prompt
 
     def test_prompt_specifies_a_parseable_audit_format(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit="{}"
         )
         prompt = command[command.index("-p") + 1]
         assert "[project/entity-name] - action reason" in prompt
@@ -223,16 +282,33 @@ class TestBuildHeavyDreamCommand:
 
     def test_heavy_allows_observation_vote_and_merge(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10, audit="{}"
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
         assert "mcp__memory__vote" not in denied
         assert "mcp__memory__merge_observations" not in denied
 
+    def test_prompt_guards_deletes_trims_and_the_audit_format(self) -> None:
+        command = dream.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit="{}"
+        )
+        prompt = command[command.index("-p") + 1]
+        assert "Never delete an entity that has live depends-on or implements edges" in prompt
+        assert "must_keep_hashes" in prompt
+        assert "Emit only these lines" in prompt
+
+    def test_new_action_audit_lines_round_trip_through_parse_operations(self) -> None:
+        lines = (
+            "[p/task/a] - trimmed: outcome kept\n"
+            "[p/task/a-2] - created from split of task/a\n"
+            "[p/task/b] - restored: oops"
+        )
+        assert [op["action"] for op in dream_status.parse_operations(lines)] == ["trim", "create", "restore"]
+
     def test_prompt_permits_observation_ops(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit="{}"
         )
         prompt = command[command.index("-p") + 1]
         assert "vote" in prompt
@@ -245,6 +321,19 @@ class TestBuildHeavyDreamCommand:
         )
         assert operations[0]["action"] == "obs-merge"
         assert operations[0]["hash"] == "a1b2c3d4"
+
+
+@pytest.mark.parametrize(
+    ("line", "action"),
+    [
+        ("[myproj/task/a] - deleted: wrong", "delete"),
+        ("[myproj/task/a] - unlinked implements -> feature/f", "unlink"),
+        ("[myproj/task/a#a1b2c3d4] - observation deleted: wrong", "obs-delete"),
+        ("[myproj/task/a#a1b2c3d4] - deleted observation: wrong", "obs-delete"),
+    ],
+)
+def test_delete_audit_lines_round_trip(line: str, action: str) -> None:
+    assert dream_status.parse_operations(line)[0]["action"] == action
 
 
 def _threshold_spec(name: str, threshold: float) -> dream.TierSpec:
@@ -416,7 +505,7 @@ class TestRunGuarded:
         monkeypatch.setattr(
             dream.dream_status,
             "record_pass",
-            lambda audit, *, ok, tier="light": recorded.append((audit, ok, tier)),
+            lambda audit, *, ok, tier="light", **_: recorded.append((audit, ok, tier)),
         )
         spec = _tier_spec("light", _acoro("[p/task/x] - stale"))  # type: ignore[arg-type]
         assert asyncio.run(dream._run_guarded(spec)) is True
@@ -634,6 +723,10 @@ class TestParseDreamResult:
         assert result["duration_ms"] == 15200
         assert result["num_turns"] == 6
         assert result["cost_usd"] == 0.09
+        assert result["input_tokens"] == 120
+        assert result["output_tokens"] == 340
+        assert result["cache_read_tokens"] == 9000
+        assert result["cache_creation_tokens"] == 800
 
     def test_metrics_default_to_none_when_absent(self) -> None:
         stdout = _dream_payload("- finding")
@@ -641,11 +734,25 @@ class TestParseDreamResult:
         assert result["duration_ms"] is None
         assert result["num_turns"] is None
         assert result["cost_usd"] is None
+        assert result["input_tokens"] is None
 
     def test_rejects_unexpected_model(self) -> None:
-        stdout = _dream_payload("- finding", model="global.anthropic.claude-opus-4-8-v1:0")
+        stdout = _dream_payload("- finding", model="gateway.claude-opus-4-8-v1:0")
         with pytest.raises(RuntimeError, match="unexpected model"):
             dream.parse_dream_result(stdout, expected_model=_MODEL)
+
+    def test_accepts_first_party_usage_key_for_bedrock_expected_model(self) -> None:
+        stdout = _dream_payload("- finding", model="claude-sonnet-5-5[1m]")
+        assert dream.parse_dream_result(stdout, expected_model=_MODEL)["ok"] is True
+
+    def test_accepts_bedrock_usage_key_for_first_party_expected_model(self) -> None:
+        stdout = _dream_payload("- finding", model=_MODEL)
+        assert dream.parse_dream_result(stdout, expected_model="claude-sonnet-5-5")["ok"] is True
+
+    def test_rejects_other_minor_version_of_same_family(self) -> None:
+        stdout = _dream_payload("- finding", model="claude-opus-5-5")
+        with pytest.raises(RuntimeError, match="unexpected model"):
+            dream.parse_dream_result(stdout, expected_model="claude-opus-5")
 
     def test_rejects_error_payload(self) -> None:
         stdout = _dream_payload("boom", is_error=True)
@@ -661,6 +768,138 @@ class TestParseDreamResult:
             dream.parse_dream_result(_dream_payload("   "), expected_model=_MODEL)
 
 
+def _assistant_tool_call(name: str, tool_input: dict[str, object]) -> str:
+    block = {"type": "tool_use", "name": name, "input": tool_input}
+    return json.dumps({"type": "assistant", "message": {"content": [block]}})
+
+
+class TestStreamParsing:
+    def test_result_is_taken_from_the_last_line_of_the_stream(self) -> None:
+        stream = "\n".join([
+            json.dumps({"type": "system"}),
+            _assistant_tool_call("mcp__memory__vote", {}),
+            _dream_payload("- done", metrics=True),
+        ])
+        result = dream.parse_dream_result(stream, expected_model=_MODEL)
+        assert result["text"] == "- done"
+        assert result["num_turns"] == 6
+
+    def test_stream_without_a_result_is_malformed(self) -> None:
+        with pytest.raises(RuntimeError, match="malformed"):
+            dream.parse_dream_result(json.dumps({"type": "system"}), expected_model=_MODEL)
+
+
+class TestSpawnProgress:
+    @staticmethod
+    def _spawn(lines: list[str], *, timeout: float = 10) -> str:
+        script = "import sys\nfor line in sys.argv[1:]: print(line, flush=True)"
+        return asyncio.run(dream._spawn_agent([sys.executable, "-c", script, *lines], timeout=timeout))
+
+    def test_mutating_memory_calls_are_recorded_with_short_args(self) -> None:
+        dream_status.clear()
+        dream_status.record_pass_start("heavy")
+        self._spawn([
+            _assistant_tool_call("mcp__memory__merge_entities", {"project": "p", "source": "a", "target": "b"}),
+            _assistant_tool_call("mcp__memory__vote", {"project": "p", "name": "x" * 80, "value": -1}),
+        ])
+        status = dream_status.read_status()
+        assert status is not None
+        calls = status["progress"]["calls"]
+        assert calls[0] == "merge_entities p a b"
+        assert calls[1].startswith("vote p xxx")
+        assert len(calls[1]) < 80
+
+    def test_observation_text_is_never_recorded(self) -> None:
+        dream_status.clear()
+        dream_status.record_pass_start("heavy")
+        self._spawn([
+            _assistant_tool_call(
+                "mcp__memory__vote", {"project": "p", "name": "e", "vote": -1, "observation": "secret observation text"}
+            ),
+            _assistant_tool_call(
+                "mcp__memory__edit_observation",
+                {
+                    "project": "p",
+                    "entityName": "e",
+                    "observationHash": "ab12",
+                    "newText": "secret new",
+                    "oldText": "secret old",
+                },
+            ),
+        ])
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"]["calls"] == ["vote p e -1", "edit_observation p e ab12"]
+
+    def test_reads_are_counted_and_foreign_tools_ignored(self) -> None:
+        dream_status.clear()
+        dream_status.record_pass_start("heavy")
+        self._spawn([
+            _assistant_tool_call("mcp__memory__search_nodes", {"query": "q"}),
+            _assistant_tool_call("Bash", {"command": "ls"}),
+            "not json",
+        ])
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"] == {"reads": 1, "calls": []}
+
+    def test_times_out_a_silent_agent(self) -> None:
+        script = "import time; time.sleep(30)"
+        with pytest.raises(RuntimeError, match="timed out"):
+            asyncio.run(dream._spawn_agent([sys.executable, "-c", script], timeout=0.5))
+
+
+class TestTranscripts:
+    @staticmethod
+    def _run(script: str, *, tier: str = "heavy", timeout: float = 10) -> dream.SpawnResult:
+        return asyncio.run(
+            dream._run_isolated_agent(
+                lambda claude_bin, _: [claude_bin, "-c", script, "-p", "the prompt"],
+                tier=tier,
+                model=_MODEL,
+                timeout=timeout,
+            )
+        )
+
+    @staticmethod
+    def _saved(tier: str) -> list[Path]:
+        return sorted((get_db_path().parent / "backups").glob(f"dream-{tier}-*.jsonl"))
+
+    @pytest.fixture(autouse=True)
+    def _fake_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream, "_claude_bin", lambda: sys.executable)
+
+    def test_saves_the_prompt_and_stream_of_a_finished_pass(self) -> None:
+        result = self._run(f"print({_dream_payload('- done')!r})", tier="light")
+
+        assert result["ok"]
+        (saved,) = self._saved("light")
+        first, second = saved.read_text().splitlines()
+        assert json.loads(first) == {"type": "dream_prompt", "prompt": "the prompt"}
+        assert json.loads(second)["type"] == "result"
+
+    def test_keeps_the_partial_stream_when_the_agent_times_out(self) -> None:
+        script = "import time; print('partial line', flush=True); time.sleep(30)"
+
+        assert not self._run(script, timeout=1)["ok"]
+
+        (saved,) = self._saved("heavy")
+        assert saved.read_text().splitlines()[1:] == ["partial line"]
+
+    def test_keeps_the_stream_when_the_agent_exits_with_an_error(self) -> None:
+        assert not self._run("print('before crash'); raise SystemExit(3)")["ok"]
+
+        (saved,) = self._saved("heavy")
+        assert saved.read_text().splitlines()[1:] == ["before crash"]
+
+    def test_saves_nothing_when_backups_are_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+
+        self._run("print('x')")
+
+        assert not self._saved("heavy")
+
+
 class TestRunDreamPass:
     def test_returns_audit_summary_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
@@ -673,6 +912,7 @@ class TestRunDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
             captured["command"] = command
             return _dream_payload("- demoted [mcp-memory/task/old]: superseded")
@@ -698,15 +938,38 @@ class TestRunDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
-            return _dream_payload("- x", model="global.anthropic.claude-opus-4-8-v1:0")
+            return _dream_payload("- x", model="gateway.claude-opus-4-8-v1:0")
 
         monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
         result = asyncio.run(dream.run_dream_pass())
         assert "unexpected model" in result
 
 
+class TestFailedAgentLogging:
+    def test_logs_stderr_but_keeps_result_generic(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        fake_bin = tmp_path / "claude"
+        fake_bin.write_text("#!/bin/sh\necho boom-detail >&2\nexit 1\n")
+        fake_bin.chmod(0o755)
+        monkeypatch.setattr(dream.shutil, "which", lambda _: str(fake_bin))
+        monkeypatch.setattr(dream, "get_dream_model", lambda: _MODEL)
+        with caplog.at_level("ERROR", logger="mcp-memory"):
+            result = asyncio.run(dream.run_dream_pass())
+        assert result == "dream agent exited with an error"
+        assert "boom-detail" in caplog.text
+        assert "exited 1" in caplog.text
+
+
 class TestRunHeavyDreamPass:
+    @pytest.fixture(autouse=True)
+    def _audited_db(self) -> None:
+        open_writable(get_db_path()).entities.create(
+            "proj", [{"name": "legacyname", "entityType": "task", "observations": ["o"]}]
+        )
+
     def test_returns_audit_summary_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
         monkeypatch.setattr(dream, "get_dream_heavy_model", lambda: _MODEL)
@@ -718,17 +981,55 @@ class TestRunHeavyDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
             captured["command"] = command
             return _dream_payload("[mcp-memory/task/old] - merged into task/new")
 
         monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
         result = asyncio.run(dream.run_heavy_dream_pass())
-        assert result == "[mcp-memory/task/old] - merged into task/new"
+        assert result.splitlines()[-1] == "[mcp-memory/task/old] - merged into task/new"
         command = captured["command"]
         assert isinstance(command, list)
         assert "mcp__memory__merge_entities" not in command
         assert "mcp__memory__vote" not in command
+        assert "legacyname" in command[command.index("-p") + 1]
+
+    def test_backs_up_the_database_before_the_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
+
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+            transcript: list[str] | None = None,
+        ) -> str:
+            assert len(list((get_db_path().parent / "backups").glob("memory-*.db"))) == 1
+            return _dream_payload("[p/task/x] - merged")
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        monkeypatch.setattr(dream, "get_dream_heavy_model", lambda: _MODEL)
+        asyncio.run(dream.run_heavy_dream_pass())
+
+    def test_skips_the_backup_when_backups_are_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: None)
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+        asyncio.run(dream.run_heavy_dream_pass())
+        assert not (get_db_path().parent / "backups").exists()
+
+    def test_aborts_the_pass_when_the_backup_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
+
+        def fail() -> None:
+            raise OSError("disk full")
+
+        async def must_not_spawn(*_: object, **__: object) -> str:
+            raise AssertionError("spawned without a backup")
+
+        monkeypatch.setattr(dream.backup, "backup_database", fail)
+        monkeypatch.setattr(dream, "_spawn_agent", must_not_spawn)
+        assert asyncio.run(dream.run_heavy_dream_pass()).startswith("dream ")
 
     def test_reports_missing_claude_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream.shutil, "which", lambda _: None)
@@ -744,9 +1045,152 @@ class TestRunHeavyDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
-            return _dream_payload("[p/task/x] - merged", model="global.anthropic.claude-opus-4-8-v1:0")
+            return _dream_payload("[p/task/x] - merged", model="gateway.claude-opus-4-8-v1:0")
 
         monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
         result = asyncio.run(dream.run_heavy_dream_pass())
         assert "unexpected model" in result
+
+
+class TestHeavyDreamPrepass:
+    @pytest.fixture(autouse=True)
+    def _fake_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(dream, "get_dream_heavy_model", lambda: _MODEL)
+
+    @staticmethod
+    def _two_twins() -> None:
+        db = open_writable(get_db_path())
+        db.entities.create("proj", [{"name": "task/dup", "entityType": "task", "observations": ["o"]}])
+        db.entities.create("proj", [{"name": "dup", "entityType": "task", "observations": ["p"]}])
+        db.connection.close()
+
+    def test_applies_safe_steps_before_the_audit_and_lists_them_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._two_twins()
+        prompts: list[str] = []
+
+        async def fake_spawn(command: list[str], **_: object) -> str:
+            prompts.append(command[command.index("-p") + 1])
+            return _dream_payload("[proj/task/x] - deleted: wrong")
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        result = asyncio.run(dream.run_heavy_dream_pass())
+
+        lines = result.splitlines()
+        assert lines[0].startswith("[proj/dup] - merged into task/dup")
+        assert lines[-1] == "[proj/task/x] - deleted: wrong"
+        assert '"name":"dup"' not in prompts[0]
+
+    def test_prepass_failure_aborts_without_spawning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+
+        def fail() -> list[str]:
+            raise OSError("locked")
+
+        async def must_not_spawn(*_: object, **__: object) -> str:
+            raise AssertionError("spawned after a failed prepass")
+
+        monkeypatch.setattr(dream, "_dream_prepass", fail)
+        monkeypatch.setattr(dream, "_spawn_agent", must_not_spawn)
+        assert asyncio.run(dream.run_heavy_dream_pass()) == "dream prepass failed"
+
+    def test_prepass_lines_follow_a_failed_agent_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._two_twins()
+
+        async def fake_spawn(*_: object, **__: object) -> str:
+            raise RuntimeError("dream agent exited with an error")
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        result = asyncio.run(dream.run_heavy_dream_pass())
+
+        assert result.startswith("dream ")
+        assert "merged into task/dup" in result
+        assert not dream._pass_succeeded(result)
+
+
+class TestHeavyDreamPassFailureKeepsPrepass:
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(dream, "get_dream_heavy_model", lambda: _MODEL)
+        db = open_writable(get_db_path())
+        db.entities.create("proj", [{"name": "task/dup", "entityType": "task", "observations": ["o"]}])
+        db.entities.create("proj", [{"name": "dup", "entityType": "task", "observations": ["p"]}])
+        db.connection.close()
+
+    @pytest.mark.parametrize("failing", ["_heavy_dream_audit", "_heavy_dream_prompt"])
+    def test_unexpected_error_keeps_prepass_lines_and_fails_cleanly(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failing: str
+    ) -> None:
+        def explode(*_: object, **__: object) -> str:
+            raise KeyError("tool")
+
+        monkeypatch.setattr(dream, failing, explode)
+        result = asyncio.run(dream.run_heavy_dream_pass())
+
+        assert result.startswith("dream ")
+        assert "KeyError" in result
+        assert "merged into task/dup" in result
+        assert not dream._pass_succeeded(result)
+        assert "KeyError" in caplog.text
+
+    def test_oversized_non_task_entity_does_not_break_the_audit(self) -> None:
+        words = [f"{chr(97 + i // 5)}{chr(97 + i % 5)}{chr(97 + i % 7)}x" for i in range(25)]
+        db = open_writable(get_db_path())
+        db.entities.create(
+            "proj",
+            [{"name": "knowledge/big", "entityType": "knowledge", "observations": [f"{w} distinct" for w in words]}],
+        )
+        db.connection.close()
+
+        steps = json.loads(dream._heavy_dream_audit(30))["steps"]
+
+        assert any(step.get("action") == "review_oversized" for step in steps)
+
+
+class TestHeavyDreamAuditTrimSteps:
+    def test_trim_step_carries_must_keep_hashes_and_needs_review(self) -> None:
+        db = open_writable(get_db_path())
+        db.entities.create("proj", [{"name": "project/proj", "entityType": "project", "observations": ["root"]}])
+        words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo"]
+        db.entities.create(
+            "proj",
+            [{"name": "task/big", "entityType": "task", "observations": [f"{w} distinct fact" for w in words * 3]}],
+        )
+        db.entities.set_status("proj", "task/big", "resolved")
+        db.connection.close()
+
+        steps = json.loads(dream._heavy_dream_audit(30))["steps"]
+        trims = [step for step in steps if step["tool"] == "trim_observations_to_outcome"]
+
+        assert trims
+        for step in trims:
+            assert "keep_hashes" not in step["arguments"]
+            assert step["arguments"]["must_keep_hashes"]
+            assert step["needs_review"] is True
+
+
+class TestHeavyDreamAuditFairness:
+    def test_capped_audit_spans_projects(self) -> None:
+        db = open_writable(get_db_path())
+        for index in range(8):
+            db.entities.create("alpha", [{"name": f"task/a{index}", "entityType": "task", "observations": ["o"]}])
+        db.entities.create("beta", [{"name": "task/b0", "entityType": "task", "observations": ["o"]}])
+        db.connection.close()
+
+        audit = json.loads(dream._heavy_dream_audit(3))
+
+        assert {orphan["project"] for orphan in audit["report"]["orphans"]} == {"alpha", "beta"}
+
+    def test_audit_is_trimmed_to_the_byte_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        db = open_writable(get_db_path())
+        for index in range(30):
+            db.entities.create("alpha", [{"name": f"task/a{index}", "entityType": "task", "observations": ["o"]}])
+        db.connection.close()
+        monkeypatch.setattr(dream, "_HEAVY_DREAM_AUDIT_MAX_BYTES", 1500)
+
+        audit = dream._heavy_dream_audit(30)
+
+        assert 0 < len(audit.encode()) <= 1500

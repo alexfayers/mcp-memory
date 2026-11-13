@@ -17,12 +17,18 @@ Environment variables. The server reads the first table. The hook plugin reads t
 | `MCP_MEMORY_SWEEP_INTERVAL_SECONDS` | How often the maintenance sweep runs. It also runs once at startup | `43200` |
 | `MCP_MEMORY_ARCHIVE_ENABLED` | Sweep: archive resolved entities untouched for 56+ days, unless they were surfaced and then acted on | `true` |
 | `MCP_MEMORY_GC_ENABLED` | Sweep: soft-delete orphan entities with a vote score of `-10` or lower and no live incoming relation | off |
-| `MCP_MEMORY_PURGE_ENABLED` | Sweep: hard-delete entities that were soft-deleted longer ago than the grace window. This is the only permanent removal of entities | off |
+| `MCP_MEMORY_PURGE_ENABLED` | Sweep: hard-delete entities, observations and relations that were soft-deleted longer ago than the grace window. This is the only permanent removal of them | off |
 | `MCP_MEMORY_PURGE_GRACE_DAYS` | Grace window for the purge | `30` |
 | `MCP_MEMORY_CALL_METRICS_ENABLED` | Record per-call usage metrics (byte sizes and option usage) | `true` |
 | `MCP_MEMORY_CALL_METRICS_RETENTION_DAYS` | Days to keep call metrics | `90` |
 | `MCP_MEMORY_SURFACED_RETENTION_DAYS` | Days to keep retrieval telemetry. Negative means forever. The ranking eval needs its `used_at` labels | `-1` |
 | `MCP_MEMORY_EVAL_CACHE_TTL_SECONDS` | How long a computed ranking-quality report is cached | `300` |
+| `MCP_MEMORY_BACKUP_ENABLED` | Back up the database on server start, every interval, and before each heavy dream pass. Also saves each dream agent's prompt and output as `dream-<tier>-<UTC timestamp>.jsonl` beside the backups, pruned with the same retention windows | `true` |
+| `MCP_MEMORY_BACKUP_DIR` | Directory holding timestamped database backups | `backups` beside the database |
+| `MCP_MEMORY_BACKUP_INTERVAL_SECONDS` | How often the server backs up the database | `21600` |
+| `MCP_MEMORY_BACKUP_KEEP_DAILY` | Days that keep their newest backup after the last 24 hours. Every backup from the last 24 hours is kept | `7` |
+| `MCP_MEMORY_BACKUP_KEEP_WEEKLY` | ISO weeks that keep their newest backup | `4` |
+| `MCP_MEMORY_BACKUP_KEEP_MONTHLY` | Months that keep their newest backup | `6` |
 | `MCP_AUTO_VOTE_WINDOW_SECONDS` | How soon after a search an edit counts as an automatic `+1` | `1800` |
 | `MCP_AUTO_VOTE_MAX_PER_DAY` | Per-entity daily cap on automatic votes | `3` |
 
@@ -51,21 +57,25 @@ def memory_workspace_markers(self) -> frozenset[str]:
 Dreaming lets the server curate memory while it is idle. It runs a headless `claude -p` session that connects back to the server, so the `claude` CLI must be on `PATH`. Both tiers are off by default. Set the variables, then run `mcp-memory setup-service` so the service picks them up.
 
 - Light (`MCP_DREAM_ENABLED`): downvotes stale, superseded or duplicated entities and observations. It never deletes.
-- Heavy (`MCP_DREAM_HEAVY_ENABLED`): does the same, and also merges duplicate entities (reversible soft-delete) and duplicate observations in one entity (not reversible).
+- Heavy (`MCP_DREAM_HEAVY_ENABLED`): does the same. Each pass first applies the audit's safe steps in code (renames, merges, observation merges, feature relinks, stale archives), then runs the memory-review checklist with reversible tools only (trims, splits, relinks orphans, soft-deletes outright wrong content). It never deletes an entity with live `depends-on` or `implements` edges.
+
+When `MCP_DREAM_HEAVY_ENABLED` is on, the memory-review nudge is not shown, since the heavy pass runs the review.
 
 Each tier fires once per idle session. At most one pass runs at a time. The visualiser's dream card has Run light and Run heavy buttons that start a pass on demand, whether or not the tier is enabled.
+
+`mcp-memory dream light|heavy` does the same from the command line by asking the running server to start the pass. It exits non-zero if the server is down or refuses. `--wait` prints each memory change the pass makes as it happens, then the final result.
 
 | Variable | Description | Default |
 |---|---|---|
 | `MCP_DREAM_ENABLED` | Enable the light tier | off |
 | `MCP_DREAM_IDLE_SECONDS` | Idle time before the light pass fires | `1800` |
 | `MCP_DREAM_POLL_SECONDS` | How often to check whether it is due | `300` |
-| `MCP_DREAM_MODEL` | Fully-qualified model id | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
-| `MCP_DREAM_TIMEOUT` | Timeout per pass, seconds | `300` |
-| `MCP_DREAM_MAX_VOTES` | Advisory cap on entities and observations demoted per pass | `15` |
+| `MCP_DREAM_MODEL` | Model id | `claude-sonnet-5-5` (the Bedrock id from `~/.claude/settings.json` `modelOverrides` on Bedrock) |
+| `MCP_DREAM_TIMEOUT` | Timeout per pass, seconds | `900` |
+| `MCP_DREAM_MAX_VOTES` | Advisory cap on entities and observations demoted per pass | `50` |
 | `MCP_DREAM_HEAVY_ENABLED` | Enable the heavy tier | off |
 | `MCP_DREAM_HEAVY_IDLE_SECONDS` | Idle time before the heavy pass fires | `5400` |
 | `MCP_DREAM_HEAVY_POLL_SECONDS` | How often to check whether it is due | `900` |
-| `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id. A bare alias maps to Opus | the light model |
-| `MCP_DREAM_HEAVY_TIMEOUT` | Timeout per pass, seconds | `600` |
-| `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges and demotions per pass | `10` |
+| `MCP_DREAM_HEAVY_MODEL` | Model id | `claude-opus-5-5` (the Bedrock id from `~/.claude/settings.json` `modelOverrides` on Bedrock) |
+| `MCP_DREAM_HEAVY_TIMEOUT` | Timeout per pass, seconds | `3600` |
+| `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges, demotions, deletes, renames, links and archives per pass | `100` |

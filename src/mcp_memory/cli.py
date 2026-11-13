@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import dataclass, replace
 import getpass
 import json
@@ -12,14 +13,21 @@ import platform
 import pwd
 import re
 import shutil
+import socket
+import sqlite3
 import subprocess
 import sys
 import textwrap
-from typing import Any
+import time
+from typing import TYPE_CHECKING, Any, cast
+import urllib.error
+import urllib.request
 
 from . import api_client
+from .backup import restore_backup
 from .config import (
     _DEFAULT_PORT,
+    get_backup_dir,
     get_db_path,
     get_default_db_path,
     get_surfaced_retention_days,
@@ -27,6 +35,12 @@ from .config import (
 )
 from .jsonc import load_jsonc_object
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+_FLUSH_TIMEOUT_SECONDS = 10
+_DREAM_POLL_SECONDS = 5
 
 __all__ = ["Path", "argparse", "subprocess"]
 
@@ -65,6 +79,7 @@ def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
     # mcp-memory setup-service` sticks in the installed service.
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_PURGE_")})
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_GC_")})
+    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_BACKUP_")})
     if "MCP_MEMORY_SURFACED_RETENTION_DAYS" in os.environ:
         env["MCP_MEMORY_SURFACED_RETENTION_DAYS"] = os.environ["MCP_MEMORY_SURFACED_RETENTION_DAYS"]
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_DREAM_")})
@@ -375,6 +390,90 @@ def _cmd_restart() -> None:
     print("Restarted mcp-memory service.")
 
 
+def _dream_api(path: str, body: dict[str, str] | None = None) -> dict[str, object]:
+    """Call the running server's dream API and return its JSON, exiting non-zero on refusal or no server."""
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{resolve_port()}/api/{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="GET" if body is None else "POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_FLUSH_TIMEOUT_SECONDS) as response:  # ruff: ignore[suspicious-url-open-usage]
+            payload: dict[str, object] = json.load(response)
+    except urllib.error.HTTPError as error:
+        reason = json.load(error).get("reason", error.reason)
+        print(f"Error: dream not started: {reason}", file=sys.stderr)
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        print("Error: mcp-memory server is not running.", file=sys.stderr)
+        sys.exit(1)
+    return payload
+
+
+def _progress_calls(state: dict[str, object]) -> list[str]:
+    """Return the mutating tool-call lines a dream status reports, or none when it has no progress."""
+    progress = state.get("progress")
+    return cast("list[str]", progress["calls"]) if isinstance(progress, dict) else []
+
+
+def _thousands(tokens: int) -> str:
+    """Format a token count in thousands from 1000 up, e.g. 123k."""
+    return f"{round(tokens / 1000)}k" if tokens >= 1000 else str(tokens)
+
+
+def _pass_summary(last_pass: object) -> str:
+    """Return a one-line usage summary of a finished pass, or "" when it reported no usage."""
+    metrics = last_pass.get("metrics") if isinstance(last_pass, dict) else None
+    if not metrics or metrics.get("input_tokens") is None:
+        return ""
+    parts = [
+        f"{_thousands(metrics['input_tokens'])} in",
+        f"{_thousands(metrics.get('output_tokens') or 0)} out",
+        f"{_thousands(metrics.get('cache_read_tokens') or 0)} cache read",
+    ]
+    cost = metrics.get("cost_usd")
+    tail = [f"{metrics.get('num_turns') or 0} turns"]
+    if cost is not None:
+        tail.append(f"${cost:.2f}")
+    if metrics.get("duration_ms") is not None:
+        tail.append(f"{round(metrics['duration_ms'] / 1000)}s")
+    return f"tokens: {' / '.join(parts)}, {', '.join(tail)}"
+
+
+def _action_counts(last_pass: object) -> str:
+    """Return a finished pass's operation count per action, e.g. "merge 2, rename 1", or "" when it had none."""
+    operations = last_pass.get("operations") if isinstance(last_pass, dict) else None
+    counts = Counter(operation["action"] for operation in operations or [])
+    return ", ".join(f"{action} {count}" for action, count in counts.items())
+
+
+def _cmd_dream(args: argparse.Namespace) -> None:
+    """Trigger a dream pass on the running server, optionally waiting for it to finish."""
+    _dream_api("dream/trigger", {"tier": args.tier})
+    print(f"Started {args.tier} dream pass.")
+    if not args.wait:
+        return
+    printed = 0
+    while True:
+        state = _dream_api("dream")
+        calls = _progress_calls(state)
+        for line in calls[printed:]:
+            print(line, flush=True)
+        printed = len(calls)
+        if not state["running"]:
+            break
+        time.sleep(_DREAM_POLL_SECONDS)
+    print(json.dumps(state["last_pass"], indent=2))
+    counts = _action_counts(state["last_pass"])
+    if counts:
+        print(f"actions: {counts}")
+    summary = _pass_summary(state["last_pass"])
+    if summary:
+        print(summary)
+
+
 def _cmd_migrate_db(args: argparse.Namespace) -> None:
     """Move the database to the default location and repoint the service at it."""
     target = get_default_db_path()
@@ -417,9 +516,9 @@ def _api(op: str, args: dict[str, Any]) -> Any:
 
 
 def _cmd_audit(args: argparse.Namespace) -> None:
-    """Emit the read-only structural-hygiene report, or a proposed fix plan, as JSON on stdout."""
+    """Emit the structural-hygiene report or proposed fix plan as JSON, optionally applying the safe steps first."""
     project = None if args.all_projects else args.project
-    print(json.dumps(_api("audit", {"project": project, "plan": args.propose_plan}), indent=2))
+    print(json.dumps(_api("audit", {"project": project, "plan": args.propose_plan, "apply": args.apply}), indent=2))
 
 
 def _cmd_eval(args: argparse.Namespace) -> None:
@@ -493,6 +592,34 @@ def _cmd_import(args: argparse.Namespace) -> None:
     names = [name.strip() for name in args.project.split(",") if name.strip()]
     summary = ImportSummary(**_api("import", {"data": data, "projects": names, "dry_run": args.dry_run}))
     print(summary.render())
+
+
+def _server_is_running() -> bool:
+    """Return whether something is listening on the configured server port."""
+    try:
+        socket.create_connection(("127.0.0.1", int(resolve_port())), timeout=_FLUSH_TIMEOUT_SECONDS).close()
+    except OSError:
+        return False
+    return True
+
+
+def _cmd_restore(args: argparse.Namespace) -> None:
+    """Replace the local database with a backup, keeping a backup of the replaced database."""
+    backup_file = Path(args.backup_file).expanduser()
+    if not backup_file.is_file():
+        print(f"Error: backup file not found: {backup_file}", file=sys.stderr)
+        sys.exit(1)
+    if _server_is_running():
+        print("Error: the mcp-memory server is running. Stop it before restoring.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        previous = restore_backup(backup_file, get_db_path(), get_backup_dir())
+    except sqlite3.DatabaseError as exc:
+        print(f"Error: {backup_file} is not a valid database backup: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Restored {get_db_path()} from {backup_file}")
+    if previous:
+        print(f"Previous database saved to {previous}")
 
 
 def _remove_mcp_servers(mcp_path: Path, servers_key: str, names: tuple[str, ...] = _LEGACY_AGENT_SERVERS) -> bool:
@@ -790,26 +917,12 @@ def _cmd_install_pi() -> None:
         sys.exit(1)
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser."""
-    parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
-    sub = parser.add_subparsers(dest="command")
+def _add_utils_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add the `utils` command group of maintenance and diagnostic subcommands."""
+    utils = sub.add_parser("utils", help="Maintenance and diagnostic commands")
+    utils_sub = utils.add_subparsers(dest="utils_command", required=True)
 
-    setup = sub.add_parser("setup-service", help="Install as a persistent background service")
-    setup.add_argument(
-        "--port",
-        default=resolve_port(),
-        help=f"HTTP port (default: MCP_MEMORY_PORT, else the installed service's port, else {_DEFAULT_PORT})",
-    )
-    setup.add_argument(
-        "--db-path",
-        default=str(get_db_path()),
-        help="Database path (default: ~/.local/share/mcp-memory/memory.db, or MCP_MEMORY_DB_PATH)",
-    )
-
-    sub.add_parser("restart", help="Restart the running background service")
-
-    migrate = sub.add_parser(
+    migrate = utils_sub.add_parser(
         "migrate-db",
         help="Move the database to the default location and repoint the service",
     )
@@ -819,7 +932,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Source database path (default: auto-detected from the installed service)",
     )
 
-    audit = sub.add_parser("audit", help="Report structural memory-graph hygiene issues as JSON (read-only)")
+    audit = utils_sub.add_parser("audit", help="Report structural memory-graph hygiene issues as JSON (read-only)")
     scope = audit.add_mutually_exclusive_group(required=True)
     scope.add_argument("--project", help="Audit a single project scope")
     scope.add_argument("--all-projects", action="store_true", help="Audit every project scope")
@@ -828,8 +941,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit a structured plan of tool calls to fix findings, instead of the raw report",
     )
+    audit.add_argument(
+        "--apply",
+        action="store_true",
+        help="Implies --propose-plan: first apply the safe (needs_review false) steps and archive stale entities",
+    )
 
-    evaluate_cmd = sub.add_parser(
+    evaluate_cmd = utils_sub.add_parser(
         "eval",
         help="Report search-ranking quality over recorded retrieval telemetry (read-only)",
     )
@@ -863,7 +981,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    metrics_cmd = sub.add_parser(
+    metrics_cmd = utils_sub.add_parser(
         "metrics", help="Report per-tool usage metrics (byte-size proxies and option frequency)."
     )
     metrics_cmd.add_argument(
@@ -872,8 +990,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help=("Only include calls on or after this instant (relative '30m'/'1h'/'7d'/'2w'/'3mo' or ISO date)."),
     )
 
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
+    sub = parser.add_subparsers(dest="command")
+
+    setup = sub.add_parser("setup-service", help="Install as a persistent background service")
+    setup.add_argument(
+        "--port",
+        default=resolve_port(),
+        help=f"HTTP port (default: MCP_MEMORY_PORT, else the installed service's port, else {_DEFAULT_PORT})",
+    )
+    setup.add_argument(
+        "--db-path",
+        default=str(get_db_path()),
+        help="Database path (default: ~/.local/share/mcp-memory/memory.db, or MCP_MEMORY_DB_PATH)",
+    )
+
+    sub.add_parser("restart", help="Restart the running background service")
+
+    dream = sub.add_parser("dream", help="Run a dream pass now on the running server")
+    dream.add_argument("tier", choices=["light", "heavy"], help="Dream tier to run")
+    dream.add_argument("--wait", action="store_true", help="Wait for the pass to finish and print its result")
+
+    _add_utils_parser(sub)
+
     export_cmd = sub.add_parser("export", help="Export the entire memory database to a JSON file")
     export_cmd.add_argument("output_path")
+
+    restore_cmd = sub.add_parser("restore", help="Replace the local database with a backup (server must be stopped)")
+    restore_cmd.add_argument("backup_file")
 
     import_cmd = sub.add_parser("import", help="Merge selected projects from a JSON export into the local database")
     import_cmd.add_argument("input_path")
@@ -937,26 +1084,26 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    if args.command == "setup-service":
-        _cmd_setup_service(args)
-    elif args.command == "restart":
-        _cmd_restart()
-    elif args.command == "migrate-db":
-        _cmd_migrate_db(args)
-    elif args.command == "audit":
-        _cmd_audit(args)
-    elif args.command == "eval":
-        _cmd_eval(args)
-    elif args.command == "metrics":
-        _cmd_metrics(args)
-    elif args.command == "export":
-        _cmd_export(args)
-    elif args.command == "import":
-        _cmd_import(args)
-    elif args.command == "install":
-        _cmd_install(args, parser)
-    elif args.command == "uninstall":
-        _cmd_uninstall_copilot(args)
+    utils_handlers: dict[str, Callable[[argparse.Namespace], None]] = {
+        "migrate-db": _cmd_migrate_db,
+        "audit": _cmd_audit,
+        "eval": _cmd_eval,
+        "metrics": _cmd_metrics,
+    }
+    handlers: dict[str, Callable[[argparse.Namespace], None]] = {
+        "setup-service": _cmd_setup_service,
+        "restart": lambda _: _cmd_restart(),
+        "dream": _cmd_dream,
+        "utils": lambda parsed: utils_handlers[parsed.utils_command](parsed),
+        "export": _cmd_export,
+        "import": _cmd_import,
+        "restore": _cmd_restore,
+        "install": lambda parsed: _cmd_install(parsed, parser),
+        "uninstall": _cmd_uninstall_copilot,
+    }
+    handler = handlers.get(args.command)
+    if handler is not None:
+        handler(args)
     else:
         from .server import main as serve
 
