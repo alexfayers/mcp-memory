@@ -26,7 +26,7 @@ Other commands:
 
 ```bash
 mcp-memory restart                # restart the service
-mcp-memory audit --all-projects   # graph hygiene report
+mcp-memory utils audit --all-projects   # graph hygiene report
 mcp-memory export <file>          # back up to JSON
 mcp-memory import <file>          # merge projects from an export
 ```

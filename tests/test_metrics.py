@@ -212,7 +212,7 @@ class TestMetricsCommand:
         self, api: FakeApi, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         api.results["metrics"] = {"total_calls": 3}
-        monkeypatch.setattr("sys.argv", ["mcp-memory", "metrics", "--since", "7d"])
+        monkeypatch.setattr("sys.argv", ["mcp-memory", "utils", "metrics", "--since", "7d"])
         cli.main()
 
         assert api.calls == [("metrics", {"since": "7d"})]

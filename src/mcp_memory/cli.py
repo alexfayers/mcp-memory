@@ -17,7 +17,7 @@ import subprocess
 import sys
 import textwrap
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import urllib.error
 import urllib.request
 
@@ -34,6 +34,9 @@ from .config import (
 )
 from .jsonc import load_jsonc_object
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _DREAM_API_TIMEOUT_SECONDS = 10
 _DREAM_POLL_SECONDS = 5
@@ -843,30 +846,12 @@ def _cmd_install_pi() -> None:
         sys.exit(1)
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser."""
-    parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
-    sub = parser.add_subparsers(dest="command")
+def _add_utils_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Add the `utils` command group of maintenance and diagnostic subcommands."""
+    utils = sub.add_parser("utils", help="Maintenance and diagnostic commands")
+    utils_sub = utils.add_subparsers(dest="utils_command", required=True)
 
-    setup = sub.add_parser("setup-service", help="Install as a persistent background service")
-    setup.add_argument(
-        "--port",
-        default=resolve_port(),
-        help=f"HTTP port (default: MCP_MEMORY_PORT, else the installed service's port, else {_DEFAULT_PORT})",
-    )
-    setup.add_argument(
-        "--db-path",
-        default=str(get_db_path()),
-        help="Database path (default: ~/.local/share/mcp-memory/memory.db, or MCP_MEMORY_DB_PATH)",
-    )
-
-    sub.add_parser("restart", help="Restart the running background service")
-
-    dream = sub.add_parser("dream", help="Run a dream pass now on the running server")
-    dream.add_argument("tier", choices=["light", "heavy"], help="Dream tier to run")
-    dream.add_argument("--wait", action="store_true", help="Wait for the pass to finish and print its result")
-
-    migrate = sub.add_parser(
+    migrate = utils_sub.add_parser(
         "migrate-db",
         help="Move the database to the default location and repoint the service",
     )
@@ -876,7 +861,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Source database path (default: auto-detected from the installed service)",
     )
 
-    audit = sub.add_parser("audit", help="Report structural memory-graph hygiene issues as JSON (read-only)")
+    audit = utils_sub.add_parser("audit", help="Report structural memory-graph hygiene issues as JSON (read-only)")
     scope = audit.add_mutually_exclusive_group(required=True)
     scope.add_argument("--project", help="Audit a single project scope")
     scope.add_argument("--all-projects", action="store_true", help="Audit every project scope")
@@ -886,7 +871,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Emit a structured plan of tool calls to fix findings, instead of the raw report",
     )
 
-    evaluate_cmd = sub.add_parser(
+    evaluate_cmd = utils_sub.add_parser(
         "eval",
         help="Report search-ranking quality over recorded retrieval telemetry (read-only)",
     )
@@ -920,7 +905,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    metrics_cmd = sub.add_parser(
+    metrics_cmd = utils_sub.add_parser(
         "metrics", help="Report per-tool usage metrics (byte-size proxies and option frequency)."
     )
     metrics_cmd.add_argument(
@@ -928,6 +913,32 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=("Only include calls on or after this instant (relative '30m'/'1h'/'7d'/'2w'/'3mo' or ISO date)."),
     )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
+    sub = parser.add_subparsers(dest="command")
+
+    setup = sub.add_parser("setup-service", help="Install as a persistent background service")
+    setup.add_argument(
+        "--port",
+        default=resolve_port(),
+        help=f"HTTP port (default: MCP_MEMORY_PORT, else the installed service's port, else {_DEFAULT_PORT})",
+    )
+    setup.add_argument(
+        "--db-path",
+        default=str(get_db_path()),
+        help="Database path (default: ~/.local/share/mcp-memory/memory.db, or MCP_MEMORY_DB_PATH)",
+    )
+
+    sub.add_parser("restart", help="Restart the running background service")
+
+    dream = sub.add_parser("dream", help="Run a dream pass now on the running server")
+    dream.add_argument("tier", choices=["light", "heavy"], help="Dream tier to run")
+    dream.add_argument("--wait", action="store_true", help="Wait for the pass to finish and print its result")
+
+    _add_utils_parser(sub)
 
     export_cmd = sub.add_parser("export", help="Export the entire memory database to a JSON file")
     export_cmd.add_argument("output_path")
@@ -989,6 +1000,17 @@ def _cmd_install(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
         _cmd_install_kiro(args)
 
 
+def _cmd_utils(args: argparse.Namespace) -> None:
+    """Dispatch the `utils` subcommand to its handler."""
+    handlers: dict[str, Callable[[argparse.Namespace], None]] = {
+        "migrate-db": _cmd_migrate_db,
+        "audit": _cmd_audit,
+        "eval": _cmd_eval,
+        "metrics": _cmd_metrics,
+    }
+    handlers[args.utils_command](args)
+
+
 def main() -> None:
     """CLI entry point: no args = serve, setup-service = install as service."""
     parser = _build_parser()
@@ -1000,14 +1022,8 @@ def main() -> None:
         _cmd_restart()
     elif args.command == "dream":
         _cmd_dream(args)
-    elif args.command == "migrate-db":
-        _cmd_migrate_db(args)
-    elif args.command == "audit":
-        _cmd_audit(args)
-    elif args.command == "eval":
-        _cmd_eval(args)
-    elif args.command == "metrics":
-        _cmd_metrics(args)
+    elif args.command == "utils":
+        _cmd_utils(args)
     elif args.command == "export":
         _cmd_export(args)
     elif args.command == "import":
