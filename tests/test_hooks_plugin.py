@@ -294,6 +294,18 @@ def plugin() -> Iterator[MemoryPlugin]:
         yield MemoryPlugin()
 
 
+@pytest.fixture
+def live_plugin() -> Iterator[MemoryPlugin]:
+    """A MemoryPlugin on the real tracker with a started task and a reachable memory server."""
+    with (
+        patch.object(MemoryPlugin, "_maybe_auto_register", return_value=None),
+        patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+    ):
+        plugin = MemoryPlugin()
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[])
+        yield plugin
+
+
 def _registered_paths(mapping: dict[Path, str]) -> AbstractContextManager[object]:
     return patch(
         "mcp_memory.hooks.plugin.resolve_project_for_path",
@@ -2072,17 +2084,6 @@ class TestFileEditsReducedWeight:
 
 
 class TestMemoryGateWaitsForFirstFileEdit:
-    @pytest.fixture
-    def live_plugin(self) -> Iterator[MemoryPlugin]:
-        """A MemoryPlugin on the real tracker with a started task and a reachable memory server."""
-        with (
-            patch.object(MemoryPlugin, "_maybe_auto_register", return_value=None),
-            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
-        ):
-            plugin = MemoryPlugin()
-            plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[])
-            yield plugin
-
     def test_lookup_only_session_gets_no_reminder_and_no_block(self, live_plugin: MemoryPlugin) -> None:
         set_reminder_chance("t1", 1.0)
         with patch("random.random", return_value=0.0):
@@ -2096,5 +2097,81 @@ class TestMemoryGateWaitsForFirstFileEdit:
             for _ in range(_MEMORY_BLOCK_THRESHOLD):
                 live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
         blocked = live_plugin.on_hook("PreToolUse", task_id="t1", tool_name="execute_command", parameters={})
+        assert blocked is not None
+        assert blocked.block is not None
+
+
+_SUCCESS_TEXT = json.dumps({"message": "Created 1 entities in project 'proj'."}, separators=(",", ":"))
+_ERROR_TEXT = "Entity type 'knowledge' requires at least one relation."
+
+
+class TestFailedMemoryWriteKeepsTheGate:
+    @staticmethod
+    def _gate_session(plugin: MemoryPlugin) -> None:
+        plugin.on_hook("PostToolUse", task_id="t1", tool_name="write_to_file", parameters={})
+        for _ in range(_MEMORY_BLOCK_THRESHOLD):
+            plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
+
+    @staticmethod
+    def _write_memory(plugin: MemoryPlugin, tool_result: str) -> None:
+        entity = {"name": "knowledge/thing", "entityType": "knowledge", "observations": ["x"]}
+        plugin.on_hook(
+            "PostToolUse",
+            task_id="t1",
+            tool_name="mcp__memory__create_entities",
+            parameters={"project": "proj", "entities": [entity]},
+            tool_result=tool_result,
+        )
+
+    @staticmethod
+    def _next_command(plugin: MemoryPlugin) -> HookResult | None:
+        return plugin.on_hook("PreToolUse", task_id="t1", tool_name="execute_command", parameters={})
+
+    def test_failed_write_leaves_the_session_blocked(self, live_plugin: MemoryPlugin) -> None:
+        self._gate_session(live_plugin)
+        self._write_memory(live_plugin, "Invalid kind 'bogus'")
+        blocked = self._next_command(live_plugin)
+        assert blocked is not None
+        assert blocked.block is not None
+
+    def test_successful_write_lifts_the_block(self, live_plugin: MemoryPlugin) -> None:
+        self._gate_session(live_plugin)
+        self._write_memory(live_plugin, json.dumps({"created": 1}))
+        assert self._next_command(live_plugin) is None
+
+    @pytest.mark.parametrize(
+        "tool_result",
+        [
+            pytest.param(
+                str([{"Json": {"content": [{"type": "text", "text": _SUCCESS_TEXT}], "isError": False}}]),
+                id="json-item",
+            ),
+            pytest.param(str([{"Text": _SUCCESS_TEXT}]), id="text-item"),
+            pytest.param(str([_SUCCESS_TEXT]), id="string-list"),
+        ],
+    )
+    def test_successful_write_in_a_wrapped_result_lifts_the_block(
+        self, live_plugin: MemoryPlugin, tool_result: str
+    ) -> None:
+        self._gate_session(live_plugin)
+        self._write_memory(live_plugin, tool_result)
+        assert self._next_command(live_plugin) is None
+
+    @pytest.mark.parametrize(
+        "tool_result",
+        [
+            pytest.param(
+                str([{"Json": {"content": [{"type": "text", "text": _ERROR_TEXT}], "isError": True}}]), id="json-item"
+            ),
+            pytest.param(str([{"Text": _ERROR_TEXT}]), id="text-item"),
+            pytest.param(str([_ERROR_TEXT]), id="string-list"),
+        ],
+    )
+    def test_failed_write_in_a_wrapped_result_leaves_the_session_blocked(
+        self, live_plugin: MemoryPlugin, tool_result: str
+    ) -> None:
+        self._gate_session(live_plugin)
+        self._write_memory(live_plugin, tool_result)
+        blocked = self._next_command(live_plugin)
         assert blocked is not None
         assert blocked.block is not None

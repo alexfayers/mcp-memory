@@ -42,11 +42,16 @@ def server_db(tmp_path: Path) -> Iterator[Storage]:
 
 
 class _StructuredTools:
-    """Server tools called directly, each returning its result's structured content."""
+    """Server tools called directly, each returning its structured content, or ``{"error": text}`` on a tool error."""
 
     def __getattr__(self, name: str) -> Callable[..., Any]:
         tool = getattr(server, name)
-        return lambda *args, **kwargs: tool(*args, **kwargs).structured_content
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            result = tool(*args, **kwargs)
+            return {"error": result.content[0].text} if result.is_error else result.structured_content
+
+        return call
 
 
 tools = _StructuredTools()

@@ -44,7 +44,10 @@ logger = logging.getLogger(__name__)
 
 
 def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
-    """Record each tool call's activity and return its result as compact JSON text plus structured content."""
+    """Record each tool call's activity and return its result as compact JSON text plus structured content.
+
+    A result carrying an ``error`` is returned as an MCP tool error with that message as its text.
+    """
 
     @functools.wraps(fn)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> CallToolResult:
@@ -57,6 +60,8 @@ def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
             metrics.record(_get_db(), fn.__name__, arguments, result)
         except Exception:  # ruff: ignore[try-except-pass] - instrumentation must never break a tool call
             pass
+        if "error" in result:
+            return CallToolResult(content=[TextContent(type="text", text=str(result["error"]))], is_error=True)
         return CallToolResult(content=[TextContent(type="text", text=compact_json(result))], structured_content=result)
 
     return wrapper
