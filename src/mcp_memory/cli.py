@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import dataclass, replace
 import getpass
 import json
@@ -15,7 +16,10 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from typing import Any
+import urllib.error
+import urllib.request
 
 from cline_hooks.core.user_install import resolve_user_binary, user_path
 
@@ -24,11 +28,15 @@ from .config import (
     _DEFAULT_PORT,
     get_db_path,
     get_default_db_path,
+    get_memory_url,
     get_surfaced_retention_days,
     resolve_port,
 )
 from .jsonc import load_jsonc_object
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
+
+_DREAM_API_TIMEOUT_SECONDS = 10
+_DREAM_POLL_SECONDS = 5
 
 __all__ = ["Path", "argparse", "subprocess"]
 
@@ -375,6 +383,49 @@ def _cmd_restart() -> None:
         print("Error: failed to restart mcp-memory service.", file=sys.stderr)
         sys.exit(result.returncode)
     print("Restarted mcp-memory service.")
+
+
+def _dream_api(path: str, body: dict[str, str] | None = None) -> dict[str, object]:
+    """Call the running server's dream API and return its JSON, exiting non-zero on refusal or no server."""
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(  # ruff: ignore[suspicious-url-open-usage]
+        f"{get_memory_url().rstrip('/').removesuffix('/mcp')}/api/{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="GET" if body is None else "POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_DREAM_API_TIMEOUT_SECONDS) as response:  # ruff: ignore[suspicious-url-open-usage]
+            payload: dict[str, object] = json.load(response)
+    except urllib.error.HTTPError as error:
+        reason = json.load(error).get("reason", error.reason)
+        print(f"Error: dream not started: {reason}", file=sys.stderr)
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        print("Error: mcp-memory server is not running.", file=sys.stderr)
+        sys.exit(1)
+    return payload
+
+
+def _action_counts(last_pass: object) -> str:
+    """Return a finished pass's operation count per action, e.g. "merge 2, rename 1", or "" when it had none."""
+    operations = last_pass.get("operations") if isinstance(last_pass, dict) else None
+    counts = Counter(operation["action"] for operation in operations or [])
+    return ", ".join(f"{action} {count}" for action, count in counts.items())
+
+
+def _cmd_dream(args: argparse.Namespace) -> None:
+    """Trigger a dream pass on the running server, optionally waiting for it to finish."""
+    _dream_api("dream/trigger", {"tier": args.tier})
+    print(f"Started {args.tier} dream pass.")
+    if not args.wait:
+        return
+    while (state := _dream_api("dream"))["running"]:
+        time.sleep(_DREAM_POLL_SECONDS)
+    print(json.dumps(state["last_pass"], indent=2))
+    counts = _action_counts(state["last_pass"])
+    if counts:
+        print(f"actions: {counts}")
 
 
 def _cmd_migrate_db(args: argparse.Namespace) -> None:
@@ -811,6 +862,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("restart", help="Restart the running background service")
 
+    dream = sub.add_parser("dream", help="Run a dream pass now on the running server")
+    dream.add_argument("tier", choices=["light", "heavy"], help="Dream tier to run")
+    dream.add_argument("--wait", action="store_true", help="Wait for the pass to finish and print its result")
+
     migrate = sub.add_parser(
         "migrate-db",
         help="Move the database to the default location and repoint the service",
@@ -943,6 +998,8 @@ def main() -> None:
         _cmd_setup_service(args)
     elif args.command == "restart":
         _cmd_restart()
+    elif args.command == "dream":
+        _cmd_dream(args)
     elif args.command == "migrate-db":
         _cmd_migrate_db(args)
     elif args.command == "audit":

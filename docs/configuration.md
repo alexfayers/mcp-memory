@@ -55,6 +55,8 @@ Dreaming lets the server curate memory while it is idle. It runs a headless `cla
 
 Each tier fires once per idle session. At most one pass runs at a time. The visualiser's dream card has Run light and Run heavy buttons that start a pass on demand, whether or not the tier is enabled.
 
+`mcp-memory dream light|heavy` does the same from the command line by asking the running server to start the pass. It exits non-zero if the server is down or refuses. `--wait` prints the final result and action counts.
+
 | Variable | Description | Default |
 |---|---|---|
 | `MCP_DREAM_ENABLED` | Enable the light tier | off |
