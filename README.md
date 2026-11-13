@@ -24,7 +24,7 @@
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
 | src/mcp\_memory/metrics.py                           |       86 |        2 |     98% |     64-65 |
 | src/mcp\_memory/migrations/\_\_init\_\_.py           |        0 |        0 |    100% |           |
-| src/mcp\_memory/migrations/runner.py                 |       30 |        3 |     90% |     24-26 |
+| src/mcp\_memory/migrations/runner.py                 |       32 |        4 |     88% |     24-27 |
 | src/mcp\_memory/migrations/schema.py                 |       23 |        0 |    100% |           |
 | src/mcp\_memory/models.py                            |       42 |        0 |    100% |           |
 | src/mcp\_memory/path\_resolver.py                    |       22 |        1 |     95% |        15 |
@@ -82,7 +82,7 @@
 | tests/test\_audit.py                                 |      232 |        0 |    100% |           |
 | tests/test\_cli.py                                   |      539 |        2 |     99% |   57, 250 |
 | tests/test\_config.py                                |      173 |        0 |    100% |           |
-| tests/test\_database.py                              |     1850 |        2 |     99% | 589, 1744 |
+| tests/test\_database.py                              |     1860 |        2 |     99% | 609, 1764 |
 | tests/test\_db\_access.py                            |       13 |        0 |    100% |           |
 | tests/test\_dream.py                                 |      484 |        3 |     99% |430-431, 528 |
 | tests/test\_dream\_status.py                         |      201 |        0 |    100% |           |
@@ -101,7 +101,7 @@
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      559 |        0 |    100% |           |
-| **TOTAL**                                            | **13382** |  **453** | **97%** |           |
+| **TOTAL**                                            | **13394** |  **454** | **97%** |           |
 
 
 ## Setup coverage badge
