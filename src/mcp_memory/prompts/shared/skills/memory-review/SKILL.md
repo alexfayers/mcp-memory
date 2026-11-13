@@ -108,7 +108,7 @@ Each pattern entity SHOULD be independently searchable - someone searching for "
 The audit flags the two mechanical relation faults for you: `orphans` (entities with zero relations, from section 1) and `relation_violations` (`task belongs-to project` edges). MUST work those keys, then apply the judgement checks below the audit cannot make:
 - Every non-exempt entity SHOULD have at least one relation (see `orphans`)
 - `task/` entities MUST have `implements` relation(s) to the feature(s) they modify - NOT `belongs-to` project (see `relation_violations`)
-- `feature/` entities MUST have `belongs-to` relation to their parent project or knowledge hub
+- `feature/` entities MUST have a `part-of` relation to their `project/`
 - `pattern/` entities SHOULD be linked to relevant `user-preferences/` or `project/` entities
 - `knowledge/` entities SHOULD be linked to relevant projects or preferences
 - SHOULD use specific relation types (`implements`, `depends-on`) over generic ones (`relates-to`)
@@ -117,10 +117,9 @@ The audit flags the two mechanical relation faults for you: `orphans` (entities 
 ## 6a. Fix star graphs
 
 A common anti-pattern is every task linking directly to the project root, creating a star graph - the audit's `star_graph_tasks` key lists every `task -> project` edge (both the `belongs-to` violations and any other direct link). MUST fix this by:
-- Ensuring feature entities exist for each major area of the project
+- MUST ensure a feature entity exists for each capability (`feature/<project>/<capability>`)
 - Replacing `task belongs-to project` with `task implements feature`
-- Tasks are still reachable from the project via feature traversal (feature belongs-to project)
-- MAY link a task directly to a project only if no relevant feature entity exists yet
+- MUST create a feature when none fits, never link a task directly to a project
 
 ## 7. Check global vs project scope
 

@@ -1565,7 +1565,7 @@ class TestRelations:
                 {"name": "project/proj", "entityType": "project", "observations": ["y"]},
             ],
         )
-        with pytest.raises(ValueError, match="task -> project 'belongs-to' relations"):
+        with pytest.raises(ValueError, match=r"'belongs-to' relations.*implements.*same create_entities call"):
             store.relations.create(
                 "proj",
                 [Relation(source="task/a", target="project/proj", relation_type="belongs-to")],
@@ -1582,7 +1582,7 @@ class TestRelations:
                 {"name": "project/proj", "entityType": "project", "observations": ["y"]},
             ],
         )
-        with pytest.raises(ValueError, match="Direct task -> project relations are forbidden"):
+        with pytest.raises(ValueError, match=r"Direct task -> project relations are forbidden.*implements"):
             store.relations.create(
                 "proj",
                 [Relation(source="task/a", target="project/proj", relation_type="relates-to")],

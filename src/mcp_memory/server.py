@@ -210,9 +210,8 @@ READ_GRAPH_DESC = (
 CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
     "Relations are the core of the graph model. "
-    "Prefer a specific type over relates-to: task implements feature (link a task straight "
-    "to project/ only where no feature exists), task depends-on task, feature belongs-to "
-    "project, pattern used-in project."
+    "Prefer a specific type over relates-to: task implements feature (none fits: create one in the "
+    "task's create_entities call), task depends-on task, feature part-of project, pattern used-in project."
 )
 DELETE_ENTITY_DESC = (
     "Soft-delete an entity with its observations and relations (restorable with restore_entity until a "
@@ -569,11 +568,17 @@ def _validate_and_extract_relations(
 
         if entity_type not in _RELATION_EXEMPT_ENTITY_TYPES:
             if not relations_raw or not isinstance(relations_raw, list):
+                link_hint = {
+                    "task": " Link a task to the feature it implements with 'implements'. If no feature "
+                    "fits, add one named for the capability (feature/<project>/<capability>) to this same call.",
+                    "feature": " Link a feature part-of its project: "
+                    "relations:[{target:'project/<project>',type:'part-of'}].",
+                }.get(str(entity_type), "")
                 raise ValueError(
                     f"Entity type '{entity_type}' requires at least one relation. "
                     f"Only {sorted(_RELATION_EXEMPT_ENTITY_TYPES)} are exempt. "
                     "Pass relations inline in this call; create_relations afterwards cannot "
-                    "fix it because the entity is not created."
+                    f"fix it because the entity is not created.{link_hint}"
                 )
 
         if isinstance(relations_raw, list):
