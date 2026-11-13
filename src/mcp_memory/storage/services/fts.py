@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 _ENTITY_FTS_PROJECTION_SQL = (
     "e.id, e.name, t.name, "
     "COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE "
-    "entity_id = e.id), ''), p.name FROM entities e "
+    "entity_id = e.id AND deleted_at IS NULL), ''), p.name FROM entities e "
     "JOIN entity_types t ON t.id = e.entity_type_id "
     "JOIN projects p ON p.id = e.project_id WHERE e.id = ?"
 )

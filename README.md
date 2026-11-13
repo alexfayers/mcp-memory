@@ -25,10 +25,10 @@ mcp-memory install claude-code    # point an agent at it
 Other commands:
 
 ```bash
-mcp-memory restart                # restart the service
-mcp-memory audit --all-projects   # graph hygiene report
-mcp-memory export <file>          # back up to JSON
-mcp-memory import <file>          # merge projects from an export
+mcp-memory restart                      # restart the service
+mcp-memory utils audit --all-projects   # graph hygiene report
+mcp-memory export <file>                # back up to JSON
+mcp-memory import <file>                # merge projects from an export
 ```
 
 `mcp-memory --help` lists the rest. With no arguments it runs the server in the foreground.

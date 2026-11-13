@@ -26,7 +26,7 @@ from cline_hooks.core.vocabulary import (
 )
 from cline_hooks.plugins.startup_blocks import StartupBlock
 
-from mcp_memory import api_client
+from mcp_memory import api_client, dream_status
 from mcp_memory.config import get_memory_url, get_workspace_markers
 from mcp_memory.hooks.review_tracker import (
     record_write,
@@ -442,6 +442,13 @@ def _is_memory_server_reachable() -> bool:
         return False
 
 
+def _heavy_dream_running() -> bool:
+    """Return True if the reachable memory server reports the heavy dream tier enabled."""
+    status = dream_status.read_status()
+    heavy = status["configs"].get("heavy") if status else None
+    return bool(heavy and heavy["enabled"]) and _is_memory_server_reachable()
+
+
 def _check_block(task_id: str, project_scope: str) -> HookResult | None:
     """Return a block result if the task has exceeded the memory update threshold."""
     if not should_block(task_id):
@@ -718,7 +725,7 @@ class MemoryPlugin(HooksPlugin):
     def _on_user_prompt_submit(self, **kwargs: object) -> HookResult | None:
         """Nudge on a memory-review backlog or on a profanity/shouting frustration signal."""
         notes: list[str] = []
-        if should_nudge():
+        if should_nudge() and not _heavy_dream_running():
             reset_review()
             notes.append(_MEMORY_REVIEW_NUDGE)
         frustration_note = self._frustration_note(str(kwargs.get("message", "")))

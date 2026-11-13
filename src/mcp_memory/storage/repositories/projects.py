@@ -10,13 +10,15 @@ from mcp_memory.storage.services.ids import get_or_create_project_id
 
 if TYPE_CHECKING:
     from mcp_memory.storage.connection import Connection
+    from mcp_memory.storage.repositories.entities import EntityRepository
 
 
 class ProjectRepository:
     """CRUD, path/group membership and cross-scope move operations over projects."""
 
-    def __init__(self, connection: Connection) -> None:
+    def __init__(self, connection: Connection, entities: EntityRepository) -> None:
         self._conn = connection
+        self._entities = entities
 
     def names(self) -> list[str]:
         """Return all project names from the database."""
@@ -140,7 +142,10 @@ class ProjectRepository:
         return [row["name"] for row in rows]
 
     def delete(self, project: str) -> None:
-        """Delete an empty project and its paths. Refuses global or non-empty projects."""
+        """Delete a project with no live entities, hard-removing its soft-deleted ones and its paths.
+
+        Refuses global or non-empty projects.
+        """
         if project == "global":
             raise ValueError("Cannot delete the 'global' project")
         row = self._conn.query_one("SELECT id FROM projects WHERE name = ?", (project,))
@@ -148,7 +153,9 @@ class ProjectRepository:
             raise ValueError(f"Project '{project}' not found")
         project_id = row["id"]
 
-        count_row = self._conn.query_one("SELECT COUNT(*) AS n FROM entities WHERE project_id = ?", (project_id,))
+        count_row = self._conn.query_one(
+            "SELECT COUNT(*) AS n FROM entities WHERE project_id = ? AND deleted_at IS NULL", (project_id,)
+        )
         assert count_row is not None
         entity_count = count_row["n"]
         if entity_count:
@@ -157,7 +164,10 @@ class ProjectRepository:
                 f"{'y' if entity_count == 1 else 'ies'}. Delete them first."
             )
 
+        tombstones = self._conn.query_all("SELECT id, name FROM entities WHERE project_id = ?", (project_id,))
         with self._conn.transaction():
+            for tombstone in tombstones:
+                self._entities.hard_delete_row(tombstone["id"], project, tombstone["name"])
             self._conn.write("DELETE FROM project_paths WHERE project_id = ?", (project_id,))
             self._conn.write("DELETE FROM projects WHERE id = ?", (project_id,))
 

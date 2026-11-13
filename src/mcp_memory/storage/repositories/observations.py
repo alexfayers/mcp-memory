@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mcp_memory.config import get_max_observation_chars
-from mcp_memory.models import validate_vote
+from mcp_memory.models import is_protected_observation, validate_vote
 from mcp_memory.storage.pure.rows import (
     budget_observations,
     build_observation,
@@ -17,6 +17,7 @@ from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     import sqlite3
 
     from mcp_memory.models import Observation
@@ -32,8 +33,8 @@ class ObservationRepository:
     def for_entity(self, entity_id: int) -> list[Observation]:
         """Return an entity's observations best-first (vote_score DESC, then insertion order)."""
         rows = self._conn.query_all(
-            "SELECT content, content_hash, vote_score, created_at FROM observations WHERE entity_id = ? "
-            "ORDER BY vote_score DESC, id",
+            "SELECT content, content_hash, vote_score, created_at FROM observations "
+            "WHERE entity_id = ? AND deleted_at IS NULL ORDER BY vote_score DESC, id",
             (entity_id,),
         )
         return [build_observation(row) for row in rows]
@@ -80,51 +81,95 @@ class ObservationRepository:
         entity_name: str,
         observations: list[str] | None = None,
         hashes: list[str] | None = None,
-    ) -> int:
-        """Delete observations by exact content match and/or by content_hash."""
+    ) -> list[str]:
+        """Soft-delete observations by exact content match and/or by content_hash, returning their hashes."""
         if not observations and not hashes:
             raise ValueError("Provide at least one of 'observations' or 'hashes'")
 
-        project_id = get_or_create_project_id(self._conn, project)
-        entity_id = get_entity_id(self._conn, entity_name, project_id)
+        entity_id = self._require_entity_id(project, entity_name)
+        conditions: list[str] = []
+        params: list[str] = []
+        if observations:
+            conditions.append(f"content IN ({placeholders(len(observations))})")
+            params.extend(observations)
+        if hashes:
+            conditions.append(f"content_hash IN ({placeholders(len(hashes))})")
+            params.extend(hashes)
+
+        with self._conn.transaction():
+            return self._soft_delete(entity_id, f"({' OR '.join(conditions)})", params)
+
+    def restore(
+        self,
+        project: str,
+        entity_name: str,
+        observations: list[str] | None = None,
+        hashes: list[str] | None = None,
+    ) -> list[str]:
+        """Restore soft-deleted observations by content and/or content_hash, returning the restored hashes.
+
+        The newest soft-deleted row per hash comes back, and a hash that already has a live copy is skipped.
+        """
+        wanted = [*(hashes or []), *(hash_observation(obs) for obs in observations or [])]
+        if not wanted:
+            raise ValueError("Provide at least one of 'observations' or 'hashes'")
+
+        entity_id = self._require_entity_id(project, entity_name)
+        with self._conn.transaction():
+            refresh_for_entity(self._conn, entity_id, delete=True)
+            rows = self._conn.write(
+                "UPDATE observations SET deleted_at = NULL WHERE id IN ("
+                "SELECT MAX(id) FROM observations WHERE entity_id = ? AND deleted_at IS NOT NULL "
+                f"AND content_hash IN ({placeholders(len(wanted))}) "
+                "AND content_hash NOT IN (SELECT content_hash FROM observations "
+                "WHERE entity_id = ? AND deleted_at IS NULL) GROUP BY content_hash) "
+                "RETURNING content_hash",
+                [entity_id, *wanted, entity_id],
+            ).fetchall()
+            if rows:
+                self._conn.write("UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (entity_id,))
+            refresh_for_entity(self._conn, entity_id, delete=False)
+
+        return [str(row["content_hash"]) for row in rows]
+
+    def _soft_delete(self, entity_id: int, condition: str, params: Sequence[str]) -> list[str]:
+        """Soft-delete the entity's live observations matching a SQL condition, returning their hashes."""
+        refresh_for_entity(self._conn, entity_id, delete=True)
+        rows = self._conn.write(
+            "UPDATE observations SET deleted_at = CURRENT_TIMESTAMP "
+            f"WHERE entity_id = ? AND deleted_at IS NULL AND {condition} RETURNING content_hash",
+            (entity_id, *params),
+        ).fetchall()
+        if rows:
+            self._conn.write("UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (entity_id,))
+        refresh_for_entity(self._conn, entity_id, delete=False)
+        return [str(row["content_hash"]) for row in rows]
+
+    def _require_entity_id(self, project: str, entity_name: str) -> int:
+        entity_id = get_entity_id(self._conn, entity_name, get_or_create_project_id(self._conn, project))
         if entity_id is None:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+        return entity_id
 
-        count = 0
-        with self._conn.transaction():
-            for obs in observations or []:
-                cursor = self._conn.write(
-                    "DELETE FROM observations WHERE entity_id = ? AND content = ?",
-                    (entity_id, obs),
-                )
-                count += cursor.rowcount
-            for obs_hash in hashes or []:
-                cursor = self._conn.write(
-                    "DELETE FROM observations WHERE entity_id = ? AND content_hash = ?",
-                    (entity_id, obs_hash),
-                )
-                count += cursor.rowcount
+    def trim_to_outcome(
+        self, project: str, entity_name: str, keep_hashes: list[str], *, protect_corrections: bool = False
+    ) -> list[str]:
+        """Soft-delete all observations on an entity except those with a content_hash in keep_hashes.
 
-        return count
-
-    def trim_to_outcome(self, project: str, entity_name: str, keep_hashes: list[str]) -> int:
-        """Delete all observations on an entity except those with a content_hash in keep_hashes."""
+        With protect_corrections, user corrections, decisions and lessons are kept too.
+        Returns the content hashes of the trimmed observations.
+        """
         if not keep_hashes:
             raise ValueError("Provide at least one hash in keep_hashes")
 
-        project_id = get_or_create_project_id(self._conn, project)
-        entity_id = get_entity_id(self._conn, entity_name, project_id)
-        if entity_id is None:
-            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
-
+        entity_id = self._require_entity_id(project, entity_name)
+        if protect_corrections:
+            keep_hashes = [
+                *keep_hashes,
+                *(o.content_hash for o in self.for_entity(entity_id) if is_protected_observation(o.content)),
+            ]
         with self._conn.transaction():
-            cursor = self._conn.write(
-                "DELETE FROM observations WHERE entity_id = ? "
-                f"AND content_hash NOT IN ({placeholders(len(keep_hashes))})",
-                (entity_id, *keep_hashes),
-            )
-
-        return cursor.rowcount
+            return self._soft_delete(entity_id, f"content_hash NOT IN ({placeholders(len(keep_hashes))})", keep_hashes)
 
     def vote(
         self,
@@ -160,25 +205,25 @@ class ObservationRepository:
 
         with self._conn.transaction():
             cursor = self._conn.write(
-                f"UPDATE observations SET vote_score = vote_score + ? WHERE entity_id = ? AND {column} = ?",
+                "UPDATE observations SET vote_score = vote_score + ? "
+                f"WHERE entity_id = ? AND {column} = ? AND deleted_at IS NULL",
                 (vote, entity_id, value),
             )
             if cursor.rowcount == 0:
                 raise ValueError(f"Observation not found in entity '{entity_name}'")
         row = self._conn.query_one(
-            f"SELECT vote_score FROM observations WHERE entity_id = ? AND {column} = ?",
+            f"SELECT vote_score FROM observations WHERE entity_id = ? AND {column} = ? AND deleted_at IS NULL",
             (entity_id, value),
         )
         assert row is not None
         return int(row["vote_score"])
 
-    def merge(self, project: str, entity_name: str, source_hash: str, target_hash: str) -> dict[str, int]:
+    def merge(self, project: str, entity_name: str, source_hash: str, target_hash: str) -> dict[str, int | list[str]]:
         """Fold one observation into another within a single entity, addressed by content_hash.
 
         Additive on the target: the target keeps the higher of the two vote scores and its
-        own timestamp. The source observation is hard-deleted (observations have no
-        soft-delete concept, consistent with delete). Only merges observations within one
-        entity, never across entities.
+        own timestamp, a bump that restoring the source does not undo. The source observation is
+        soft-deleted and restorable. Only merges observations within one entity, never across entities.
         """
         if source_hash == target_hash:
             raise ValueError("Cannot merge an observation into itself")
@@ -192,14 +237,12 @@ class ObservationRepository:
 
         with self._conn.transaction():
             self._conn.write(
-                "UPDATE observations SET vote_score = ? WHERE entity_id = ? AND content_hash = ?",
+                "UPDATE observations SET vote_score = ? "
+                "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
                 (max(int(source["vote_score"]), int(target["vote_score"])), entity_id, target_hash),
             )
-            deleted = self._conn.write(
-                "DELETE FROM observations WHERE entity_id = ? AND content_hash = ?",
-                (entity_id, source_hash),
-            )
-        return {"merged": deleted.rowcount}
+            hashes = self._soft_delete(entity_id, "content_hash = ?", [source_hash])
+        return {"merged": len(hashes), "hashes": hashes}
 
     def edit(
         self, project: str, entity_name: str, content_hash: str, new_text: str, old_text: str | None = None
@@ -247,7 +290,8 @@ class ObservationRepository:
 
     def _find_by_hash(self, entity_id: int, entity_name: str, content_hash: str, label: str) -> sqlite3.Row:
         row = self._conn.query_one(
-            "SELECT id, content, vote_score FROM observations WHERE entity_id = ? AND content_hash = ?",
+            "SELECT id, content, vote_score FROM observations "
+            "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
             (entity_id, content_hash),
         )
         if row is None:
@@ -258,7 +302,7 @@ class ObservationRepository:
         """Return an entity's observations as export dicts, best-first, preserving created_at."""
         rows = self._conn.query_all(
             "SELECT content, content_hash, vote_score, created_at FROM observations "
-            "WHERE entity_id = ? ORDER BY vote_score DESC, id",
+            "WHERE entity_id = ? AND deleted_at IS NULL ORDER BY vote_score DESC, id",
             (entity_id,),
         )
         return [

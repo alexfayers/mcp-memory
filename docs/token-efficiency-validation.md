@@ -37,14 +37,14 @@ code change as the single variable.
 2. Serve the snapshot from a throwaway server (`MCP_MEMORY_DB_PATH=/tmp/mem-snapshot.db MCP_MEMORY_PORT=8765 uv run mcp-memory`), then record baseline metrics with the code change in place:
 
    ```sh
-   MCP_MEMORY_URL=http://localhost:8765/mcp uv run mcp-memory eval --k 5 --min-content-tokens 2
+   MCP_MEMORY_URL=http://localhost:8765/mcp uv run mcp-memory utils eval --k 5 --min-content-tokens 2
    ```
 
 3. Revert the code change, restart the throwaway server on a fresh copy of the snapshot (startup can modify it) and re-run the **same** command:
 
    ```sh
    git stash
-   MCP_MEMORY_URL=http://localhost:8765/mcp uv run mcp-memory eval --k 5 --min-content-tokens 2
+   MCP_MEMORY_URL=http://localhost:8765/mcp uv run mcp-memory utils eval --k 5 --min-content-tokens 2
    ```
 
    The two metric reports MUST be identical - budgeting is orthogonal to ranking.

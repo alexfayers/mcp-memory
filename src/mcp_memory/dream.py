@@ -2,25 +2,32 @@
 
 While the server is idle, the scheduler spawns an ephemeral headless ``claude -p``
 agent that demotes (light tier) or merges and demotes (heavy tier) stale entities
-through the mcp-memory tools. It never deletes anything.
+through the mcp-memory tools. The heavy tier may also soft-delete wrong entities,
+observations and relations, all restorable until a grace-window purge.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import importlib.resources
+from itertools import zip_longest
 import json
 import logging
 import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import tempfile
 import time
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, TypedDict, cast
 
-from . import activity, dream_status
+from . import activity, backup, dream_status
+from .audit import audit_graph, propose_plan
 from .config import (
+    get_backup_enabled,
+    get_db_path,
     get_dream_enabled,
     get_dream_heavy_enabled,
     get_dream_heavy_idle_seconds,
@@ -35,6 +42,8 @@ from .config import (
     get_dream_timeout,
     get_memory_url,
 )
+from .plan_apply import apply_safe_steps, archive_stale
+from .storage import open_readonly, open_writable
 from .storage.operations.maintenance import GC_DOWNVOTE_FLOOR
 from .tool_names import MUTATING_TOOLS
 
@@ -44,6 +53,8 @@ logger = logging.getLogger("mcp-memory")
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    from mcp.server.mcpserver import Context
 
 
 class SpawnResult(TypedDict):
@@ -59,6 +70,10 @@ class SpawnResult(TypedDict):
     duration_ms: int | None
     num_turns: int | None
     cost_usd: float | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_read_tokens: int | None
+    cache_creation_tokens: int | None
 
 
 # --strict-mcp-config isolates MCP servers but not built-ins. Deny the write/exec
@@ -89,16 +104,32 @@ DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
     *_DISALLOWED_BUILTINS,
 )
 
-# The heavy tier may also merge duplicates (entities and observations), so vote,
-# merge_entities, and merge_observations are the memory tools it is NOT denied;
-# every delete_* (and restore_entity) stays denied, so removal is never hard -
-# merge only soft-deletes the folded-away source entity (observation merges hard-delete
-# the source observation, consistent with delete_observations).
-_HEAVY_TIER_ALLOWED = {"vote", "merge_entities", "merge_observations"}
+# The heavy tier is allowed only lossless or reversible tools: vote, merges, rename_entity,
+# create_relations, the soft-deleting delete_* and trim tools, and restores. create_entities and
+# add_observations exist only for splits. Edit, status, project, metadata and move tools stay denied.
+_HEAVY_TIER_ALLOWED = {
+    "vote",
+    "merge_entities",
+    "merge_observations",
+    "rename_entity",
+    "create_relations",
+    "create_entities",
+    "add_observations",
+    "delete_entity",
+    "delete_observations",
+    "delete_relation",
+    "trim_observations_to_outcome",
+    "restore_entity",
+    "restore_observations",
+    "restore_relation",
+}
 HEAVY_DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
     *(f"mcp__memory__{tool}" for tool in MUTATING_TOOLS if tool not in _HEAVY_TIER_ALLOWED),
     *_DISALLOWED_BUILTINS,
 )
+
+# Request header marking calls from a spawned dream agent, so the server can apply dream-only guards.
+DREAM_CALLER_HEADER = "x-mcp-memory-dream"
 
 # Startup wait for the spawned agent's mcp-memory HTTP connection (ms). Without
 # it, claude begins its first turn mid-handshake and the model reports the graph
@@ -147,47 +178,142 @@ DREAM_RITUAL = (
     "line 'nothing demoted' if you found no clear candidates."
 )
 
-HEAVY_DREAM_RITUAL = (
+_HEAVY_DREAM_PREAMBLE = (
     "You are a memory curation agent doing structural grooming of a knowledge graph "
     "while it is idle, with access to the mcp__memory__* tools. "
     "The mcp__memory server may report as 'still connecting' on your very first "
     "turn; ignore that and CALL a memory tool anyway - the connection completes "
     "before the call runs. "
-    "Your ONLY permitted mutations are: merge_entities (to fold a duplicate entity "
-    "into its canonical twin), merge_observations (to fold a duplicate observation "
-    "into another WITHIN THE SAME ENTITY, by content_hash), vote with a vote "
-    "of -1 on an entity (to DEMOTE a stale entity in ranking), and vote with a vote of "
-    "-1 on an observation (to DEMOTE a single stale observation). You must NEVER delete "
-    "anything, NEVER create entities, and NEVER cast a positive vote. "
-    "Search broadly ACROSS ALL PROJECTS (search_all_projects, then search_nodes and "
-    "get_entity_with_relations to confirm). "
-    "When you find two entities in the same project that describe the same thing, "
-    "merge them: merge_entities(project, source, target) where source is the worse "
-    "duplicate to fold away and target is the canonical keeper. Only merge entities "
-    "you are confident are genuine duplicates, and only within a single project - "
-    "never merge across projects. "
-    "Each observation in read output carries a content_hash; use it to address "
-    "observations cheaply. When one entity holds two observations saying the same "
-    "thing, fold the worse into the better with "
-    "merge_observations(project, entity, sourceHash, targetHash). "
-    "Also demote (vote, -1) entities, and demote (vote, -1, by "
-    "content_hash) individual observations, that are clearly stale or superseded but "
-    "not duplicates, skipping any already at or below a score of {gc_floor} (the ranking "
-    "penalty has saturated there). "
-    "Do at most {max_ops} operations (merges plus demotions) this pass - be "
-    "conservative and prefer clear cases over borderline calls. "
-    "When you act, pass each entity's exact project and name slug VERBATIM from the "
-    "tool results. "
+    "Work through the memory-review checklist below. These headless rules OVERRIDE "
+    "the checklist: there are no subagents, no user and no CLI, and the deterministic "
+    "audit below is already done. Skip any step that needs a denied tool and never try "
+    "to work around a denial. "
+    "Your ONLY permitted mutations are the tools not denied to you. Code has already "
+    "applied the safe audit steps (exact-duplicate merges, safe renames, feature relinks, "
+    "stale archives) before this pass, and the audit below was taken after that. "
+    "NEVER cast a positive vote. Delete only content that is outright wrong or misleading "
+    "and that you read live. Prefer merge_entities, merge_observations or a -1 vote to a delete. "
+    "Use rename_entity only for audit rename_entity steps with needs_review false. "
+    "Use merge_observations (same entity, by content_hash) to fold duplicate observations. "
+    "Do not archive or change status. Code archives stale resolved entities. The checklist's "
+    "section 5 'archive or delete resolved tasks' does not apply: never delete a task for being "
+    "old or resolved. Never delete an entity that has live depends-on or implements edges. "
+    "Use trim_observations_to_outcome only on audit trim steps. Their must_keep_hashes are the "
+    "minimum to keep, not a drop list. Read every observation live, and also keep each one that "
+    "holds a distinct fact still true now. Observations recording a user correction, decision "
+    "or lesson (Correction, User corrected, pushed back, User decided, User chose, Lesson) are "
+    "never trimmed: the server keeps them. "
+    "Demote or delete an observation only if its fact is false or stale now. A later observation "
+    "that corrects its framing or scope is not a reason. "
+    "Use create_relations only between entities you have read live. Add 'task implements feature' "
+    "only when one feature clearly covers the task's change. Skip a task that spans several "
+    "features or fits none, and skip star_graph_tasks entries that are not belongs-to. Delete a "
+    "relation only to replace a task's belongs-to project edge with the implements edge you just "
+    "added, or when the edge is outright wrong. "
+    "Use create_entities and add_observations only to split an audit consider_split entity in the "
+    "same project. Copy observation text verbatim, give each new entity a relation, then delete "
+    "the moved observations from the source. Never write new facts. "
+    "Use restore_* only to undo an operation you made in this pass. "
+    "Re-read each target live before acting, and pass each entity's exact project and "
+    "name slug VERBATIM. "
+    "Spread operations across projects. "
+    "Do at most {max_ops} operations this pass. Skip any entity already at or below a "
+    "vote score of {gc_floor}. "
+)
+
+_HEAVY_DREAM_AUDIT_FORMAT = (
     "Finish with a terse audit summary: exactly one line per operation in the form "
     "'[project/entity-name] - action reason' (the affected slug in square brackets, "
     "then a hyphen, then the action and a few words of why, e.g. "
-    "'[proj/task/old] - merged into task/new: duplicate'). For an observation-level "
-    "operation, include the word 'observation' in the reason and the entity's "
-    "content-hash in the slug, e.g. '[proj/task/a#a1b2c3d4] - observation demoted: "
-    "stale' or '[proj/task/a#a1b2c3d4] - merged observation into #deadbeef: "
-    "duplicate'. Emit the single line 'nothing changed' if you found no clear "
-    "candidates."
+    "'[proj/task/old] - merged into task/new: duplicate'). Other actions: "
+    "'renamed to <new>', 'linked <type> -> <target>', 'unlinked <type> -> <target>', "
+    "'deleted: <why>', 'trimmed: <why>', 'created from split of <source>', 'restored: <why>'. For an "
+    "observation-level operation, include the word 'observation' in the reason and the "
+    "entity's content-hash in the slug, e.g. '[proj/task/a#a1b2c3d4] - observation "
+    "demoted: stale' or '[proj/task/a#a1b2c3d4] - merged observation into #deadbeef: "
+    "duplicate' or '[proj/task/a#a1b2c3d4] - observation deleted: wrong'. "
+    "Emit the single line 'nothing changed' if you changed nothing. "
+    "Emit only these lines: no counts, totals, headings or prose. This overrides the checklist's "
+    "final report step."
 )
+
+_HEAVY_DREAM_AUDIT_MAX_BYTES = 200_000
+
+_FRONTMATTER = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
+
+
+def _memory_review_checklist() -> str:
+    """Return the memory-review skill text without its frontmatter."""
+    skill = importlib.resources.files("mcp_memory").joinpath("prompts/shared/skills/memory-review/SKILL.md")
+    return _FRONTMATTER.sub("", skill.read_text(encoding="utf-8"), count=1).strip()
+
+
+def _project_of(item: object) -> object:
+    """Return the project an audit finding or plan step belongs to."""
+    if isinstance(item, dict):
+        arguments = item.get("arguments")
+        return item.get("project") or (arguments.get("project") if isinstance(arguments, dict) else None)
+    return item
+
+
+def _round_robin_by_project[T](items: list[T]) -> list[T]:
+    """Interleave items one per project in turn, keeping each project's own order."""
+    groups: dict[object, list[T]] = {}
+    for item in items:
+        groups.setdefault(_project_of(item), []).append(item)
+    return [item for batch in zip_longest(*groups.values()) for item in batch if item is not None]
+
+
+def _as_review_step(step: dict[str, object]) -> dict[str, object]:
+    """Turn a trim step's keep_hashes into must_keep_hashes and force review, leaving other steps alone."""
+    if step.get("tool") != "trim_observations_to_outcome":
+        return step
+    arguments = {**cast("dict[str, object]", step["arguments"])}
+    arguments["must_keep_hashes"] = arguments.pop("keep_hashes")
+    return {**step, "arguments": arguments, "needs_review": True}
+
+
+def _heavy_dream_audit(max_ops: int) -> str:
+    """Return the compact JSON audit report and proposed plan, each list capped at max_ops across projects."""
+    db = open_readonly(get_db_path())
+    try:
+        report = audit_graph(db, None)
+        steps = propose_plan(db, report)
+    finally:
+        db.connection.close()
+    fair_report = {
+        key: _round_robin_by_project(value) if isinstance(value, list) else value for key, value in report.items()
+    }
+    fair_steps = _round_robin_by_project([_as_review_step(step) for step in steps])
+    while True:
+        capped = {key: value[:max_ops] if isinstance(value, list) else value for key, value in fair_report.items()}
+        audit = json.dumps({"report": capped, "steps": fair_steps[:max_ops]}, separators=(",", ":"))
+        if len(audit.encode()) <= _HEAVY_DREAM_AUDIT_MAX_BYTES or max_ops <= 1:
+            return audit
+        max_ops = max_ops * 3 // 4
+
+
+def _dream_prepass() -> list[str]:
+    """Apply the safe audit steps and archive stale entities in code, returning one audit line per change."""
+    db = open_writable(get_db_path())
+    try:
+        steps = propose_plan(db, audit_graph(db, None))
+        lines = [*apply_safe_steps(db, steps), *archive_stale(db)]
+    finally:
+        db.connection.close()
+    return [line for block in lines for line in block.splitlines()]
+
+
+def _heavy_dream_prompt(max_ops: int, audit: str) -> str:
+    """Assemble the heavy dream prompt: preamble, checklist, audit, audit-line format."""
+    preamble = _HEAVY_DREAM_PREAMBLE.format(max_ops=max_ops, gc_floor=GC_DOWNVOTE_FLOOR)
+    sections = [
+        preamble,
+        _memory_review_checklist(),
+        f"Deterministic audit (JSON):\n{audit}",
+        _HEAVY_DREAM_AUDIT_FORMAT,
+    ]
+    return "\n\n".join(sections)
 
 
 def _claude_bin() -> str | None:
@@ -197,7 +323,13 @@ def _claude_bin() -> str | None:
 
 def build_mcp_config(memory_url: str) -> dict[str, object]:
     """Build the --mcp-config payload pointing the spawned agent at mcp-memory only."""
-    return {"mcpServers": {"memory": {"type": "http", "url": memory_url}}}
+    return {"mcpServers": {"memory": {"type": "http", "url": memory_url, "headers": {DREAM_CALLER_HEADER: "1"}}}}
+
+
+def is_dream_request(ctx: Context | None) -> bool:
+    """Return whether a tool call arrived from a spawned dream agent."""
+    headers = None if ctx is None else ctx.headers
+    return headers is not None and headers.get(DREAM_CALLER_HEADER) == "1"
 
 
 def _build_curation_command(
@@ -221,7 +353,8 @@ def _build_curation_command(
         "--disallowedTools",
         *disallowed,
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
     ]
 
 
@@ -248,13 +381,14 @@ def build_heavy_dream_command(
     model: str,
     mcp_config_path: str,
     max_ops: int,
+    audit: str,
 ) -> list[str]:
-    """Build the headless ``claude -p`` argv for a merge-and-downvote heavy curation spawn."""
+    """Build the headless ``claude -p`` argv for a memory-review heavy curation spawn."""
     return _build_curation_command(
         claude_bin=claude_bin,
         model=model,
         mcp_config_path=mcp_config_path,
-        prompt=HEAVY_DREAM_RITUAL.format(max_ops=max_ops, gc_floor=GC_DOWNVOTE_FLOOR),
+        prompt=_heavy_dream_prompt(max_ops, audit),
         disallowed=HEAVY_DREAM_DISALLOWED_TOOLS,
     )
 
@@ -277,29 +411,27 @@ def build_spawn_env(config_dir: str, *, base_env: dict[str, str] | None = None) 
 
 def _model_token(model_id: str) -> str:
     """Reduce a model id to a stable family token (e.g. claude-haiku-4-5)."""
-    match = re.search(r"claude-[a-z]+-\d+-\d+", model_id.lower())
+    match = re.search(r"claude-[a-z]+-\d+(?:-\d{1,2})?(?!\d)", model_id.lower())
     return match.group(0) if match else model_id.lower()
 
 
 def _model_matches(model_id: str, usage_keys: list[str]) -> bool:
     """Return True if any reported model-usage key is the expected model family."""
     token = _model_token(model_id)
-    return any(token in key.lower() for key in usage_keys)
+    return any(_model_token(key) == token for key in usage_keys)
 
 
 def parse_dream_result(stdout: str, *, expected_model: str) -> SpawnResult:
-    """Extract the distilled result and metrics from a ``claude -p`` JSON payload.
+    """Extract the distilled result and metrics from a ``claude -p`` stream-json transcript.
+
+    The result is the transcript's final ``type: result`` event.
 
     Raises:
-        RuntimeError: if the payload is malformed, reports an error, or the model
+        RuntimeError: if the transcript is malformed, reports an error, or the model
             that actually ran is not the expected one (guards a silent Opus remap).
     """
-    try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("dream agent returned malformed output") from exc
-
-    if not isinstance(payload, dict) or payload.get("is_error"):
+    payload = _final_result_event(stdout)
+    if payload.get("is_error"):
         raise RuntimeError("dream agent reported an error")
 
     result = payload.get("result")
@@ -311,13 +443,40 @@ def parse_dream_result(stdout: str, *, expected_model: str) -> SpawnResult:
     if not _model_matches(expected_model, usage_keys):
         raise RuntimeError("dream ran on an unexpected model")
 
+    raw_totals = payload.get("usage")
+    totals = raw_totals if isinstance(raw_totals, dict) else {}
     return {
         "text": result,
         "ok": True,
         "duration_ms": _as_int(payload.get("duration_ms")),
         "num_turns": _as_int(payload.get("num_turns")),
         "cost_usd": _as_float(payload.get("total_cost_usd")),
+        "input_tokens": _as_int(totals.get("input_tokens")),
+        "output_tokens": _as_int(totals.get("output_tokens")),
+        "cache_read_tokens": _as_int(totals.get("cache_read_input_tokens")),
+        "cache_creation_tokens": _as_int(totals.get("cache_creation_input_tokens")),
     }
+
+
+def _final_result_event(stdout: str) -> dict[str, object]:
+    """Return the last ``type: result`` event of a stream-json transcript."""
+    final: dict[str, object] | None = None
+    for line in stdout.splitlines():
+        event = _parse_event(line)
+        if event is not None and event.get("type") == "result":
+            final = event
+    if final is None:
+        raise RuntimeError("dream agent returned malformed output")
+    return final
+
+
+def _parse_event(line: str) -> dict[str, object] | None:
+    """Parse one stream-json line into an event dict, or None for a blank or non-event line."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return event if isinstance(event, dict) else None
 
 
 def _as_int(value: object) -> int | None:
@@ -330,39 +489,117 @@ def _as_float(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+_LOGGED_OUTPUT_BYTES = 2048
+_STREAM_LINE_LIMIT_BYTES = 16 * 1024 * 1024
+_MEMORY_TOOL_PREFIX = "mcp__memory__"
+_PROGRESS_ARG_CHARS = 40
+_OBSERVATION_TEXT_ARGS = frozenset({"observation", "newText", "oldText"})
+
+
+def _short_args(tool_input: object) -> str:
+    """Render a tool call's arguments as a short line: scalars as-is, collections by size, observation text omitted."""
+    if not isinstance(tool_input, dict):
+        return ""
+    parts = [
+        f"[{len(value)}]" if isinstance(value, (list, dict)) else str(value)[:_PROGRESS_ARG_CHARS]
+        for key, value in tool_input.items()
+        if key not in _OBSERVATION_TEXT_ARGS
+    ]
+    return " ".join(parts)
+
+
+def _record_progress(line: str) -> None:
+    """Record every memory tool call in one stream-json line on the dream status."""
+    event = _parse_event(line)
+    message = event.get("message") if event else None
+    content = message.get("content") if isinstance(message, dict) else None
+    for block in content if isinstance(content, list) else []:
+        name = block.get("name") if isinstance(block, dict) else None
+        if isinstance(name, str) and name.startswith(_MEMORY_TOOL_PREFIX) and block.get("type") == "tool_use":
+            tool = name.removeprefix(_MEMORY_TOOL_PREFIX)
+            dream_status.record_progress(tool, _short_args(block.get("input")), mutating=tool in MUTATING_TOOLS)
+
+
+async def _read_stream(proc: asyncio.subprocess.Process, lines: list[str]) -> tuple[str, bytes]:
+    """Read the agent's stdout line by line into ``lines``, recording progress, and return stdout plus stderr."""
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+    stderr = asyncio.ensure_future(proc.stderr.read())
+    try:
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace")
+            lines.append(line)
+            _record_progress(line)
+        await proc.wait()
+        return "".join(lines), await stderr
+    finally:
+        stderr.cancel()
+
+
 async def _spawn_agent(
     command: list[str],
     *,
     env: dict[str, str] | None = None,
     timeout: float,
+    transcript: list[str] | None = None,
 ) -> str:
-    """Spawn the dream agent and return its stdout, killing it on timeout."""
+    """Spawn the dream agent, recording its memory tool calls as it streams, and return its stdout.
+
+    Kills the agent on timeout. Every stdout line is appended to ``transcript`` as it arrives,
+    so the caller keeps the partial output of a failed run.
+    """
+    lines = transcript if transcript is not None else []
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        limit=_STREAM_LINE_LIMIT_BYTES,
     )
     try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout, stderr = await asyncio.wait_for(_read_stream(proc, lines), timeout=timeout)
     except TimeoutError as exc:
         proc.kill()
         await proc.wait()
         raise RuntimeError("dream timed out") from exc
     if proc.returncode != 0:
+        logger.error(
+            "dream agent exited %s\nstderr: %s\nstdout: %s",
+            proc.returncode,
+            stderr.decode(errors="replace")[-_LOGGED_OUTPUT_BYTES:],
+            stdout[-_LOGGED_OUTPUT_BYTES:],
+        )
         raise RuntimeError("dream agent exited with an error")
-    return stdout.decode()
+    return stdout
 
 
 def _failed_spawn(message: str) -> SpawnResult:
     """Build a failed SpawnResult carrying the handled-failure message in ``text``."""
-    return {"text": message, "ok": False, "duration_ms": None, "num_turns": None, "cost_usd": None}
+    return {
+        "text": message,
+        "ok": False,
+        "duration_ms": None,
+        "num_turns": None,
+        "cost_usd": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cache_read_tokens": None,
+        "cache_creation_tokens": None,
+    }
+
+
+def _remember_metrics(result: SpawnResult) -> str:
+    """Stash the spawn's metrics for the pass being run and return its audit text."""
+    global _pass_metrics  # ruff: ignore[global-statement]
+    _pass_metrics = cast("dream_status.PassMetrics", {key: result[key] for key in dream_status.PASS_METRIC_KEYS})  # type: ignore[literal-required]
+    return result["text"]
 
 
 async def _run_isolated_agent(
     build_command: Callable[[str, str], list[str]],
     *,
+    tier: str,
     model: str,
     timeout: float,
 ) -> SpawnResult:
@@ -372,7 +609,8 @@ async def _run_isolated_agent(
     tempdir holding the mcp-config and an isolated CLAUDE_CONFIG_DIR (no user
     hooks). ``build_command`` receives the resolved claude binary and mcp-config
     path. All failures surface as an ``ok=False`` result whose message is in
-    ``text``; the tempdir is always cleaned up.
+    ``text``; the tempdir is always cleaned up. The prompt and the agent's output,
+    partial on failure, are saved as a ``tier`` transcript when backups are enabled.
     """
     claude_bin = _claude_bin()
     if not claude_bin:
@@ -382,17 +620,31 @@ async def _run_isolated_agent(
     work_path = Path(work_dir)
     config_path = work_path / "mcp-config.json"
     isolated_config_dir = work_path / "config"
+    command: list[str] = []
+    transcript: list[str] = []
     try:
         config_path.write_text(json.dumps(build_mcp_config(get_memory_url())), encoding="utf-8")
         isolated_config_dir.mkdir()
         (isolated_config_dir / "settings.json").write_text(json.dumps(AGENT_SETTINGS), encoding="utf-8")
         command = build_command(claude_bin, str(config_path))
-        stdout = await _spawn_agent(command, env=build_spawn_env(str(isolated_config_dir)), timeout=timeout)
+        stdout = await _spawn_agent(
+            command, env=build_spawn_env(str(isolated_config_dir)), timeout=timeout, transcript=transcript
+        )
         return parse_dream_result(stdout, expected_model=model)
     except RuntimeError as exc:
         return _failed_spawn(str(exc))
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+        if command and get_backup_enabled():
+            await _save_transcript(tier, command, transcript)
+
+
+async def _save_transcript(tier: str, command: list[str], transcript: list[str]) -> None:
+    """Save the spawn's prompt and output beside the backups, logging a failure instead of raising."""
+    try:
+        await asyncio.to_thread(backup.save_transcript, tier, command[command.index("-p") + 1], "".join(transcript))
+    except OSError:
+        logger.exception("dream transcript save failed")
 
 
 async def run_dream_pass() -> str:
@@ -405,26 +657,54 @@ async def run_dream_pass() -> str:
             mcp_config_path=config_path,
             max_votes=get_dream_max_votes(),
         ),
+        tier=_LIGHT_TIER.name,
         model=model,
         timeout=get_dream_timeout(),
     )
-    return result["text"]
+    return _remember_metrics(result)
+
+
+def _with_prepass(text: str, prepass: list[str]) -> str:
+    """Join the code pre-pass audit lines to the agent text: before it on success, after it on failure."""
+    if not prepass:
+        return text
+    lines = [text, *prepass] if text.startswith("dream ") else [*prepass, text]
+    return "\n".join(lines)
 
 
 async def run_heavy_dream_pass() -> str:
-    """Run one merge-and-downvote heavy curation pass in a throwaway agent, returning its audit."""
+    """Run one memory-review heavy curation pass in a throwaway agent, returning its audit."""
     model = get_dream_heavy_model()
-    result = await _run_isolated_agent(
-        lambda claude_bin, config_path: build_heavy_dream_command(
-            claude_bin=claude_bin,
+    max_ops = get_dream_heavy_max_ops()
+    try:
+        if get_backup_enabled():
+            await asyncio.to_thread(backup.backup_database)
+    except (OSError, sqlite3.Error):
+        logger.exception("heavy dream backup failed")
+        return "dream backup failed"
+    try:
+        prepass = await asyncio.to_thread(_dream_prepass)
+    except (OSError, sqlite3.Error):
+        logger.exception("heavy dream prepass failed")
+        return "dream prepass failed"
+    try:
+        audit = _heavy_dream_audit(max_ops)
+        result = await _run_isolated_agent(
+            lambda claude_bin, config_path: build_heavy_dream_command(
+                claude_bin=claude_bin,
+                model=model,
+                mcp_config_path=config_path,
+                max_ops=max_ops,
+                audit=audit,
+            ),
+            tier=_HEAVY_TIER.name,
             model=model,
-            mcp_config_path=config_path,
-            max_ops=get_dream_heavy_max_ops(),
-        ),
-        model=model,
-        timeout=get_dream_heavy_timeout(),
-    )
-    return result["text"]
+            timeout=get_dream_heavy_timeout(),
+        )
+    except Exception as exc:
+        logger.exception("heavy dream failed")
+        return _with_prepass(f"dream failed: {type(exc).__name__}", prepass)
+    return _with_prepass(_remember_metrics(result), prepass)
 
 
 @dataclass(frozen=True)
@@ -499,6 +779,9 @@ def _claim_dream() -> bool:
     return True
 
 
+_pass_metrics: dream_status.PassMetrics = {}
+
+
 async def _run_claimed(spec: TierSpec) -> None:
     """Run one already-claimed pass: record start, run, record outcome, release the slot.
 
@@ -508,16 +791,17 @@ async def _run_claimed(spec: TierSpec) -> None:
     here - the single chokepoint shared by the scheduled and manual paths - is what
     lets the coordinator tell the dream's own marker reset from real user activity.
     """
-    global _dream_running  # ruff: ignore[global-statement]
+    global _dream_running, _pass_metrics  # ruff: ignore[global-statement]
     dream_status.record_pass_start(spec.name)
+    _pass_metrics = {}
     try:
         audit = await spec.run_pass()
     except Exception as exc:
         logger.exception("%s dream pass failed", spec.name)
-        dream_status.record_pass(str(exc), ok=False, tier=spec.name)
+        dream_status.record_pass(str(exc), ok=False, tier=spec.name, metrics=_pass_metrics)
     else:
         logger.info("%s dream: %s", spec.name, audit)
-        dream_status.record_pass(audit, ok=_pass_succeeded(audit), tier=spec.name)
+        dream_status.record_pass(audit, ok=_pass_succeeded(audit), tier=spec.name, metrics=_pass_metrics)
     finally:
         _dream_running = False
         _session.last_pass_end = time.monotonic()

@@ -115,6 +115,7 @@ svg { width: 100vw; height: 100vh; }
 #dream-operations .dm:hover { background: rgba(188,140,255,0.08); }
 #dream-operations .dm .v { color: #d29922; font-weight: 700; flex-shrink: 0; }
 #dream-operations .dm .v.merge { color: #bc8cff; }
+#dream-operations .dm .v.edit { color: #58a6ff; }
 #dream-operations .dm .obs-tag { color: #6e7681; border: 1px solid #30363d; border-radius: 6px; padding: 0 4px; font-size: 10px; flex-shrink: 0; }
 #dream-operations .dm .nm { color: #c9d1d9; word-break: break-all; }
 #dream-operations .dm .why { color: #6e7681; display: block; }
@@ -805,17 +806,30 @@ function renderDream(d) {
     const ops = lp.operations || [];
     if (lp.ok && ops.length) {
       const merges = ops.filter(o => o.action === "merge" || o.action === "obs-merge").length;
-      const demotes = ops.length - merges;
+      const count = a => ops.filter(o => o.action === a).length;
+      const renames = count("rename"), relinks = count("relink"), archives = count("archive");
+      const deletes = count("delete") + count("obs-delete"), unlinks = count("unlink");
+      const trims = count("trim"), creates = count("create"), restores = count("restore");
+      const demotes = ops.length - merges - renames - relinks - archives - deletes - unlinks - trims - creates - restores;
       const parts = [];
       if (merges) parts.push(`${merges} merged`);
       if (demotes) parts.push(`${demotes} demoted`);
+      if (renames) parts.push(`${renames} renamed`);
+      if (relinks) parts.push(`${relinks} linked`);
+      if (archives) parts.push(`${archives} archived`);
+      if (deletes) parts.push(`${deletes} deleted`);
+      if (unlinks) parts.push(`${unlinks} unlinked`);
+      if (trims) parts.push(`${trims} trimmed`);
+      if (creates) parts.push(`${creates} created`);
+      if (restores) parts.push(`${restores} restored`);
       lines.push(`<div class="line">${parts.join(", ")} last pass:</div>`);
       lines.push('<div id="dream-operations">' + ops.map(op => {
         const isMerge = op.action === "merge" || op.action === "obs-merge";
-        const isObs = op.action === "obs-merge" || op.action === "obs-demote";
+        const isObs = ["obs-merge", "obs-demote", "obs-delete"].includes(op.action);
+        const editMark = {rename: "ren", relink: "link", unlink: "unlink", archive: "arc", delete: "del", "obs-delete": "del", trim: "trim", create: "new", restore: "undo"}[op.action];
         const hashAttr = op.hash ? ` data-hash="${op.hash.replace(/"/g, "&quot;")}"` : "";
         return `<div class="dm" data-project="${(op.project || "").replace(/"/g, "&quot;")}" data-name="${(op.name || "").replace(/"/g, "&quot;")}"${hashAttr}>`
-          + `<span class="v${isMerge ? " merge" : ""}">${isMerge ? "⇒" : "-1"}</span>`
+          + `<span class="v${isMerge ? " merge" : editMark ? " edit" : ""}">${isMerge ? "⇒" : editMark || "-1"}</span>`
           + (isObs ? `<span class="obs-tag">obs</span>` : "")
           + `<span class="meta"><span class="nm">${(op.name || "").replace(/</g, "&lt;")}</span>`
           + (op.reason ? `<span class="why">${op.reason.replace(/</g, "&lt;")}</span>` : "")

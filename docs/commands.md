@@ -10,11 +10,11 @@
 | `restart` | Restart the service |
 | `install <target>` | Register the server with an agent |
 | `uninstall copilot [--mcp-config]` | Remove the server from VS Code's `mcp.json` |
-| `audit` | Hygiene report on the graph |
-| `eval` | Search ranking quality |
-| `metrics` | Tool usage report |
+| `utils audit` | Hygiene report on the graph |
+| `utils eval` | Search ranking quality |
+| `utils metrics` | Tool usage report |
 | `export` / `import` | Back up or merge projects |
-| `migrate-db` | Move the database to the default path |
+| `utils migrate-db` | Move the database to the default path |
 
 ## install
 
@@ -46,18 +46,20 @@ Logs go to `mcp-memory.log` next to the database.
 ## audit
 
 ```bash
-mcp-memory audit --project <scope>
-mcp-memory audit --all-projects --propose-plan
+mcp-memory utils audit --project <scope>
+mcp-memory utils audit --all-projects --propose-plan
 ```
 
 Read-only. Prints JSON listing orphans, misused `project` entities, unprefixed names, ghost scopes, oversized entities, `task belongs-to project` relations, star-graph tasks and strongly downvoted entities.
 
-`--propose-plan` prints `{"steps": [...]}` of fix-up tool calls instead. A step with `needs_review: false` is deterministic, like `rename_entity`. Orphan relinking, deletes and `consider_split` advisories (entities mixing several scopes) have `needs_review: true`. A `trim_observations_to_outcome` step is `false` only when every observation it drops is a near-duplicate of one it keeps. The trim is a hard delete.
+`--propose-plan` prints `{"steps": [...]}` of fix-up tool calls instead. A step with `needs_review: false` is deterministic, like `rename_entity`. Orphan relinking, deletes, merging an observation contained in a longer one, and `consider_split` advisories (entities mixing several scopes) have `needs_review: true`. Steps that merge an unprefixed entity into its existing prefixed twin or link an orphan `feature/` to its project root also have `needs_review: false`. A `trim_observations_to_outcome` step is always `true`, since a trim drops facts, restorable with `restore_observations`.
+
+`--apply` (implies `--propose-plan`) runs the `needs_review: false` steps and archives stale resolved entities, then prints `{"applied": [...], "steps": [remaining plan]}`.
 
 ## eval
 
 ```bash
-mcp-memory eval [--k 10] [--since 7d] [--min-content-tokens N]
+mcp-memory utils eval [--k 10] [--since 7d] [--min-content-tokens N]
 ```
 
 Read-only. Scores search ranking from recorded retrieval telemetry: mean precision, recall, nDCG and success at `k`, plus MRR. `--since` takes `30m`, `1h`, `7d`, `2w`, `3mo` or an ISO date. `--min-content-tokens` skips queries with fewer words than `N`.
@@ -65,7 +67,7 @@ Read-only. Scores search ranking from recorded retrieval telemetry: mean precisi
 ## metrics
 
 ```bash
-mcp-memory metrics [--since 7d]
+mcp-memory utils metrics [--since 7d]
 ```
 
 Prints JSON with, per tool, the call count, mean and median input and output bytes, and how often each option value is used. It also totals bytes and gives an input/output ratio (`null` if no output was recorded). Byte sizes are a proxy for token cost, not real token counts.
@@ -83,13 +85,21 @@ Export writes every live project to one JSON file: entities with type, status, t
 
 Import is additive and safe to re-run. New entities are inserted as-is. An existing entity of the same type keeps its status and timestamps, takes the higher vote score and gains any missing observations. A name that clashes with a different entity type is skipped and reported. Paths are not imported. The summary prints the source paths so you can register local ones with `set_metadata`.
 
+## restore
+
+```bash
+mcp-memory restore <backup_file>
+```
+
+Replaces the local database with a backup. Stop the server first. Backups are written to `MCP_MEMORY_BACKUP_DIR` as `<db name>-<UTC timestamp>.db`. The database being replaced is saved to the same directory first.
+
 ## migrate-db
 
 ```bash
-mcp-memory migrate-db [--source <path>]
+mcp-memory utils migrate-db [--source <path>]
 ```
 
-The hook plugin does not inherit `MCP_MEMORY_DB_PATH`, so a service installed with a custom `--db-path` and the plugin read different databases. `migrate-db` stops the service, moves the database to the default path (refusing to overwrite a non-empty target) and repoints the service at it. It finds the current path from the installed service unless you pass `--source`.
+The hook plugin does not inherit `MCP_MEMORY_DB_PATH`, so a service installed with a custom `--db-path` and the plugin read different databases. `utils migrate-db` stops the service, moves the database to the default path (refusing to overwrite a non-empty target) and repoints the service at it. It finds the current path from the installed service unless you pass `--source`.
 
 ## Visualiser
 

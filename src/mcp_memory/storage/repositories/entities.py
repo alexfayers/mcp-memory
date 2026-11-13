@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from mcp_memory.config import get_strict_policy_enabled
-from mcp_memory.models import VALID_STATUSES, validate_vote
+from mcp_memory.models import STRUCTURAL_RELATION_TYPES, VALID_STATUSES, validate_vote
 from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_today_date_prefix
+from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_entity_type_id, get_or_create_project_id
 from mcp_memory.storage.services.integrity import orphaned_neighbors_if_entity_deleted
@@ -100,6 +101,7 @@ class EntityRepository:
             raise ValueError(f"Entity '{new_name}' already exists in global scope")
 
         with self._conn.transaction():
+            self.purge_tombstone(new_name, project, project_id)
             refresh_for_entity(self._conn, entity_id, delete=True)
             if entity_type is None:
                 self._conn.write("UPDATE entities SET name = ? WHERE id = ?", (new_name, entity_id))
@@ -122,13 +124,14 @@ class EntityRepository:
             raise ValueError(f"Entity '{name}' already exists in project '{target_project}'")
 
         with self._conn.transaction():
+            self.purge_tombstone(name, target_project, target_id)
             rows = self._conn.query_all(
                 "SELECT e_src.name AS source, e_tgt.name AS target, rt.name AS relation_type "
                 "FROM relations r "
                 "JOIN entities e_src ON r.source_id = e_src.id "
                 "JOIN entities e_tgt ON r.target_id = e_tgt.id "
                 "JOIN relation_types rt ON r.relation_type_id = rt.id "
-                "WHERE r.source_id = ? OR r.target_id = ?",
+                "WHERE r.deleted_at IS NULL AND (r.source_id = ? OR r.target_id = ?)",
                 (entity_id, entity_id),
             )
             dropped = [build_relation(row) for row in rows]
@@ -172,7 +175,9 @@ class EntityRepository:
 
         with self._conn.transaction():
             self._conn.write("UPDATE entities SET status = ? WHERE id = ?", (status, entity_id))
-        row = self._conn.query_one("SELECT COUNT(*) AS n FROM observations WHERE entity_id = ?", (entity_id,))
+        row = self._conn.query_one(
+            "SELECT COUNT(*) AS n FROM observations WHERE entity_id = ? AND deleted_at IS NULL", (entity_id,)
+        )
         assert row is not None
         return int(row["n"])
 
@@ -200,7 +205,10 @@ class EntityRepository:
         return int(row["vote_score"])
 
     def delete(self, project: str, name: str) -> None:
-        """Delete an entity, cascading outgoing relations but blocking on incoming."""
+        """Soft-delete an entity, hiding its outgoing relations but blocking on live incoming ones.
+
+        Also blocks while the entity has a live outgoing implements or depends-on relation to a live entity.
+        """
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, name, project_id)
         if entity_id is None:
@@ -209,12 +217,14 @@ class EntityRepository:
         incoming = self._conn.query_all(
             "SELECT e.name FROM relations r "
             "JOIN entities e ON r.source_id = e.id "
-            "WHERE r.target_id = ? AND r.source_id != ?",
+            "WHERE r.target_id = ? AND r.source_id != ? AND r.deleted_at IS NULL AND e.deleted_at IS NULL",
             (entity_id, entity_id),
         )
         if incoming:
             sources = [row["name"] for row in incoming]
             raise ValueError(f"Cannot delete '{name}': {len(sources)} incoming relation(s) from: " + ", ".join(sources))
+
+        self._raise_on_structural_edges(entity_id, name)
 
         orphaned = orphaned_neighbors_if_entity_deleted(self._conn, entity_id)
         if orphaned:
@@ -224,7 +234,21 @@ class EntityRepository:
             )
 
         with self._conn.transaction():
-            self.hard_delete_row(entity_id, project, name)
+            self._conn.write("UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?", (entity_id,))
+
+    def _raise_on_structural_edges(self, entity_id: int, name: str) -> None:
+        """Raise when the entity has a live outgoing implements or depends-on relation to a live entity."""
+        edges = self._conn.query_all(
+            "SELECT rt.name AS relation_type, e.name AS target FROM relations r "
+            "JOIN relation_types rt ON r.relation_type_id = rt.id "
+            "JOIN entities e ON r.target_id = e.id "
+            "WHERE r.source_id = ? AND r.target_id != ? AND r.deleted_at IS NULL AND e.deleted_at IS NULL "
+            f"AND rt.name IN ({placeholders(len(STRUCTURAL_RELATION_TYPES))})",
+            (entity_id, entity_id, *STRUCTURAL_RELATION_TYPES),
+        )
+        if edges:
+            listed = ", ".join(f"{row['relation_type']} -> {row['target']}" for row in edges)
+            raise ValueError(f"Cannot delete '{name}': it has live structural relation(s): {listed}")
 
     def hard_delete_row(self, entity_id: int, project: str, name: str) -> None:
         """Hard-delete an entity and its observations, outgoing relations and telemetry.
@@ -286,20 +310,20 @@ class EntityRepository:
                 "INSERT INTO observations "
                 "(entity_id, content, vote_score, created_at, content_hash) "
                 "SELECT ?, content, vote_score, created_at, content_hash FROM observations "
-                "WHERE entity_id = ? AND content NOT IN "
-                "(SELECT content FROM observations WHERE entity_id = ?)",
+                "WHERE entity_id = ? AND deleted_at IS NULL AND content NOT IN "
+                "(SELECT content FROM observations WHERE entity_id = ? AND deleted_at IS NULL)",
                 (target_id, source_id, target_id),
             )
             outgoing = self._conn.write(
-                "INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) "
+                "INSERT INTO relations (source_id, target_id, relation_type_id) "
                 "SELECT ?, target_id, relation_type_id FROM relations "
-                "WHERE source_id = ? AND target_id != ?",
+                "WHERE source_id = ? AND target_id != ? AND deleted_at IS NULL " + REVIVE_RELATION_ON_CONFLICT,
                 (target_id, source_id, target_id),
             )
             incoming = self._conn.write(
-                "INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) "
+                "INSERT INTO relations (source_id, target_id, relation_type_id) "
                 "SELECT source_id, ?, relation_type_id FROM relations "
-                "WHERE target_id = ? AND source_id != ?",
+                "WHERE target_id = ? AND source_id != ? AND deleted_at IS NULL " + REVIVE_RELATION_ON_CONFLICT,
                 (target_id, source_id, target_id),
             )
             self._conn.write(

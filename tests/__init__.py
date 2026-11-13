@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 def _observations(entity: Entity | dict[str, Any]) -> list[Any]:
     """Read observations from an Entity dataclass or the sparse dict a read tool returns."""
     if isinstance(entity, dict):
-        return entity.get("observations", [])
+        return list(entity.get("observations", []))
     return entity.observations
 
 

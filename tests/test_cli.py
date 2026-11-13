@@ -3,23 +3,42 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 import functools
+import io
 import json
 import os
+import socket
+from types import SimpleNamespace
 
 import pytest
 
-from mcp_memory import cli, config, dream
+from mcp_memory import backup, cli, config, dream
+from mcp_memory.storage import open_readonly, open_writable
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
 
 def _eval_since_help() -> str:
-    """Return the rendered help text of `mcp-memory eval --since`."""
+    """Return the rendered help text of `mcp-memory utils eval --since`."""
+    utils = cli._build_parser()._subparsers._group_actions[0].choices["utils"]  # type: ignore[union-attr]
     action = next(
-        a
-        for a in cli._build_parser()._subparsers._group_actions[0].choices["eval"]._actions  # type: ignore[union-attr]
-        if "--since" in a.option_strings
+        a for a in utils._subparsers._group_actions[0].choices["eval"]._actions if "--since" in a.option_strings
     )
     return str(action.help)
+
+
+class TestUtilsGroup:
+    @pytest.mark.parametrize("name", ["migrate-db", "audit", "eval", "metrics"])
+    def test_maintenance_commands_live_under_utils_only(self, name: str) -> None:
+        parser = cli._build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args([name])
+        assert parser.parse_args(["utils", name, *(["--all-projects"] if name == "audit" else [])]).command == "utils"
 
 
 class TestEvalSinceHelp:
@@ -586,6 +605,13 @@ class TestMemorySpec:
         spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
         assert spec.env["PATH"] == "/custom/bin:/usr/bin"
 
+    def test_propagates_backup_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_KEEP_DAILY", "3")
+        spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
+        assert spec.env["MCP_MEMORY_BACKUP_ENABLED"] == "false"
+        assert spec.env["MCP_MEMORY_BACKUP_KEEP_DAILY"] == "3"
+
     def test_propagates_dream_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_DREAM_ENABLED", "false")
         monkeypatch.setenv("MCP_DREAM_IDLE_SECONDS", "60")
@@ -661,6 +687,188 @@ class TestSetupSystemd:
         assert exc_info.value.code == 1
         assert calls == []
         assert str(unit) in capsys.readouterr().err
+
+
+class TestCmdDream:
+    @staticmethod
+    def _fake_urlopen(monkeypatch: pytest.MonkeyPatch, *responses: object) -> list[cli.urllib.request.Request]:
+        """Serve the responses in order (an exception is raised), recording each request."""
+        requests: list[cli.urllib.request.Request] = []
+        queue = list(responses)
+
+        def fake_urlopen(request: cli.urllib.request.Request, timeout: float) -> object:
+            requests.append(request)
+            response = queue.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return io.BytesIO(json.dumps(response).encode())
+
+        monkeypatch.setattr(cli.urllib.request, "urlopen", fake_urlopen)
+        return requests
+
+    @staticmethod
+    def _conflict(reason: str) -> cli.urllib.error.HTTPError:
+        body = io.BytesIO(json.dumps({"started": False, "reason": reason}).encode())
+        return cli.urllib.error.HTTPError("http://x", 409, "Conflict", None, body)  # type: ignore[arg-type]
+
+    def test_posts_the_tier_and_reports_started(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("MCP_MEMORY_PORT", "4321")
+        requests = self._fake_urlopen(monkeypatch, {"started": True})
+
+        cli._cmd_dream(argparse.Namespace(tier="heavy", wait=False))
+
+        assert requests[0].full_url == "http://127.0.0.1:4321/api/dream/trigger"
+        assert requests[0].get_method() == "POST"
+        assert json.loads(requests[0].data) == {"tier": "heavy"}  # type: ignore[arg-type]
+        assert "heavy" in capsys.readouterr().out
+
+    def test_refusal_prints_the_reason_and_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._fake_urlopen(monkeypatch, self._conflict("already running"))
+
+        with pytest.raises(SystemExit) as exit_info:
+            cli._cmd_dream(argparse.Namespace(tier="light", wait=False))
+
+        assert exit_info.value.code == 1
+        assert "already running" in capsys.readouterr().err
+
+    def test_server_down_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._fake_urlopen(monkeypatch, cli.urllib.error.URLError("refused"))
+
+        with pytest.raises(SystemExit) as exit_info:
+            cli._cmd_dream(argparse.Namespace(tier="light", wait=False))
+
+        assert exit_info.value.code == 1
+        assert "not running" in capsys.readouterr().err
+
+    def test_wait_polls_until_the_pass_finishes_then_prints_it(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None))
+        requests = self._fake_urlopen(
+            monkeypatch,
+            {"started": True},
+            {"running": {"tier": "light"}, "last_pass": None},
+            {"running": None, "last_pass": {"tier": "light", "summary": "LAST-PASS-MARK"}},
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="light", wait=True))
+
+        assert [r.full_url.rsplit("/api/", 1)[1] for r in requests] == ["dream/trigger", "dream", "dream"]
+        assert "LAST-PASS-MARK" in capsys.readouterr().out
+
+    def test_wait_prints_a_usage_summary(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None))
+        metrics = {
+            "input_tokens": 123_000,
+            "output_tokens": 4_000,
+            "cache_read_tokens": 98_000,
+            "num_turns": 37,
+            "cost_usd": 1.234,
+            "duration_ms": 361_000,
+        }
+        self._fake_urlopen(
+            monkeypatch, {"started": True}, {"running": None, "last_pass": {"tier": "light", "metrics": metrics}}
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="light", wait=True))
+
+        assert "tokens: 123k in / 4k out / 98k cache read, 37 turns, $1.23, 361s" in capsys.readouterr().out
+
+    def test_wait_prints_a_count_per_action(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None))
+        operations = [{"action": "merge"}, {"action": "merge"}, {"action": "trim"}]
+        self._fake_urlopen(
+            monkeypatch, {"started": True}, {"running": None, "last_pass": {"tier": "heavy", "operations": operations}}
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="heavy", wait=True))
+
+        assert "actions: merge 2, trim 1" in capsys.readouterr().out
+
+    def test_wait_prints_each_new_progress_line_once(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None))
+
+        def progress(*calls: str) -> dict[str, object]:
+            return {"reads": 2, "calls": list(calls)}
+
+        self._fake_urlopen(
+            monkeypatch,
+            {"started": True},
+            {"running": "light", "last_pass": None, "progress": progress("vote p a -1")},
+            {"running": "light", "last_pass": None, "progress": progress("vote p a -1", "rename_entity p b c")},
+            {
+                "running": None,
+                "last_pass": {"tier": "light"},
+                "progress": progress("vote p a -1", "rename_entity p b c", "vote p d -1"),
+            },
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="light", wait=True))
+
+        out = capsys.readouterr().out
+        assert out.count("vote p a -1") == 1
+        assert out.count("rename_entity p b c") == 1
+        assert out.index("vote p d -1") < out.index('"tier": "light"')
+
+
+class TestCmdRestore:
+    @staticmethod
+    def _snapshot(tmp_path: cli.Path) -> cli.Path:
+        source = tmp_path / "source.db"
+        db = open_writable(source)
+        db.entities.create("proj", [{"name": "kept", "entityType": "task", "observations": ["x"]}])
+        db.connection.close()
+        return backup.create_backup(source, tmp_path / "backups", datetime(2026, 1, 2, tzinfo=UTC))
+
+    def test_restores_the_database_from_a_backup(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_PORT", str(_free_port()))
+        snapshot = self._snapshot(tmp_path)
+
+        cli._cmd_restore(argparse.Namespace(backup_file=str(snapshot)))
+
+        restored = open_readonly(config.get_db_path())
+        assert [e.name for e in restored.reads.all_entities("proj")["entities"]] == ["kept"]
+
+    def test_refuses_while_the_server_is_running(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snapshot = self._snapshot(tmp_path)
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            monkeypatch.setenv("MCP_MEMORY_PORT", str(listener.getsockname()[1]))
+            with pytest.raises(SystemExit) as exit_info:
+                cli._cmd_restore(argparse.Namespace(backup_file=str(snapshot)))
+
+        assert exit_info.value.code == 1
+        assert "running" in capsys.readouterr().err
+        assert not config.get_db_path().exists()
+
+    def test_reports_a_missing_backup_file(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_PORT", str(_free_port()))
+        with pytest.raises(SystemExit) as exit_info:
+            cli._cmd_restore(argparse.Namespace(backup_file=str(tmp_path / "missing.db")))
+        assert exit_info.value.code == 1
+
+    def test_reports_a_file_that_is_not_a_database(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_PORT", str(_free_port()))
+        bogus = tmp_path / "bogus.db"
+        bogus.write_text("not a database" * 100)
+        with pytest.raises(SystemExit) as exit_info:
+            cli._cmd_restore(argparse.Namespace(backup_file=str(bogus)))
+        assert exit_info.value.code == 1
 
 
 class TestCmdRestart:

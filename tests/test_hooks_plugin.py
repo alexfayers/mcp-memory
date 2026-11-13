@@ -22,13 +22,14 @@ from cline_hooks.core.vocabulary import BOOKKEEPING_TOOLS, FILE_EDIT_TOOLS, MESS
 from cline_hooks.frontends.claude_code.protocol import ClaudeCodeProtocol
 from cline_hooks.plugins.startup_blocks import RESERVE_CHARS, StartupBlocksPlugin
 
-from mcp_memory import server
+from mcp_memory import dream_status, server
 from mcp_memory.api import _recent_memory, _safe_project
 from mcp_memory.hooks.plugin import (
     _DATE_PREFIX_WARNING,
     _EDIT_TOOL_WEIGHT,
     _FRUSTRATION_NUDGE_TEMPLATE,
     _MEMORY_COOLDOWN_STEPS,
+    _MEMORY_REVIEW_NUDGE,
     ENABLE_FRUSTRATION_CHECK,
     ENABLE_PROFANITY_CHECK,
     MemoryPlugin,
@@ -1640,6 +1641,27 @@ class TestMemoryReviewNudge:
         assert "memory-review" in note
         assert "user" in note.lower()
         mock_reset.assert_called_once_with()
+
+    def _record_heavy_dream(self, *, enabled: bool) -> None:
+        dream_status.clear()
+        dream_status.record_startup(tier="heavy", enabled=enabled, idle_threshold_seconds=1.0, poll_seconds=1.0)
+
+    @pytest.mark.parametrize(
+        ("enabled", "reachable", "expect_nudge"), [(True, True, False), (True, False, True), (False, True, True)]
+    )
+    def test_user_prompt_nudge_follows_server_reported_heavy_dream(
+        self, monkeypatch: pytest.MonkeyPatch, *, enabled: bool, reachable: bool, expect_nudge: bool
+    ) -> None:
+        monkeypatch.delenv("MCP_DREAM_HEAVY_ENABLED", raising=False)
+        self._record_heavy_dream(enabled=enabled)
+        with (
+            patch("mcp_memory.hooks.plugin.should_nudge", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=reachable),
+            patch("mcp_memory.hooks.plugin.reset_review") as mock_reset,
+        ):
+            result = MemoryPlugin().on_hook("UserPromptSubmit", task_id="t1")
+        assert (result is not None and _MEMORY_REVIEW_NUDGE in result.notes) is expect_nudge
+        assert mock_reset.called is expect_nudge
 
     def test_user_prompt_no_nudge_when_not_due(self) -> None:
         with (

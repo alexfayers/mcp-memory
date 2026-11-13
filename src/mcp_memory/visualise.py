@@ -51,6 +51,7 @@ def get_dream_state() -> dict[str, object]:
         "tiers": status["configs"] if status else {},
         "last_pass": status["last_pass"] if status else None,
         "running": status["running"] if status else None,
+        "progress": status["progress"] if status else None,
         "idle_seconds": activity.idle_seconds(),
         "last_activity": activity.last_activity(),
     }
