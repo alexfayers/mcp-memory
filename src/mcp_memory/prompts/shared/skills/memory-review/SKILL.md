@@ -59,7 +59,11 @@ MUST look for:
 
 Project and task entities accumulate session-level detail over time. MUST trim them:
 - **`project/` entities** SHOULD contain only current-state facts (tooling, paths, config, active TODOs) - not commit SHAs, resolved work detail, or session logs
-- **Resolved `task/` entities** SHOULD be 1-3 observations max (outcome summary) - not a play-by-play of the implementation. If a feature entity captures the result, the task can have zero observations. SHOULD use `trim_observations_to_outcome(project, name, keep_hashes)` to trim an oversized resolved entity down to the kept observations in one call rather than individual `delete_observations`.
+- **Resolved `task/` entities** MUST keep only the user's ask, a decision and why, and an outcome line for what git can't show (where it landed, what is unverified, a surprise)
+  - MUST NOT keep an implementation play-by-play
+  - MAY have zero observations if a feature entity captures the result
+  - SHOULD move each open follow-up to its own `planned` `task/`
+  - SHOULD use `trim_observations_to_outcome(project, name, keep_hashes)` to trim an oversized resolved entity in one call rather than individual `delete_observations`
 - **`feature/` entities** SHOULD describe the current state of the feature, not its development history
 - **`user-preferences/` entities** SHOULD contain only preferences NOT already encoded in steering files/skills (which are always loaded). Observations duplicating rule file content are pure waste.
 - SHOULD move reusable learnings to `pattern/` entities in global scope

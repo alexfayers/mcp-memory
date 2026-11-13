@@ -1376,7 +1376,7 @@ def set_entity_status(
         if status == "resolved" and count > _RESOLVED_OBS_CEILING:
             result["bloatWarning"] = (
                 f"Entity has {count} observations; resolved entities should be trimmed to "
-                f"{_RESOLVED_OBS_CEILING} or fewer (outcome summary only). "
+                f"{_RESOLVED_OBS_CEILING} or fewer (the ask, decisions and why, outcomes). "
                 f"Use trim_observations_to_outcome to trim. If the observations cover several "
                 f"genuinely distinct outcomes or scopes, prefer splitting them into separate "
                 f"single-scope entities instead of trimming away real content - and give each "
