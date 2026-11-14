@@ -39,7 +39,7 @@ _OBS_CEILINGS = {
     "pattern": 15,
     "feature": 10,
 }
-# A resolved task holds only an outcome summary (SKILL.md section 3: 0-3 observations).
+# A resolved task holds only the ask, decisions and why, and outcomes (SKILL.md section 3: 0-3 observations).
 _RESOLVED_TASK_CEILING = 3
 
 # Case-sensitive markers of an outcome/decision observation, always kept when trimming.
