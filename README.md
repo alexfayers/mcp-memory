@@ -64,6 +64,7 @@
 | tests/eval/eval\_baseline.py                         |       21 |        0 |    100% |           |
 | tests/eval/eval\_fixture.py                          |      246 |        3 |     99% |575-576, 594 |
 | tests/eval/eval\_harness.py                          |       78 |        0 |    100% |           |
+| tests/eval/link\_reachability.py                     |       56 |        0 |    100% |           |
 | tests/eval/ranking\_replay.py                        |       24 |        0 |    100% |           |
 | tests/eval/regen\_baseline.py                        |       27 |        1 |     96% |        61 |
 | tests/eval/size\_baseline.py                         |       45 |        0 |    100% |           |
@@ -73,6 +74,7 @@
 | tests/eval/test\_eval\_baseline.py                   |       26 |        0 |    100% |           |
 | tests/eval/test\_eval\_fixture.py                    |      172 |        1 |     99% |       150 |
 | tests/eval/test\_eval\_harness.py                    |       95 |        0 |    100% |           |
+| tests/eval/test\_link\_reachability.py               |       16 |        0 |    100% |           |
 | tests/eval/test\_ranking\_eval.py                    |      363 |        0 |    100% |           |
 | tests/eval/test\_ranking\_replay.py                  |       50 |        0 |    100% |           |
 | tests/eval/test\_regen\_baseline.py                  |       52 |        0 |    100% |           |
@@ -103,7 +105,7 @@
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      574 |        0 |    100% |           |
-| **TOTAL**                                            | **14120** |  **446** | **97%** |           |
+| **TOTAL**                                            | **14192** |  **446** | **97%** |           |
 
 
 ## Setup coverage badge
