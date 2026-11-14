@@ -13,21 +13,6 @@ permissions: {}
 
 jobs:
   parity:
-    runs-on: ubuntu-latest
-    env:
-      HEAD_REF: ${{ github.event.pull_request.head.ref }}
-      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-    steps:
-      - name: Compare review instructions with alexfayers/llm-prompts-ci main
-        run: |
-          if [ "$HEAD_REF" = "bot/copilot-review-rules" ]; then
-            echo "Bot PR carries the update, skipping."
-            exit 0
-          fi
-          for name in review python typescript prompts; do
-            path=.github/instructions/$name.instructions.md
-            curl -fsSL "https://raw.githubusercontent.com/alexfayers/llm-prompts-ci/main/$path" -o "canonical-$name.md"
-            curl -fsSL "https://raw.githubusercontent.com/$HEAD_REPO/$HEAD_SHA/$path" -o "mirrored-$name.md"
-            cmp "canonical-$name.md" "mirrored-$name.md"
-          done
+    permissions:
+      contents: read
+    uses: alexfayers/llm-prompts-ci/.github/workflows/review-instructions-parity.yml@main
