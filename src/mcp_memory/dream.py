@@ -61,6 +61,10 @@ class SpawnResult(TypedDict):
     duration_ms: int | None
     num_turns: int | None
     cost_usd: float | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cache_read_tokens: int | None
+    cache_creation_tokens: int | None
 
 
 # --strict-mcp-config isolates MCP servers but not built-ins. Deny the write/exec
@@ -223,7 +227,8 @@ def _build_curation_command(
         "--disallowedTools",
         *disallowed,
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
     ]
 
 
@@ -290,18 +295,16 @@ def _model_matches(model_id: str, usage_keys: list[str]) -> bool:
 
 
 def parse_dream_result(stdout: str, *, expected_model: str) -> SpawnResult:
-    """Extract the distilled result and metrics from a ``claude -p`` JSON payload.
+    """Extract the distilled result and metrics from a ``claude -p`` stream-json transcript.
+
+    The result is the transcript's final ``type: result`` event.
 
     Raises:
-        RuntimeError: if the payload is malformed, reports an error, or the model
+        RuntimeError: if the transcript is malformed, reports an error, or the model
             that actually ran is not the expected one (guards a silent Opus remap).
     """
-    try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("dream agent returned malformed output") from exc
-
-    if not isinstance(payload, dict) or payload.get("is_error"):
+    payload = _final_result_event(stdout)
+    if payload.get("is_error"):
         raise RuntimeError("dream agent reported an error")
 
     result = payload.get("result")
@@ -313,13 +316,40 @@ def parse_dream_result(stdout: str, *, expected_model: str) -> SpawnResult:
     if not _model_matches(expected_model, usage_keys):
         raise RuntimeError("dream ran on an unexpected model")
 
+    raw_totals = payload.get("usage")
+    totals = raw_totals if isinstance(raw_totals, dict) else {}
     return {
         "text": result,
         "ok": True,
         "duration_ms": _as_int(payload.get("duration_ms")),
         "num_turns": _as_int(payload.get("num_turns")),
         "cost_usd": _as_float(payload.get("total_cost_usd")),
+        "input_tokens": _as_int(totals.get("input_tokens")),
+        "output_tokens": _as_int(totals.get("output_tokens")),
+        "cache_read_tokens": _as_int(totals.get("cache_read_input_tokens")),
+        "cache_creation_tokens": _as_int(totals.get("cache_creation_input_tokens")),
     }
+
+
+def _final_result_event(stdout: str) -> dict[str, object]:
+    """Return the last ``type: result`` event of a stream-json transcript."""
+    final: dict[str, object] | None = None
+    for line in stdout.splitlines():
+        event = _parse_event(line)
+        if event is not None and event.get("type") == "result":
+            final = event
+    if final is None:
+        raise RuntimeError("dream agent returned malformed output")
+    return final
+
+
+def _parse_event(line: str) -> dict[str, object] | None:
+    """Parse one stream-json line into an event dict, or None for a blank or non-event line."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return event if isinstance(event, dict) else None
 
 
 def _as_int(value: object) -> int | None:
@@ -332,34 +362,126 @@ def _as_float(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+_LOGGED_OUTPUT_BYTES = 2048
+_STREAM_LINE_LIMIT_BYTES = 16 * 1024 * 1024
+_MEMORY_TOOL_PREFIX = "mcp__memory__"
+_PROGRESS_ARG_CHARS = 40
+_OBSERVATION_TEXT_ARGS = frozenset({"observation", "newText", "oldText"})
+
+
+def _short_args(tool_input: object) -> str:
+    """Render a tool call's arguments as a short line: scalars as-is, collections by size, observation text omitted."""
+    if not isinstance(tool_input, dict):
+        return ""
+    parts = [
+        f"[{len(value)}]" if isinstance(value, (list, dict)) else str(value)[:_PROGRESS_ARG_CHARS]
+        for key, value in tool_input.items()
+        if key not in _OBSERVATION_TEXT_ARGS
+    ]
+    return " ".join(parts)
+
+
+def _record_progress(line: str) -> None:
+    """Record every memory tool call in one stream-json line on the dream status."""
+    event = _parse_event(line)
+    message = event.get("message") if event else None
+    content = message.get("content") if isinstance(message, dict) else None
+    for block in content if isinstance(content, list) else []:
+        name = block.get("name") if isinstance(block, dict) else None
+        if isinstance(name, str) and name.startswith(_MEMORY_TOOL_PREFIX) and block.get("type") == "tool_use":
+            tool = name.removeprefix(_MEMORY_TOOL_PREFIX)
+            dream_status.record_progress(tool, _short_args(block.get("input")), mutating=tool in MUTATING_TOOLS)
+
+
+async def _read_stream(proc: asyncio.subprocess.Process) -> tuple[str, bytes]:
+    """Read the agent's stdout line by line, recording progress, and return stdout plus stderr."""
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+    stderr = asyncio.ensure_future(proc.stderr.read())
+    lines: list[str] = []
+    try:
+        async for raw in proc.stdout:
+            line = raw.decode(errors="replace")
+            lines.append(line)
+            _record_progress(line)
+        await proc.wait()
+        return "".join(lines), await stderr
+    finally:
+        stderr.cancel()
+
+
 async def _spawn_agent(
     command: list[str],
     *,
     env: dict[str, str] | None = None,
     timeout: float,
 ) -> str:
-    """Spawn the dream agent and return its stdout, killing it on timeout."""
+    """Spawn the dream agent, recording its memory tool calls as it streams, and return its stdout.
+
+    Kills the agent on timeout.
+    """
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        limit=_STREAM_LINE_LIMIT_BYTES,
     )
     try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout, stderr = await asyncio.wait_for(_read_stream(proc), timeout=timeout)
     except TimeoutError as exc:
         proc.kill()
         await proc.wait()
         raise RuntimeError("dream timed out") from exc
     if proc.returncode != 0:
+        logger.error(
+            "dream agent exited %s\nstderr: %s\nstdout: %s",
+            proc.returncode,
+            stderr.decode(errors="replace")[-_LOGGED_OUTPUT_BYTES:],
+            stdout[-_LOGGED_OUTPUT_BYTES:],
+        )
         raise RuntimeError("dream agent exited with an error")
-    return stdout.decode()
+    return stdout
 
 
 def _failed_spawn(message: str) -> SpawnResult:
     """Build a failed SpawnResult carrying the handled-failure message in ``text``."""
-    return {"text": message, "ok": False, "duration_ms": None, "num_turns": None, "cost_usd": None}
+    return {
+        "text": message,
+        "ok": False,
+        "duration_ms": None,
+        "num_turns": None,
+        "cost_usd": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cache_read_tokens": None,
+        "cache_creation_tokens": None,
+    }
+
+
+def _remember_metrics(result: SpawnResult) -> str:
+    """Stash the spawn's metrics for the pass being run and return its audit text."""
+    global _pass_metrics  # ruff: ignore[global-statement]
+    _pass_metrics = {
+        "duration_ms": result["duration_ms"],
+        "num_turns": result["num_turns"],
+        "cost_usd": result["cost_usd"],
+        "input_tokens": result["input_tokens"],
+        "output_tokens": result["output_tokens"],
+        "cache_read_tokens": result["cache_read_tokens"],
+        "cache_creation_tokens": result["cache_creation_tokens"],
+    }
+    return result["text"]
+
+
+def _parse_logging_rejection(stdout: str, model: str) -> SpawnResult:
+    """Parse the agent transcript, logging its captured output before re-raising a rejection."""
+    try:
+        return parse_dream_result(stdout, expected_model=model)
+    except RuntimeError:
+        logger.exception("dream agent output rejected\nstdout: %s", stdout[-_LOGGED_OUTPUT_BYTES:])
+        raise
 
 
 async def _run_isolated_agent(
@@ -390,7 +512,7 @@ async def _run_isolated_agent(
         (isolated_config_dir / "settings.json").write_text(json.dumps(AGENT_SETTINGS), encoding="utf-8")
         command = build_command(claude_bin, str(config_path))
         stdout = await _spawn_agent(command, env=build_spawn_env(str(isolated_config_dir)), timeout=timeout)
-        return parse_dream_result(stdout, expected_model=model)
+        return _parse_logging_rejection(stdout, model)
     except RuntimeError as exc:
         return _failed_spawn(str(exc))
     finally:
@@ -410,7 +532,7 @@ async def run_dream_pass() -> str:
         model=model,
         timeout=get_dream_timeout(),
     )
-    return result["text"]
+    return _remember_metrics(result)
 
 
 async def run_heavy_dream_pass() -> str:
@@ -432,7 +554,7 @@ async def run_heavy_dream_pass() -> str:
         model=model,
         timeout=get_dream_heavy_timeout(),
     )
-    return result["text"]
+    return _remember_metrics(result)
 
 
 @dataclass(frozen=True)
@@ -507,6 +629,9 @@ def _claim_dream() -> bool:
     return True
 
 
+_pass_metrics: dream_status.PassMetrics = {}
+
+
 async def _run_claimed(spec: TierSpec) -> None:
     """Run one already-claimed pass: record start, run, record outcome, release the slot.
 
@@ -516,16 +641,17 @@ async def _run_claimed(spec: TierSpec) -> None:
     here - the single chokepoint shared by the scheduled and manual paths - is what
     lets the coordinator tell the dream's own marker reset from real user activity.
     """
-    global _dream_running  # ruff: ignore[global-statement]
+    global _dream_running, _pass_metrics  # ruff: ignore[global-statement]
     dream_status.record_pass_start(spec.name)
+    _pass_metrics = {}
     try:
         audit = await spec.run_pass()
     except Exception as exc:
         logger.exception("%s dream pass failed", spec.name)
-        dream_status.record_pass(str(exc), ok=False, tier=spec.name)
+        dream_status.record_pass(str(exc), ok=False, tier=spec.name, metrics=_pass_metrics)
     else:
         logger.info("%s dream: %s", spec.name, audit)
-        dream_status.record_pass(audit, ok=_pass_succeeded(audit), tier=spec.name)
+        dream_status.record_pass(audit, ok=_pass_succeeded(audit), tier=spec.name, metrics=_pass_metrics)
     finally:
         _dream_running = False
         _session.last_pass_end = time.monotonic()

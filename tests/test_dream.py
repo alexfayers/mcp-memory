@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
@@ -15,6 +16,7 @@ from mcp_memory.storage import open_writable
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from pathlib import Path
 
 _MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -51,7 +53,17 @@ def _dream_payload(
         "modelUsage": {model: {"inputTokens": 100, "outputTokens": 50}},
     }
     if metrics:
-        payload |= {"duration_ms": 15200, "num_turns": 6, "total_cost_usd": 0.09}
+        payload |= {
+            "duration_ms": 15200,
+            "num_turns": 6,
+            "total_cost_usd": 0.09,
+            "usage": {
+                "input_tokens": 120,
+                "output_tokens": 340,
+                "cache_read_input_tokens": 9000,
+                "cache_creation_input_tokens": 800,
+            },
+        }
     return json.dumps(payload)
 
 
@@ -96,7 +108,8 @@ class TestBuildDreamCommand:
         assert "--strict-mcp-config" in command
         assert command[command.index("--model") + 1] == _MODEL
         assert command[command.index("--mcp-config") + 1] == "/tmp/cfg.json"
-        assert command[command.index("--output-format") + 1] == "json"
+        assert command[command.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in command
 
     def test_prompt_is_downvote_only_and_embeds_the_cap(self) -> None:
         command = dream.build_dream_command(claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7)
@@ -185,7 +198,8 @@ class TestBuildHeavyDreamCommand:
         assert "--strict-mcp-config" in command
         assert command[command.index("--model") + 1] == _MODEL
         assert command[command.index("--mcp-config") + 1] == "/tmp/cfg.json"
-        assert command[command.index("--output-format") + 1] == "json"
+        assert command[command.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in command
 
     def test_prompt_covers_merge_and_downvote_and_embeds_the_cap(self) -> None:
         command = dream.build_heavy_dream_command(
@@ -418,7 +432,7 @@ class TestRunGuarded:
         monkeypatch.setattr(
             dream.dream_status,
             "record_pass",
-            lambda audit, *, ok, tier="light": recorded.append((audit, ok, tier)),
+            lambda audit, *, ok, tier="light", **_: recorded.append((audit, ok, tier)),
         )
         spec = _tier_spec("light", _acoro("[p/task/x] - stale"))  # type: ignore[arg-type]
         assert asyncio.run(dream._run_guarded(spec)) is True
@@ -636,6 +650,10 @@ class TestParseDreamResult:
         assert result["duration_ms"] == 15200
         assert result["num_turns"] == 6
         assert result["cost_usd"] == 0.09
+        assert result["input_tokens"] == 120
+        assert result["output_tokens"] == 340
+        assert result["cache_read_tokens"] == 9000
+        assert result["cache_creation_tokens"] == 800
 
     def test_metrics_default_to_none_when_absent(self) -> None:
         stdout = _dream_payload("- finding")
@@ -643,6 +661,7 @@ class TestParseDreamResult:
         assert result["duration_ms"] is None
         assert result["num_turns"] is None
         assert result["cost_usd"] is None
+        assert result["input_tokens"] is None
 
     def test_rejects_unexpected_model(self) -> None:
         stdout = _dream_payload("- finding", model="global.anthropic.claude-opus-4-8-v1:0")
@@ -661,6 +680,87 @@ class TestParseDreamResult:
     def test_rejects_empty_result(self) -> None:
         with pytest.raises(RuntimeError, match="no findings"):
             dream.parse_dream_result(_dream_payload("   "), expected_model=_MODEL)
+
+
+def _assistant_tool_call(name: str, tool_input: dict[str, object]) -> str:
+    block = {"type": "tool_use", "name": name, "input": tool_input}
+    return json.dumps({"type": "assistant", "message": {"content": [block]}})
+
+
+class TestStreamParsing:
+    def test_result_is_taken_from_the_last_line_of_the_stream(self) -> None:
+        stream = "\n".join([
+            json.dumps({"type": "system"}),
+            _assistant_tool_call("mcp__memory__vote", {}),
+            _dream_payload("- done", metrics=True),
+        ])
+        result = dream.parse_dream_result(stream, expected_model=_MODEL)
+        assert result["text"] == "- done"
+        assert result["num_turns"] == 6
+
+    def test_stream_without_a_result_is_malformed(self) -> None:
+        with pytest.raises(RuntimeError, match="malformed"):
+            dream.parse_dream_result(json.dumps({"type": "system"}), expected_model=_MODEL)
+
+
+class TestSpawnProgress:
+    @staticmethod
+    def _spawn(lines: list[str], *, timeout: float = 10) -> str:
+        script = "import sys\nfor line in sys.argv[1:]: print(line, flush=True)"
+        return asyncio.run(dream._spawn_agent([sys.executable, "-c", script, *lines], timeout=timeout))
+
+    def test_mutating_memory_calls_are_recorded_with_short_args(self) -> None:
+        dream_status.clear()
+        dream_status.record_pass_start("heavy")
+        self._spawn([
+            _assistant_tool_call("mcp__memory__merge_entities", {"project": "p", "source": "a", "target": "b"}),
+            _assistant_tool_call("mcp__memory__vote", {"project": "p", "name": "x" * 80, "value": -1}),
+        ])
+        status = dream_status.read_status()
+        assert status is not None
+        calls = status["progress"]["calls"]
+        assert calls[0] == "merge_entities p a b"
+        assert calls[1].startswith("vote p xxx")
+        assert len(calls[1]) < 80
+
+    def test_observation_text_is_never_recorded(self) -> None:
+        dream_status.clear()
+        dream_status.record_pass_start("heavy")
+        self._spawn([
+            _assistant_tool_call(
+                "mcp__memory__vote", {"project": "p", "name": "e", "vote": -1, "observation": "secret observation text"}
+            ),
+            _assistant_tool_call(
+                "mcp__memory__edit_observation",
+                {
+                    "project": "p",
+                    "entityName": "e",
+                    "observationHash": "ab12",
+                    "newText": "secret new",
+                    "oldText": "secret old",
+                },
+            ),
+        ])
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"]["calls"] == ["vote p e -1", "edit_observation p e ab12"]
+
+    def test_reads_are_counted_and_foreign_tools_ignored(self) -> None:
+        dream_status.clear()
+        dream_status.record_pass_start("heavy")
+        self._spawn([
+            _assistant_tool_call("mcp__memory__search_nodes", {"query": "q"}),
+            _assistant_tool_call("Bash", {"command": "ls"}),
+            "not json",
+        ])
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"] == {"reads": 1, "calls": []}
+
+    def test_times_out_a_silent_agent(self) -> None:
+        script = "import time; time.sleep(30)"
+        with pytest.raises(RuntimeError, match="timed out"):
+            asyncio.run(dream._spawn_agent([sys.executable, "-c", script], timeout=0.5))
 
 
 class TestRunDreamPass:
@@ -706,6 +806,42 @@ class TestRunDreamPass:
         monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
         result = asyncio.run(dream.run_dream_pass())
         assert "unexpected model" in result
+
+
+class TestFailedAgentLogging:
+    def test_logs_stderr_but_keeps_result_generic(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        fake_bin = tmp_path / "claude"
+        fake_bin.write_text("#!/bin/sh\necho boom-detail >&2\nexit 1\n")
+        fake_bin.chmod(0o755)
+        monkeypatch.setattr(dream.shutil, "which", lambda _: str(fake_bin))
+        monkeypatch.setattr(dream, "get_dream_model", lambda: _MODEL)
+        with caplog.at_level("ERROR", logger="mcp-memory"):
+            result = asyncio.run(dream.run_dream_pass())
+        assert result == "dream agent exited with an error"
+        assert "boom-detail" in caplog.text
+        assert "exited 1" in caplog.text
+
+    def test_logs_agent_output_when_the_agent_reports_an_error_after_a_clean_exit(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(dream, "get_dream_model", lambda: _MODEL)
+
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+        ) -> str:
+            return _dream_payload("agent-failure-detail", is_error=True)
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        with caplog.at_level("ERROR", logger="mcp-memory"):
+            result = asyncio.run(dream.run_dream_pass())
+        assert result == "dream agent reported an error"
+        assert "agent-failure-detail" in caplog.text
 
 
 class TestRunHeavyDreamPass:
