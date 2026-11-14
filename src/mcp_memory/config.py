@@ -24,6 +24,10 @@ _DEFAULT_SURFACED_RETENTION_DAYS = "-1"
 _DEFAULT_CALL_METRICS_RETENTION_DAYS = "90"
 _DEFAULT_SWEEP_INTERVAL_SECONDS = "43200"
 _DEFAULT_EVAL_CACHE_TTL_SECONDS = "300"
+_DEFAULT_BACKUP_INTERVAL_SECONDS = "21600"
+_DEFAULT_BACKUP_KEEP_DAILY = "7"
+_DEFAULT_BACKUP_KEEP_WEEKLY = "4"
+_DEFAULT_BACKUP_KEEP_MONTHLY = "6"
 _DEFAULT_MAX_OBSERVATION_CHARS = "2000"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -224,6 +228,37 @@ def get_call_metrics_retention_days() -> int:
 def get_sweep_interval_seconds() -> float:
     """Return how often the server's background loop runs the maintenance sweeps."""
     return float(os.environ.get("MCP_MEMORY_SWEEP_INTERVAL_SECONDS", _DEFAULT_SWEEP_INTERVAL_SECONDS))
+
+
+def get_backup_enabled() -> bool:
+    """Return whether the server backs up the database periodically and before each heavy dream pass."""
+    return os.environ.get("MCP_MEMORY_BACKUP_ENABLED", "true").strip().lower() in _TRUTHY
+
+
+def get_backup_dir() -> Path:
+    """Return the directory holding database backups, defaulting to ``backups`` beside the database."""
+    configured = os.environ.get("MCP_MEMORY_BACKUP_DIR")
+    return Path(configured).expanduser() if configured else get_data_dir() / "backups"
+
+
+def get_backup_interval_seconds() -> float:
+    """Return how often the server's background loop backs up the database."""
+    return float(os.environ.get("MCP_MEMORY_BACKUP_INTERVAL_SECONDS", _DEFAULT_BACKUP_INTERVAL_SECONDS))
+
+
+def get_backup_keep_daily() -> int:
+    """Return how many days keep their newest backup once past the last 24 hours."""
+    return int(os.environ.get("MCP_MEMORY_BACKUP_KEEP_DAILY", _DEFAULT_BACKUP_KEEP_DAILY))
+
+
+def get_backup_keep_weekly() -> int:
+    """Return how many ISO weeks keep their newest backup."""
+    return int(os.environ.get("MCP_MEMORY_BACKUP_KEEP_WEEKLY", _DEFAULT_BACKUP_KEEP_WEEKLY))
+
+
+def get_backup_keep_monthly() -> int:
+    """Return how many months keep their newest backup."""
+    return int(os.environ.get("MCP_MEMORY_BACKUP_KEEP_MONTHLY", _DEFAULT_BACKUP_KEEP_MONTHLY))
 
 
 def get_eval_cache_ttl_seconds() -> int:

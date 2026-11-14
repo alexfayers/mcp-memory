@@ -17,10 +17,10 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 from pydantic import WithJsonSchema
 
-from . import dream, metrics, usefulness
+from . import backup, dream, metrics, usefulness
 from .activity import record_tool
 from .api import register_api_routes
-from .config import get_db_path, get_sweep_interval_seconds
+from .config import get_backup_enabled, get_backup_interval_seconds, get_db_path, get_sweep_interval_seconds
 from .dedupe import dedupe_read
 from .models import (
     VALID_RELATION_TYPES,
@@ -1374,15 +1374,26 @@ async def _sweep_loop() -> None:
         await asyncio.sleep(get_sweep_interval_seconds())
 
 
-async def _serve() -> None:
-    """Serve over streamable HTTP, running the maintenance sweep loop and dream coordinator alongside.
+async def _backup_loop() -> None:
+    """Back up the database once on start, then periodically, logging a failed backup without stopping the loop."""
+    while True:
+        try:
+            await asyncio.to_thread(backup.backup_database)
+        except Exception:
+            logger.exception("Database backup failed")
+        await asyncio.sleep(get_backup_interval_seconds())
 
-    The sweep loop and dream coordinator are explicit background tasks rather than an MCPServer ``lifespan``:
+
+async def _serve() -> None:
+    """Serve over streamable HTTP, running the maintenance sweep loop, backup loop and dream coordinator alongside.
+
+    The background loops and dream coordinator are explicit background tasks rather than an MCPServer ``lifespan``:
     this server runs with ``stateless_http=True``, where a lifespan-attached task is
     spawned and cancelled per client session rather than once globally, which is wrong
     for a singleton periodic job. Cancelled cleanly on shutdown.
     """
     sweeper = asyncio.create_task(_sweep_loop())
+    backer = asyncio.create_task(_backup_loop()) if get_backup_enabled() else None
     dreamer = dream.start_coordinator()
     try:
         await mcp.run_streamable_http_async(
@@ -1391,7 +1402,7 @@ async def _serve() -> None:
             json_response=True,
         )
     finally:
-        for task in (sweeper, dreamer):
+        for task in (sweeper, backer, dreamer):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

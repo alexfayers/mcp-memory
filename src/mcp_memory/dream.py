@@ -15,12 +15,14 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import tempfile
 import time
 from typing import TYPE_CHECKING, TypedDict
 
-from . import activity, dream_status
+from . import activity, backup, dream_status
 from .config import (
+    get_backup_enabled,
     get_dream_enabled,
     get_dream_heavy_enabled,
     get_dream_heavy_idle_seconds,
@@ -414,6 +416,12 @@ async def run_dream_pass() -> str:
 async def run_heavy_dream_pass() -> str:
     """Run one merge-and-downvote heavy curation pass in a throwaway agent, returning its audit."""
     model = get_dream_heavy_model()
+    try:
+        if get_backup_enabled():
+            await asyncio.to_thread(backup.backup_database)
+    except (OSError, sqlite3.Error):
+        logger.exception("heavy dream backup failed")
+        return "dream backup failed"
     result = await _run_isolated_agent(
         lambda claude_bin, config_path: build_heavy_dream_command(
             claude_bin=claude_bin,

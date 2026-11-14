@@ -604,6 +604,13 @@ class TestMemorySpec:
         spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
         assert spec.env["PATH"] == str(user_bin)
 
+    def test_propagates_backup_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_KEEP_DAILY", "3")
+        spec = cli._memory_spec("3000", cli.Path("/data/memory.db"))
+        assert spec.env["MCP_MEMORY_BACKUP_ENABLED"] == "false"
+        assert spec.env["MCP_MEMORY_BACKUP_KEEP_DAILY"] == "3"
+
     def test_propagates_dream_env_into_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_DREAM_ENABLED", "false")
         monkeypatch.setenv("MCP_DREAM_IDLE_SECONDS", "60")
