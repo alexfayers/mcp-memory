@@ -273,6 +273,7 @@ function updateZoomExtent() {
   if (d3.zoomTransform(svg.node()).k < zoomMin) svg.call(zoom.scaleTo, zoomMin);
 }
 
+const LINK_DISTANCE = 80, LINK_STRENGTH = 1, GRAVITY = 0.005;
 let simulation = null, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, panelDatum = null, orphans = new Set();
 let mergeSource = null;
 let nodes = [], links = [], relCount = new Map();
@@ -464,9 +465,11 @@ function render(data) {
 
   if (!simulation) {
     simulation = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(links).id(d => d.id).distance(80))
+      .force("link", d3.forceLink(links).id(d => d.id).distance(LINK_DISTANCE).strength(LINK_STRENGTH))
       .force("charge", d3.forceManyBody().strength(-120))
       .force("center", d3.forceCenter(width() / 2, height() / 2))
+      .force("x", d3.forceX(width() / 2).strength(GRAVITY))
+      .force("y", d3.forceY(height() / 2).strength(GRAVITY))
       .force("collision", d3.forceCollide().radius(d => 5 + nodeRadius(d)))
       .on("tick", ticked)
       .on("end", updateZoomExtent);
