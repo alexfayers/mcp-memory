@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Hashable
 from datetime import UTC, datetime, timedelta
+import json
 from pathlib import Path
 import re
 import shutil
@@ -21,6 +22,7 @@ _STAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
 _KEEP_ALL_WINDOW = timedelta(hours=24)
 _MONTHS_PER_YEAR = 12
 _SIDECAR_SUFFIXES = ("-wal", "-shm")
+_TRANSCRIPT_SUFFIX = ".jsonl"
 
 
 def _copy_snapshot(db_path: Path, destination_path: Path) -> None:
@@ -129,6 +131,24 @@ def _preserve_files(db_path: Path, backup_dir: Path, now: datetime) -> Path | No
         for copy in copies:
             copy.unlink(missing_ok=True)
         raise
+    return target
+
+
+def save_transcript(tier: str, prompt: str, stdout: str) -> Path:
+    """Save a dream agent's prompt and output beside the backups, prune old ones of that tier, and return the file."""
+    backup_dir = get_backup_dir()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(UTC)
+    target = backup_dir / f"dream-{tier}-{now.strftime(_STAMP_FORMAT)}{_TRANSCRIPT_SUFFIX}"
+    target.write_text(json.dumps({"type": "dream_prompt", "prompt": prompt}) + "\n" + stdout, encoding="utf-8")
+    prune_backups(
+        backup_dir,
+        backup_dir / f"dream-{tier}{_TRANSCRIPT_SUFFIX}",
+        now,
+        keep_daily=get_backup_keep_daily(),
+        keep_weekly=get_backup_keep_weekly(),
+        keep_monthly=get_backup_keep_monthly(),
+    )
     return target
 
 

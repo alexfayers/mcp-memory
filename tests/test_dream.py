@@ -803,6 +803,50 @@ class TestSpawnProgress:
             asyncio.run(dream._spawn_agent([sys.executable, "-c", script], timeout=0.5))
 
 
+class TestTranscripts:
+    @staticmethod
+    def _run(script: str, *, heavy: bool = True, timeout: float = 10) -> tuple[dream.SpawnResult, dream.PassSpec]:
+        spec = dream.PassSpec(heavy=heavy, limit=5, timeout=timeout)
+        result = asyncio.run(
+            dream._run_isolated_agent(
+                lambda claude_bin, _config, _bare: [claude_bin, "-c", script],
+                claude_bin=sys.executable,
+                model=_MODEL,
+                spec=spec,
+            )
+        )
+        return result, spec
+
+    @staticmethod
+    def _saved(tier: str) -> list[Path]:
+        return sorted((get_db_path().parent / "backups").glob(f"dream-{tier}-*.jsonl"))
+
+    def test_saves_the_prompt_and_stream_of_a_finished_pass(self) -> None:
+        result, spec = self._run(f"print({_dream_payload('- done')!r})", heavy=False)
+
+        assert result["ok"]
+        (saved,) = self._saved("light")
+        first, second = saved.read_text().splitlines()
+        assert json.loads(first) == {"type": "dream_prompt", "prompt": spec.prompt}
+        assert json.loads(second)["type"] == "result"
+
+    def test_keeps_the_partial_stream_when_the_agent_times_out(self) -> None:
+        script = "import time; print('partial line', flush=True); time.sleep(30)"
+
+        result, _ = self._run(script, timeout=1)
+
+        assert not result["ok"]
+        (saved,) = self._saved("heavy")
+        assert saved.read_text().splitlines()[1:] == ["partial line"]
+
+    def test_saves_nothing_when_backups_are_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+
+        self._run("print('x')")
+
+        assert not self._saved("heavy")
+
+
 class TestRunDreamPass:
     def test_returns_audit_summary_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
@@ -815,6 +859,7 @@ class TestRunDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
             captured["command"] = command
             return _dream_payload("- demoted [mcp-memory/task/old]: superseded")
@@ -836,6 +881,7 @@ class TestRunDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
             commands.append(command)
             if "--bare" in command:
@@ -863,6 +909,7 @@ class TestRunDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
             return _dream_payload("- x", model="global.anthropic.claude-opus-4-8-v1:0")
 
@@ -912,6 +959,7 @@ class TestFailedAgentLogging:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
             return _dream_payload("agent-failure-detail", is_error=True)
 
@@ -938,6 +986,7 @@ class TestRunHeavyDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
             captured["command"] = command
             return _dream_payload("[mcp-memory/task/old] - merged into task/new")
@@ -958,6 +1007,7 @@ class TestRunHeavyDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
             assert len(list((get_db_path().parent / "backups").glob("memory-*.db"))) == 1
             return _dream_payload("[p/task/x] - merged")
@@ -999,6 +1049,7 @@ class TestRunHeavyDreamPass:
             *,
             env: dict[str, str] | None = None,
             timeout: float = 0,
+            transcript: list[str] | None = None,
         ) -> str:
             return _dream_payload("[p/task/x] - merged", model="global.anthropic.claude-opus-4-8-v1:0")
 
@@ -1038,9 +1089,18 @@ class TestPiBackend:
         monkeypatch.setattr(dream, "_claude_bin", lambda: "/usr/bin/claude")
         captured: dict[str, object] = {}
 
-        async def fake_spawn(command: list[str], *, env: dict[str, str] | None = None, timeout: float = 0) -> str:
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+            transcript: list[str] | None = None,
+        ) -> str:
             captured["command"], captured["env"] = command, env
-            return "\n".join([_pi_message("working", cost=0.01), _pi_message("[p/e] - demoted", cost=0.02)])
+            lines = [_pi_message("working", cost=0.01), _pi_message("[p/e] - demoted", cost=0.02)]
+            assert transcript is not None
+            transcript.extend(f"{line}\n" for line in lines)
+            return "\n".join(lines)
 
         monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
         assert asyncio.run(dream.run_dream_pass()) == "[p/e] - demoted"
@@ -1053,6 +1113,8 @@ class TestPiBackend:
         assert (metrics["num_turns"], metrics["input_tokens"], metrics["output_tokens"]) == (2, 10, 14)
         assert (metrics["cache_read_tokens"], metrics["cache_creation_tokens"]) == (200, 40)
         assert metrics["cost_usd"] == pytest.approx(0.03)
+        (saved,) = (get_db_path().parent / "backups").glob("dream-light-*.jsonl")
+        assert "working" in saved.read_text()
 
     def test_falls_back_to_claude_when_no_pi_model_resolves(
         self, monkeypatch: pytest.MonkeyPatch, pi_dirs: tuple[Path, Path]
@@ -1061,7 +1123,13 @@ class TestPiBackend:
         monkeypatch.setattr(dream, "_claude_bin", lambda: "/usr/bin/claude")
         commands: list[list[str]] = []
 
-        async def fake_spawn(command: list[str], *, env: dict[str, str] | None = None, timeout: float = 0) -> str:
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+            transcript: list[str] | None = None,
+        ) -> str:
             commands.append(command)
             return _dream_payload("[p/e] - demoted")
 

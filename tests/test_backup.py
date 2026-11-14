@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import json
 from pathlib import Path
+import re
 import sqlite3
 
 import pytest
@@ -129,6 +131,32 @@ class TestBackupDatabase:
         assert created.parent == backup_dir
         assert created.exists()
         assert not stale.exists()
+
+
+class TestSaveTranscript:
+    def test_writes_the_prompt_then_the_agent_output_beside_the_backups(self) -> None:
+        saved = backup.save_transcript("heavy", "the prompt", '{"type":"result"}\n')
+
+        assert saved.parent == get_db_path().parent / "backups"
+        assert re.fullmatch(r"dream-heavy-\d{8}T\d{12}Z\.jsonl", saved.name)
+        first, second = saved.read_text().splitlines()
+        assert json.loads(first) == {"type": "dream_prompt", "prompt": "the prompt"}
+        assert second == '{"type":"result"}'
+
+    def test_prunes_old_transcripts_of_the_same_tier_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        backup_dir = tmp_path / "backups"
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_DIR", str(backup_dir))
+        backup_dir.mkdir()
+        old = datetime.now(UTC) - timedelta(days=800)
+        stale = _touch(backup_dir, old, "dream-heavy", ".jsonl")
+        other_tier = _touch(backup_dir, old, "dream-light", ".jsonl")
+
+        backup.save_transcript("heavy", "p", "")
+
+        assert not stale.exists()
+        assert other_tier.exists()
 
 
 class TestRestoreBackup:
