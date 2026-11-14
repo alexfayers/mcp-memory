@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mcp_memory.config import get_max_observation_chars
-from mcp_memory.models import validate_vote
+from mcp_memory.models import is_protected_observation, validate_vote
 from mcp_memory.storage.pure.rows import (
     budget_observations,
     build_observation,
@@ -152,15 +152,23 @@ class ObservationRepository:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
         return entity_id
 
-    def trim_to_outcome(self, project: str, entity_name: str, keep_hashes: list[str]) -> list[str]:
+    def trim_to_outcome(
+        self, project: str, entity_name: str, keep_hashes: list[str], *, protect_corrections: bool = False
+    ) -> list[str]:
         """Soft-delete all observations on an entity except those with a content_hash in keep_hashes.
 
+        With protect_corrections, user corrections, decisions and lessons are kept too.
         Returns the content hashes of the trimmed observations.
         """
         if not keep_hashes:
             raise ValueError("Provide at least one hash in keep_hashes")
 
         entity_id = self._require_entity_id(project, entity_name)
+        if protect_corrections:
+            keep_hashes = [
+                *keep_hashes,
+                *(o.content_hash for o in self.for_entity(entity_id) if is_protected_observation(o.content)),
+            ]
         with self._conn.transaction():
             return self._soft_delete(entity_id, f"content_hash NOT IN ({placeholders(len(keep_hashes))})", keep_hashes)
 

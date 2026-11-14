@@ -302,7 +302,7 @@ class TestVisualisePage:
         resp = await client.get("/visualise")
         assert "tierLine" in resp.text  # per-tier status line helper
         assert "d.tiers" in resp.text  # renderDream reads the per-tier configs
-        assert 'op.action === "merge"' in resp.text  # merge vs demote glyph branch
+        assert '"merge": { label: "merged"' in resp.text  # merge vs demote glyph branch
 
     @pytest.mark.anyio
     async def test_renders_explicit_off_labels_for_dream(self, client: httpx.AsyncClient) -> None:

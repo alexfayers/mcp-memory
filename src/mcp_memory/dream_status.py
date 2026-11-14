@@ -29,20 +29,36 @@ _OPERATION_RE = re.compile(r"\[([^/\]]+)/([^\]#]+)(?:#([0-9a-f]+))?\]")
 _OBSERVATION_WORD_RE = re.compile(r"\bobservations?\b|\bobs\b")
 
 
-def _classify_action(reason: str) -> str:
-    """Classify an audit reason into demote / merge / obs-demote / obs-merge.
+_PREFIX_ACTIONS = (
+    ("renamed", "rename"),
+    ("linked", "relink"),
+    ("unlinked", "unlink"),
+    ("archived", "archive"),
+    ("trimmed", "trim"),
+    ("created", "create"),
+    ("restored", "restore"),
+)
+_ENTITY_PREFIX_ACTIONS = (("deleted", "delete"), ("merged", "merge"))
+_OBSERVATION_ACTIONS = (("merge", "obs-merge"), ("delet", "obs-delete"))
 
-    Observation-level ops are flagged by an "observation"/"obs" word in the reason;
-    a merge is flagged by a "merge" word (entity merges begin with "merged").
+
+def _classify_action(reason: str) -> str:
+    """Classify an audit reason into one of the Operation actions.
+
+    Rename, relink, unlink, archive, trim, create and restore reasons begin with "renamed",
+    "linked", "unlinked", "archived", "trimmed", "created" and "restored". Observation-level ops
+    are flagged by an "observation"/"obs" word in the reason, checked before the entity-level
+    "deleted" and "merged" prefixes; a merge is flagged by a "merge" word and a delete by a "delet" word.
     """
     lowered = reason.lower()
-    is_observation = bool(_OBSERVATION_WORD_RE.search(lowered))
-    if is_observation and "merge" in lowered:
-        return "obs-merge"
-    if is_observation:
-        return "obs-demote"
-    if lowered.startswith("merged"):
-        return "merge"
+    for prefix, action in _PREFIX_ACTIONS:
+        if lowered.startswith(prefix):
+            return action
+    if _OBSERVATION_WORD_RE.search(lowered):
+        return next((action for word, action in _OBSERVATION_ACTIONS if word in lowered), "obs-demote")
+    for prefix, action in _ENTITY_PREFIX_ACTIONS:
+        if lowered.startswith(prefix):
+            return action
     return "demote"
 
 
@@ -56,7 +72,12 @@ class Operation(TypedDict):
     """One entity or observation the dream reported acting on, parsed from its audit line.
 
     ``action`` is one of ``"demote"`` (entity downvote), ``"merge"`` (entity merge),
-    ``"obs-demote"`` (observation downvote), or ``"obs-merge"`` (observation merge).
+    ``"obs-demote"`` (observation downvote), ``"obs-merge"`` (observation merge),
+    ``"obs-delete"`` (observation soft-deleted), ``"delete"`` (entity soft-deleted),
+    ``"rename"`` (entity rename), ``"relink"`` (relation added), ``"unlink"``
+    (relation soft-deleted), ``"archive"`` (task set to archived), ``"trim"``
+    (observations soft-deleted down to the outcome), ``"create"`` (entity created by a split)
+    or ``"restore"`` (soft-deleted item restored).
     ``hash`` is the observation's content_hash when the line addressed one, absent
     for entity-level ops.
     """
@@ -123,7 +144,9 @@ def parse_operations(audit_text: str) -> list[Operation]:
     does not produce spurious entries. The entity name keeps its type prefix, and an
     optional ``#hash`` suffix on the slug (e.g. ``[project/entity#a1b2c3d4]``) is
     captured as the observation's content_hash. The action is classified into
-    demote / merge / obs-demote / obs-merge (see ``_classify_action``).
+    demote / merge / delete / unlink / obs-demote / obs-merge / obs-delete / rename / relink /
+    archive / trim / create / restore
+    (see ``_classify_action``).
     """
     operations: list[Operation] = []
     for line in audit_text.splitlines():

@@ -56,6 +56,23 @@ class TestParseOperations:
     def test_non_merge_reason_is_a_demote_action(self) -> None:
         assert dream_status.parse_operations("[p/task/old] - superseded")[0]["action"] == "demote"
 
+    @pytest.mark.parametrize(
+        ("line", "action"),
+        [
+            ("[p/task/old] - renamed to task/new", "rename"),
+            ("[p/task/a] - linked implements -> feature/b", "relink"),
+            ("[p/task/a] - unlinked belongs-to -> project/p", "unlink"),
+            ("[p/task/a] - archived: superseded", "archive"),
+            ("[p/task/a] - trimmed: outcome kept", "trim"),
+            ("[p/task/a-2] - created from split of task/a", "create"),
+            ("[p/task/a] - restored: oops", "restore"),
+            ("[p/task/a] - deleted: wrong", "delete"),
+            ("[p/task/a#a1b2c3d4] - observation deleted: wrong", "obs-delete"),
+        ],
+    )
+    def test_structural_actions(self, line: str, action: str) -> None:
+        assert dream_status.parse_operations(line)[0]["action"] == action
+
     def test_merge_classification_is_case_insensitive(self) -> None:
         result = dream_status.parse_operations("[p/task/old] - Merged into task/new")
         assert result[0]["action"] == "merge"

@@ -13,7 +13,7 @@ import os
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import anyio
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 from pydantic import WithJsonSchema
 
@@ -53,8 +53,8 @@ def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> CallToolResult:
         result = fn(*args, **kwargs)
         try:
-            bound = inspect.signature(fn).bind_partial(*args, **kwargs)
-            arguments = dict(bound.arguments)
+            bound = inspect.signature(fn).bind_partial(*args, **kwargs).arguments
+            arguments = {key: value for key, value in bound.items() if not isinstance(value, Context)}
             record_tool(fn.__name__, arguments, result)
             usefulness.observe(_get_db(), fn.__name__, arguments, result)
             metrics.record(_get_db(), fn.__name__, arguments, result)
@@ -1282,11 +1282,18 @@ def edit_observation(
     meta=_ALWAYS_LOAD_META,
 )
 @_track
-def trim_observations_to_outcome(project: str, name: str, keep_hashes: list[str]) -> dict[str, object]:
-    """Soft-delete all observations on an entity except those in keep_hashes."""
+def trim_observations_to_outcome(
+    project: str, name: str, keep_hashes: list[str], ctx: Context | None = None
+) -> dict[str, object]:
+    """Soft-delete all observations on an entity except those in keep_hashes.
+
+    A dream-spawned call also keeps user corrections, decisions and lessons.
+    """
     try:
         db = _get_db()
-        hashes = db.observations.trim_to_outcome(project, name, keep_hashes)
+        hashes = db.observations.trim_to_outcome(
+            project, name, keep_hashes, protect_corrections=dream.is_dream_request(ctx)
+        )
         return {
             "message": f"Trimmed {len(hashes)} observation(s) from '{name}'.",
             "deleted": len(hashes),

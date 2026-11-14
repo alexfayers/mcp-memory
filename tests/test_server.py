@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mcp_memory import server
+from mcp_memory import dream, server
 from mcp_memory.config import get_max_observation_chars
 from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
@@ -766,6 +766,26 @@ class TestTrimObservationsToOutcomeTool:
         assert result["deleted"] == 2
         assert sorted(result["hashes"]) == sorted([hash_observation("b"), hash_observation("c")])
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a"]
+
+    def test_dream_trim_keeps_user_corrections(self, server_db: Storage) -> None:
+        server_db.entities.create(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "User pushed back on b", "c"]}]
+        )
+        dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+        result = tools.trim_observations_to_outcome("proj", "e1", [hash_observation("a")], ctx=dream_ctx)
+        assert result["hashes"] == [hash_observation("c")]
+        assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a", "User pushed back on b"]
+
+    def test_non_dream_trim_may_drop_corrections(self, server_db: Storage) -> None:
+        server_db.entities.create(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a", "User pushed back on b"]}]
+        )
+        tools.trim_observations_to_outcome("proj", "e1", [hash_observation("a")])
+        assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a"]
+
+    def test_context_is_not_part_of_the_trim_schema(self) -> None:
+        tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "trim_observations_to_outcome")
+        assert set(tool.input_schema["properties"]) == {"project", "name", "keep_hashes"}
 
     def test_empty_keep_hashes_returns_error(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])

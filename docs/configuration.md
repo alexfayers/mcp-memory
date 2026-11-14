@@ -57,7 +57,7 @@ def memory_workspace_markers(self) -> frozenset[str]:
 Dreaming lets the server curate memory while it is idle. It runs a headless `pi -p` session when the `pi` CLI is on `PATH` and a pi model resolves, else a headless `claude -p` session, and the session connects back to the server. Both tiers are off by default. Set the variables, then run `mcp-memory setup-service` so the service picks them up.
 
 - Light (`MCP_DREAM_ENABLED`): downvotes stale, superseded or duplicated entities and observations. It never deletes.
-- Heavy (`MCP_DREAM_HEAVY_ENABLED`): does the same, and also merges duplicate entities (reversible soft-delete) and duplicate observations in one entity (restorable with `restore_observations`).
+- Heavy (`MCP_DREAM_HEAVY_ENABLED`): does the same. Each pass first applies the audit's safe steps in code (renames, merges of an unprefixed entity into its prefixed twin, feature relinks, stale archives), then runs the memory-review checklist with reversible tools only (merges, trims, splits, relinks orphans, soft-deletes outright wrong content). It never deletes an entity with live `depends-on` or `implements` edges.
 
 Each tier fires once per idle session. At most one pass runs at a time. The visualiser's dream card has Run light and Run heavy buttons that start a pass on demand, whether or not the tier is enabled.
 
@@ -78,10 +78,10 @@ A running pass records each memory change it makes, and a finished pass records 
 | `MCP_DREAM_HEAVY_POLL_SECONDS` | How often to check whether it is due | `900` |
 | `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id. A bare alias maps to Opus | the light model |
 | `MCP_DREAM_HEAVY_TIMEOUT` | Timeout per pass, seconds | `600` |
-| `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges and demotions per pass | `10` |
+| `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges, demotions, deletes, renames, links and trims per pass | `10` |
 | `MCP_DREAM_PI_MODEL_LIGHT` | Pi model for the light tier, as `provider/id` | see below |
 | `MCP_DREAM_PI_MODEL_HEAVY` | Pi model for the heavy tier, as `provider/id` | see below |
 | `MCP_DREAM_PI_EXTENSIONS` | Comma-separated pi extension paths to load, for a model provider that an extension supplies | none |
 | `MCP_DREAM_AGENT_DIR` | The pi dream agent directory | `$XDG_CONFIG_HOME/mcp-memory/dream-agent` |
 
-The claude model variables above apply to `claude -p` only. Pi runs from its own dream agent directory. The server creates it on first use with an `mcp.json` that holds only the memory server, an empty `settings.json`, and links to your pi `auth.json` and `models.json`. Edit `settings.json` freely, the server never overwrites it. The server keeps `mcp.json` memory-only: it rewrites the file's server list to the memory server, so any other server you add is removed. Your other settings on the memory server, such as `timeout`, stay. Other top-level keys stay. The pi model for a tier is the first of: its `MCP_DREAM_PI_MODEL_*` variable, the `dreamModelLight` or `dreamModelHeavy` key in the dream agent `settings.json`, then your pi default model. When none is set, the pass runs through `claude -p` if the `claude` CLI is on `PATH`, and fails otherwise.
+The claude model variables above apply to `claude -p` only. Pi runs from its own dream agent directory. The server creates it on first use with an `mcp.json` that holds only the memory server, an empty `settings.json`, and links to your pi `auth.json` and `models.json`. Edit `settings.json` freely, the server never overwrites it. The server keeps `mcp.json` memory-only: it rewrites the file's server list to the memory server and sets the `x-mcp-memory-dream` header on it, so any other server you add is removed. Your other settings on the memory server, such as `timeout`, stay. Other top-level keys stay. The pi model for a tier is the first of: its `MCP_DREAM_PI_MODEL_*` variable, the `dreamModelLight` or `dreamModelHeavy` key in the dream agent `settings.json`, then your pi default model. When none is set, the pass runs through `claude -p` if the `claude` CLI is on `PATH`, and fails otherwise.
