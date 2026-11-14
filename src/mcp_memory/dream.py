@@ -127,7 +127,10 @@ AGENT_SETTINGS: dict[str, object] = {"permissions": {"allow": ["mcp__memory__*"]
 # system prompt from the files llm-prompts installs under the Claude config directory.
 _RULE_FILES = ("rules/memory.md", "rules/memory-read.md", "skills/memory-review/SKILL.md")
 _FRONTMATTER = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
-_RULES_PRECEDENCE = "Background memory rules follow. Your task prompt overrides them wherever they conflict."
+_RULES_PRECEDENCE = (
+    "Background memory rules follow. Your task prompt overrides them wherever they conflict. "
+    "You have only the mcp__memory__* tools, no shell and no subagents: skip every step that needs anything else."
+)
 # A ``--bare`` run reads Anthropic credentials only from ANTHROPIC_API_KEY.
 _AUTH_FAILURE = re.compile(r"not logged in|invalid api key", re.IGNORECASE)
 
