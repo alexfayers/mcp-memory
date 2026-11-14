@@ -26,6 +26,9 @@ VALID_RELATION_TYPES = (
     "used-in",
 )
 
+# Relation types whose loss would sever a task from the feature or task it builds on.
+STRUCTURAL_RELATION_TYPES = ("implements", "depends-on")
+
 RELATION_TYPE_ALIASES = {
     "related-to": "relates-to",
     "extends": "implements",

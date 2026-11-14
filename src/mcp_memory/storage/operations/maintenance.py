@@ -13,7 +13,7 @@ from mcp_memory.config import (
     get_purge_grace_days,
     get_surfaced_retention_days,
 )
-from mcp_memory.models import STRUCTURAL_ENTITY_TYPES
+from mcp_memory.models import STRUCTURAL_ENTITY_TYPES, STRUCTURAL_RELATION_TYPES
 from mcp_memory.storage.pure.ranking import ARCHIVE_STALE_DAYS
 from mcp_memory.storage.pure.rows import hash_observation
 from mcp_memory.storage.pure.sql import days_ago, placeholders
@@ -75,7 +75,8 @@ class Maintenance:
         """Soft-delete downvoted orphan entities, returning the number reaped.
 
         Reaps an entity that is all of: live, at or below the downvote floor, not a
-        relation-exempt type, and with no live incoming relation. Removal is a reversible
+        relation-exempt type, with no live incoming relation and no live outgoing structural
+        relation to a live entity. Removal is a reversible
         soft-delete, so the grace-window purge stays the sole path to permanent removal.
         """
         with self._conn.transaction():
@@ -89,8 +90,15 @@ class Maintenance:
                 f"AND NOT EXISTS ("
                 f"SELECT 1 FROM relations r "
                 f"JOIN entities src ON r.source_id = src.id "
-                f"WHERE r.target_id = entities.id AND r.deleted_at IS NULL AND src.deleted_at IS NULL)",
-                (threshold, *STRUCTURAL_ENTITY_TYPES),
+                f"WHERE r.target_id = entities.id AND r.deleted_at IS NULL AND src.deleted_at IS NULL) "
+                f"AND NOT EXISTS ("
+                f"SELECT 1 FROM relations r "
+                f"JOIN relation_types rt ON r.relation_type_id = rt.id "
+                f"JOIN entities dst ON r.target_id = dst.id "
+                f"WHERE r.source_id = entities.id AND r.target_id != entities.id "
+                f"AND r.deleted_at IS NULL AND dst.deleted_at IS NULL "
+                f"AND rt.name IN ({placeholders(len(STRUCTURAL_RELATION_TYPES))}))",
+                (threshold, *STRUCTURAL_ENTITY_TYPES, *STRUCTURAL_RELATION_TYPES),
             )
         return cursor.rowcount
 
