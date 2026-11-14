@@ -225,6 +225,7 @@ def _pi_bin() -> str | None:
 
 _PI_MODEL_SETTING = {False: "dreamModelLight", True: "dreamModelHeavy"}
 _PI_LINKED_FILES = ("auth.json", "models.json")
+_STDIO_KEYS = frozenset({"command", "args", "env", "cwd"})
 
 
 def load_dream_rules(home: Path | None = None) -> str:
@@ -264,10 +265,11 @@ def _read_json_object(path: Path) -> dict[str, object]:
 def _prepare_pi_agent_dir(agent_dir: Path, user_dir: Path, memory_url: str) -> None:
     """Create or repair the persistent pi dream agent directory, keeping the user's edits.
 
-    ``settings.json`` is only created when absent. ``mcp.json`` always gets the memory server's
-    ``http`` type, ``url`` and ``direct`` exposure without a stdio command, and its other keys and
-    servers are kept. ``auth.json`` and ``models.json`` link to the user's pi directory when that
-    holds them, unless the agent directory has its own file.
+    ``settings.json`` is only created when absent. ``mcp.json`` always lists only the memory
+    server, as ``http`` with its ``url`` and ``direct`` exposure (its other settings, minus any stdio command,
+    are kept), and its other top-level keys are kept.
+    ``auth.json`` and ``models.json`` link to the user's pi directory when that holds them, unless
+    the agent directory has its own file.
     """
     agent_dir.mkdir(parents=True, exist_ok=True)
     if not (agent_dir / "settings.json").exists():
@@ -275,13 +277,11 @@ def _prepare_pi_agent_dir(agent_dir: Path, user_dir: Path, memory_url: str) -> N
     mcp_path = agent_dir / "mcp.json"
     config = _read_json_object(mcp_path)
     servers = config.get("mcpServers")
-    servers = servers if isinstance(servers, dict) else {}
-    current = servers.get("memory")
-    current = current if isinstance(current, dict) else {}
-    kept = {key: value for key, value in current.items() if key not in {"command", "args"}}
+    current = servers.get("memory") if isinstance(servers, dict) else None
+    kept = {k: v for k, v in current.items() if k not in _STDIO_KEYS} if isinstance(current, dict) else {}
     wanted = {**kept, "type": "http", "url": memory_url, "exposure": "direct"}
-    if current != wanted:
-        write_json_atomic(mcp_path, {**config, "mcpServers": {**servers, "memory": wanted}})
+    if config.get("mcpServers") != {"memory": wanted}:
+        write_json_atomic(mcp_path, {**config, "mcpServers": {"memory": wanted}})
     for name in _PI_LINKED_FILES:
         link, target = agent_dir / name, user_dir / name
         if target.exists() and (link.is_symlink() or not link.exists()) and link.resolve() != target.resolve():
@@ -523,11 +523,22 @@ def _message_text(message: dict[str, object]) -> str:
     )
 
 
-def _sum_usage(messages: list[dict[str, object]], *path: str) -> float | None:
-    """Sum a numeric usage field over the messages, or None if none reports it."""
+def _compaction_usages(stdout: str) -> list[object]:
+    """Return the usage of every completed compaction in a ``pi --mode json`` transcript."""
+    usages: list[object] = []
+    for line in stdout.splitlines():
+        event = _parse_event(line)
+        result = event.get("result") if event and event.get("type") == "compaction_end" else None
+        if isinstance(result, dict):
+            usages.append(result.get("usage"))
+    return usages
+
+
+def _sum_usage(usages: list[object], *path: str) -> float | None:
+    """Sum a numeric usage field over the usage records, or None if none reports it."""
     values: list[float] = []
-    for message in messages:
-        node: object = message.get("usage")
+    for usage in usages:
+        node = usage
         for key in path:
             node = node.get(key) if isinstance(node, dict) else None
         if (value := _as_float(node)) is not None:
@@ -538,31 +549,32 @@ def _sum_usage(messages: list[dict[str, object]], *path: str) -> float | None:
 def parse_pi_result(stdout: str, *, duration_ms: int) -> SpawnResult:
     """Extract the distilled result and summed metrics from a ``pi --mode json`` transcript.
 
-    The result is the last assistant message. Pi reports usage per message, so the metrics
-    are summed over the assistant messages and ``duration_ms`` is the caller's wall clock.
+    The result is the last assistant message. Pi reports usage per message and per completed
+    compaction, so the metrics are summed over both and ``duration_ms`` is the caller's wall clock.
 
     Raises:
-        RuntimeError: if the transcript has no assistant message, or the last one ended in an error
-            or abort (an earlier error that pi retried past is not a failure) or carries no text.
+        RuntimeError: if the transcript has no assistant message, or the last one ended in an error,
+            an abort or a truncation (an earlier error that pi retried past is not a failure) or carries no text.
     """
     messages = _assistant_messages(stdout)
     if not messages:
         raise RuntimeError("dream agent returned malformed output")
-    if messages[-1].get("stopReason") in {"error", "aborted"}:
+    if messages[-1].get("stopReason") in {"error", "aborted", "length"}:
         raise RuntimeError("dream agent reported an error")
     text = _message_text(messages[-1])
     if not text.strip():
         raise RuntimeError("dream agent returned no findings")
+    usages = [message.get("usage") for message in messages] + _compaction_usages(stdout)
     return {
         "text": text,
         "ok": True,
         "duration_ms": duration_ms,
         "num_turns": len(messages),
-        "cost_usd": _sum_usage(messages, "cost", "total"),
-        "input_tokens": _as_int(_sum_usage(messages, "input")),
-        "output_tokens": _as_int(_sum_usage(messages, "output")),
-        "cache_read_tokens": _as_int(_sum_usage(messages, "cacheRead")),
-        "cache_creation_tokens": _as_int(_sum_usage(messages, "cacheWrite")),
+        "cost_usd": _sum_usage(usages, "cost", "total"),
+        "input_tokens": _as_int(_sum_usage(usages, "input")),
+        "output_tokens": _as_int(_sum_usage(usages, "output")),
+        "cache_read_tokens": _as_int(_sum_usage(usages, "cacheRead")),
+        "cache_creation_tokens": _as_int(_sum_usage(usages, "cacheWrite")),
     }
 
 

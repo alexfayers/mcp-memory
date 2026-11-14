@@ -1097,18 +1097,29 @@ class TestPiBackend:
         assert (agent_dir / "auth.json").resolve() == (moved / "auth.json").resolve()
         (agent_dir / "settings.json").write_text('{"dreamModelHeavy": "mine"}')
         (agent_dir / "mcp.json").write_text(
-            '{"mcpServers": {"memory": {"type": "stdio", "command": "x", "url": "http://old/mcp", "timeout": 5}}}'
+            '{"mcpServers": {"memory": {"type": "stdio", "command": "x", "timeout": 5}, "other": {"command": "y"}}}'
         )
         dream._prepare_pi_agent_dir(agent_dir, user_dir, "http://h/mcp")
         assert json.loads((agent_dir / "settings.json").read_text()) == {"dreamModelHeavy": "mine"}
-        memory = json.loads((agent_dir / "mcp.json").read_text())["mcpServers"]["memory"]
-        assert (memory["url"], memory["timeout"], memory["type"]) == ("http://h/mcp", 5, "http")
-        assert "command" not in memory
+        servers = json.loads((agent_dir / "mcp.json").read_text())["mcpServers"]
+        assert servers == {"memory": {"type": "http", "url": "http://h/mcp", "exposure": "direct", "timeout": 5}}
 
     def test_error_stop_reason_fails_the_pass(self) -> None:
         stdout = "\n".join([_pi_message("x"), _pi_message("", stop_reason="error")])
         with pytest.raises(RuntimeError, match="reported an error"):
             dream.parse_pi_result(stdout, duration_ms=1)
+
+    def test_a_truncated_last_message_fails_the_pass(self) -> None:
+        with pytest.raises(RuntimeError, match="reported an error"):
+            dream.parse_pi_result(_pi_message("cut off", stop_reason="length"), duration_ms=1)
+
+    def test_completed_compaction_usage_is_added_to_the_totals(self) -> None:
+        compaction = {"type": "compaction_end", "result": {"usage": {"input": 1, "cost": {"total": 0.5}}}}
+        aborted = {"type": "compaction_end", "aborted": True}
+        stdout = "\n".join([_pi_message("ok", cost=0.25), json.dumps(compaction), json.dumps(aborted)])
+        result = dream.parse_pi_result(stdout, duration_ms=1)
+        assert (result["num_turns"], result["input_tokens"]) == (1, 6)
+        assert result["cost_usd"] == pytest.approx(0.75)
 
     def test_an_error_that_pi_retried_past_is_not_a_failure(self) -> None:
         stdout = "\n".join([_pi_message("", stop_reason="error"), _pi_message("[p/e] - demoted")])
