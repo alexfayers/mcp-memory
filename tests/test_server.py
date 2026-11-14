@@ -111,6 +111,15 @@ class TestValidateEntityTypes:
                 ],
             )
 
+    @pytest.mark.parametrize(
+        ("entity_type", "hint"),
+        [("task", r"'implements'.*create_entities call"), ("feature", r"part-of.*project/<project>")],
+    )
+    def test_relation_error_says_what_to_link_to(self, entity_type: str, hint: str) -> None:
+        entity = {"name": f"{entity_type}/x", "entityType": entity_type, "observations": []}
+        with pytest.raises(ValueError, match=hint):
+            _validate_and_extract_relations("proj", [entity])
+
     def test_pattern_requires_relation(self) -> None:
         with pytest.raises(ValueError, match=r"requires at least one relation.*inline"):
             _validate_and_extract_relations(
@@ -315,6 +324,45 @@ class TestRelationTypeWarnings:
         server_db.relations.create("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
         result = tools.get_entity_with_relations("proj", "a")
         assert "relationTypeWarnings" not in result
+
+
+class TestLinkNote:
+    def test_create_entities_notes_a_task_without_a_feature_and_a_feature_without_a_project(
+        self, server_db: Storage
+    ) -> None:
+        root = {"target": "project/proj", "type": "relates-to"}
+        result = tools.create_entities(
+            "proj",
+            [
+                {"name": "task/a", "entityType": "task", "observations": ["x"], "relations": [root]},
+                {"name": "feature/proj/b", "entityType": "feature", "observations": ["x"], "relations": [root]},
+            ],
+        )
+        hint = result["linkHint"]
+        positions = [hint.index(part) for part in ("task/a: ", "'implements'", "feature/proj/b: ", "part-of")]
+        assert positions == sorted(positions)
+
+    def test_create_relations_notes_a_task_until_it_implements_a_feature(self, server_db: Storage) -> None:
+        server_db.entities.create(
+            "proj",
+            [
+                {"name": "task/a", "entityType": "task", "observations": ["x"]},
+                {"name": "feature/proj/b", "entityType": "feature", "observations": ["x"]},
+            ],
+        )
+        relates = {"source": "task/a", "target": "feature/proj/b", "type": "relates-to"}
+        assert "task/a" in tools.create_relations("proj", [relates])["linkHint"]
+        implements = {**relates, "type": "implements"}
+        assert "linkHint" not in tools.create_relations("proj", [implements])
+
+
+class TestCreateRelationsDescription:
+    def test_links_a_feature_part_of_its_project_and_a_task_implements_its_feature(self) -> None:
+        tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "create_relations")
+        description = tool.description or ""
+        assert "task implements feature" in description
+        assert "feature part-of project" in description
+        assert "belongs-to" not in description
 
 
 class TestGetEntityWithRelationsFilters:

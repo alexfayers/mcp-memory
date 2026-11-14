@@ -160,6 +160,22 @@ VALID_ENTITY_TYPES = frozenset({
     "knowledge",
 })
 _RELATION_EXEMPT_ENTITY_TYPES = frozenset({"project"})
+_LINK_RULES = {
+    "task": (
+        "implements",
+        "feature/",
+        (
+            "Link a task to the feature it implements with 'implements'. If no feature fits, create one named "
+            "for the capability (feature/<project>/<capability>), "
+            "in the task's create_entities call when the task is new."
+        ),
+    ),
+    "feature": (
+        "part-of",
+        "project/",
+        ("Link a feature part-of its project: relations:[{target:'project/<project>',type:'part-of'}]."),
+    ),
+}
 
 # Mirrors audit._RESOLVED_TASK_CEILING and the memory-review SKILL.md resolved-task
 # size target (1-3 obs).
@@ -223,9 +239,8 @@ READ_GRAPH_DESC = (
 CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
     "Relations are the core of the graph model. "
-    "Prefer a specific type over relates-to: task implements feature (link a task straight "
-    "to project/ only where no feature exists), task depends-on task, feature belongs-to "
-    "project, pattern used-in project."
+    "Prefer a specific type over relates-to: task implements feature (none fits: create one in the "
+    "task's create_entities call), task depends-on task, feature part-of project, pattern used-in project."
 )
 DELETE_ENTITY_DESC = (
     "Soft-delete an entity with its observations and relations (restorable with restore_entity until a "
@@ -582,11 +597,12 @@ def _validate_and_extract_relations(
 
         if entity_type not in _RELATION_EXEMPT_ENTITY_TYPES:
             if not relations_raw or not isinstance(relations_raw, list):
+                link_hint = f" {_LINK_RULES[str(entity_type)][2]}" if str(entity_type) in _LINK_RULES else ""
                 raise ValueError(
                     f"Entity type '{entity_type}' requires at least one relation. "
                     f"Only {sorted(_RELATION_EXEMPT_ENTITY_TYPES)} are exempt. "
                     "Pass relations inline in this call; create_relations afterwards cannot "
-                    "fix it because the entity is not created."
+                    f"fix it because the entity is not created.{link_hint}"
                 )
 
         if isinstance(relations_raw, list):
@@ -594,6 +610,25 @@ def _validate_and_extract_relations(
                 if isinstance(rel, dict):
                     all_relations.append(_relation_from_dict(rel, name))
     return all_relations
+
+
+def _link_note(project: str, names: list[str]) -> dict[str, str]:
+    """Return a non-blocking hint naming tasks without an implements feature and features without a part-of project."""
+    unlinked: dict[str, list[str]] = {}
+    for name in dict.fromkeys(names):
+        kind = name.partition("/")[0]
+        if kind not in _LINK_RULES:
+            continue
+        relation_type, target_prefix, _ = _LINK_RULES[kind]
+        relations = _get_db().reads.get_entity_with_relations(project, name, compact=True)["relations"]
+        if not any(
+            rel.source == name and rel.relation_type == relation_type and rel.target.startswith(target_prefix)
+            for rel in relations
+        ):
+            unlinked.setdefault(kind, []).append(name)
+    if not unlinked:
+        return {}
+    return {"linkHint": " ".join(f"{', '.join(found)}: {_LINK_RULES[kind][2]}" for kind, found in unlinked.items())}
 
 
 def _create_entities(
@@ -625,7 +660,8 @@ def _create_entities(
         if all_relations:
             db.relations.create(project, all_relations)
 
-    return {"message": f"Created {len(entities)} entities in project '{project}'."}
+    names = [str(entity_data.get("name", "")) for entity_data in entities]
+    return {"message": f"Created {len(entities)} entities in project '{project}'.", **_link_note(project, names)}
 
 
 @mcp.tool(
@@ -1042,7 +1078,10 @@ def create_relations(
         db = _get_db()
         relation_objects = [_relation_from_dict(rel) for rel in relations]
         db.relations.create(project, relation_objects)
-        return {"message": f"Created {len(relation_objects)} relations in project '{project}'."}
+        return {
+            "message": f"Created {len(relation_objects)} relations in project '{project}'.",
+            **_link_note(project, [rel.source for rel in relation_objects]),
+        }
     except Exception as e:
         return {"error": str(e)}
 
