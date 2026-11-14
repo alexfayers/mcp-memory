@@ -30,7 +30,7 @@ select:hover, button:hover { border-color: #58a6ff; }
 #panel .obs-merge-btn.armed { color: #58a6ff; border-color: #58a6ff; }
 #panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #484f58; cursor: pointer; font-size: 18px; }
 svg { width: 100vw; height: 100vh; }
-.link { stroke-opacity: 0.4; }
+.link { stroke-width: var(--link-px, 1px); }
 .link-label { font-size: 9px; fill: #484f58; pointer-events: none; }
 .node circle { stroke-width: 1.5; cursor: pointer; }
 .node text { font-size: 10px; fill: #8b949e; pointer-events: none; }
@@ -253,12 +253,18 @@ const nodeLayer = g.append("g");
 
 let lastUserInteract = 0;
 const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, ZOOM_MIN = 0.2, ZOOM_MAX = 4, ZOOM_FIT_MARGIN = 0.9, ZOOM_FLOOR = 0.01;
-let zoomMin = ZOOM_MIN;
+const LINK_COLOUR = "#6e7681", LINK_OPACITY = 0.55, LINK_SCREEN_PX = 1.25;
+let zoomMin = ZOOM_MIN, viewTransform = d3.zoomIdentity;
+const linkPx = () => LINK_SCREEN_PX / viewTransform.k;
+const updateLinkPx = () => svg.style("--link-px", `${linkPx()}px`);
 const zoom = d3.zoom().scaleExtent([zoomMin, ZOOM_MAX]).on("zoom", e => {
+  viewTransform = e.transform;
   g.attr("transform", e.transform);
+  updateLinkPx();
   if (e.sourceEvent) lastUserInteract = Date.now();
 });
 svg.call(zoom);
+updateLinkPx();
 
 function updateZoomExtent() {
   const placed = nodes.filter(d => Number.isFinite(d.x) && Number.isFinite(d.y));
@@ -434,7 +440,7 @@ function render(data) {
   if (topologyChanged) links = newLinks;
 
   linkSel = linkLayer.selectAll(".link").data(links, d => d.source.id || d.source + "-" + (d.target.id || d.target) + "-" + d.type)
-    .join("line").attr("class", "link").attr("stroke", "#30363d").attr("stroke-width", 1);
+    .join("line").attr("class", "link").attr("stroke", LINK_COLOUR).attr("stroke-opacity", LINK_OPACITY);
 
   labelSel = labelLayer.selectAll(".link-label").data(links, d => d.source.id || d.source + "-" + (d.target.id || d.target) + "-" + d.type)
     .join("text").attr("class", "link-label").text(d => d.type);

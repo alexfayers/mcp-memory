@@ -208,6 +208,13 @@ class TestVisualisePage:
         assert 'force("x", d3.forceX(width() / 2).strength(GRAVITY))' in resp.text
 
     @pytest.mark.anyio
+    async def test_draws_links_in_a_visible_colour(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert '.attr("stroke", LINK_COLOUR).attr("stroke-opacity", LINK_OPACITY)' in resp.text
+        assert ".link { stroke-width: var(--link-px, 1px); }" in resp.text
+        assert 'svg.style("--link-px", `${linkPx()}px`)' in resp.text
+
+    @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert "applyDemotedRings" in resp.text
