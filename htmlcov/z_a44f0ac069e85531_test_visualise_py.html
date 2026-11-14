@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="index.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.3">coverage.py v7.17.3</a>,
-            created at 2026-11-14 19:00 +0000
+            created at 2026-11-14 19:25 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -384,7 +384,7 @@
     <p class="run"><span class="n"><a id="t302" href="#t302">302</a></span><span class="t">        <span class="nam">resp</span> <span class="op">=</span> <span class="key">await</span> <span class="nam">client</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="str">&quot;/visualise&quot;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t303" href="#t303">303</a></span><span class="t">        <span class="key">assert</span> <span class="str">&quot;tierLine&quot;</span> <span class="key">in</span> <span class="nam">resp</span><span class="op">.</span><span class="nam">text</span>  <span class="com"># per-tier status line helper</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t304" href="#t304">304</a></span><span class="t">        <span class="key">assert</span> <span class="str">&quot;d.tiers&quot;</span> <span class="key">in</span> <span class="nam">resp</span><span class="op">.</span><span class="nam">text</span>  <span class="com"># renderDream reads the per-tier configs</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t305" href="#t305">305</a></span><span class="t">        <span class="key">assert</span> <span class="str">&#x27;op.action === &quot;merge&quot;&#x27;</span> <span class="key">in</span> <span class="nam">resp</span><span class="op">.</span><span class="nam">text</span>  <span class="com"># merge vs demote glyph branch</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t305" href="#t305">305</a></span><span class="t">        <span class="key">assert</span> <span class="str">&#x27;&quot;merge&quot;: { label: &quot;merged&quot;&#x27;</span> <span class="key">in</span> <span class="nam">resp</span><span class="op">.</span><span class="nam">text</span>  <span class="com"># merge vs demote glyph branch</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t306" href="#t306">306</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t307" href="#t307">307</a></span><span class="t">    <span class="op">@</span><span class="nam">pytest</span><span class="op">.</span><span class="nam">mark</span><span class="op">.</span><span class="nam">anyio</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t308" href="#t308">308</a></span><span class="t">    <span class="key">async</span> <span class="key">def</span> <span class="nam">test_renders_explicit_off_labels_for_dream</span><span class="op">(</span><span class="nam">self</span><span class="op">,</span> <span class="nam">client</span><span class="op">:</span> <span class="nam">httpx</span><span class="op">.</span><span class="nam">AsyncClient</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -1106,7 +1106,7 @@
             <a class="nav" href="index.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.3">coverage.py v7.17.3</a>,
-            created at 2026-11-14 19:00 +0000
+            created at 2026-11-14 19:25 +0000
         </p>
     </div>
 </footer>
