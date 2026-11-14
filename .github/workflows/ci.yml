@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: alexfayers/llm-prompts/.github/actions/setup-just@main
+      - uses: alexfayers/llm-prompts-ci/.github/actions/setup-just@main
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: alexfayers/llm-prompts/.github/actions/setup-just@main
+      - uses: alexfayers/llm-prompts-ci/.github/actions/setup-just@main
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
@@ -38,7 +38,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v7
-      - uses: alexfayers/llm-prompts/.github/actions/setup-just@main
+      - uses: alexfayers/llm-prompts-ci/.github/actions/setup-just@main
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
@@ -58,7 +58,7 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v7
-      - uses: alexfayers/llm-prompts/.github/actions/setup-just@main
+      - uses: alexfayers/llm-prompts-ci/.github/actions/setup-just@main
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
@@ -104,7 +104,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
-      - uses: alexfayers/llm-prompts/.github/actions/setup-just@main
+      - uses: alexfayers/llm-prompts-ci/.github/actions/setup-just@main
       - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
@@ -124,7 +124,7 @@ jobs:
   prompt-checks:
     permissions:
       contents: read
-    uses: alexfayers/llm-prompts/.github/workflows/prompt-checks.yml@main
+    uses: alexfayers/llm-prompts-ci/.github/workflows/prompt-checks.yml@main
     with:
       prompts-root: src/mcp_memory/prompts
 
@@ -137,4 +137,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: node --test .github/scripts/*.test.js
-      - uses: alexfayers/llm-prompts/.github/actions/pr-template@main
+      - uses: alexfayers/llm-prompts-ci/.github/actions/pr-template@main
