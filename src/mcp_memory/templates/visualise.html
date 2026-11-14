@@ -289,30 +289,33 @@ async function castVote(vote) {
 document.getElementById("vote-up").onclick = () => castVote(1);
 document.getElementById("vote-down").onclick = () => castVote(-1);
 
+const touchObservations = d => d.obsVersion = (d.obsVersion || 0) + 1;
+
 async function castObservationVote(hash, vote, btns) {
   if (!panelDatum) return;
-  const { project, name } = panelDatum;
+  const d = panelDatum, { project, name } = d;
   btns.forEach(b => b.disabled = true);
   try {
     const data = await postVote("/api/vote-observation", { project, name, observationHash: hash, vote });
     if (!data) return;
-    (panelDatum.observations || []).forEach(o => { if (o.content_hash === hash) o.vote_score = data.vote_score; });
-    renderObservations(panelDatum);
+    touchObservations(d);
+    (d.observations || []).forEach(o => { if (o.content_hash === hash) o.vote_score = data.vote_score; });
+    if (panelDatum === d) renderObservations(d);
   } catch (e) { /* transient; leave display unchanged */ }
   finally { btns.forEach(b => b.disabled = false); }
 }
 
 async function castObservationMerge(targetHash, btns) {
   if (!panelDatum || !mergeSource) return;
-  const { project, name } = panelDatum;
+  const d = panelDatum, { project, name } = d;
   const sourceHash = mergeSource;
   btns.forEach(b => b.disabled = true);
   try {
     const data = await postVote("/api/merge-observation", { project, name, sourceHash, targetHash });
     if (!data) return;
-    panelDatum.observations = (panelDatum.observations || []).filter(o => o.content_hash !== sourceHash);
-    mergeSource = null;
-    renderObservations(panelDatum);
+    touchObservations(d);
+    d.observations = (d.observations || []).filter(o => o.content_hash !== sourceHash);
+    if (panelDatum === d) { mergeSource = null; renderObservations(d); }
   } catch (e) { /* transient; leave display unchanged */ }
   finally { btns.forEach(b => b.disabled = false); }
 }
@@ -404,7 +407,7 @@ function render(data) {
   const oldMap = new Map(nodes.map(n => [n.id, n]));
   nodes = incoming.map(n => {
     const old = oldMap.get(n.id);
-    if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, observations: n.observations, vote_score: n.vote_score }); return old; }
+    if (old) { Object.assign(old, { name: n.name, entity_type: n.entity_type, status: n.status, vote_score: n.vote_score }); return old; }
     return n;
   });
   // Only swap in the freshly-built (unresolved source/target string) link array when topology
@@ -493,8 +496,21 @@ function showPanel(d) {
     ? `<h4>On disk (${d.project})</h4>` + paths.map(p => `<div class="path">${p.replace(/</g,"&lt;")}</div>`).join("")
     : "";
   renderObservations(d);
+  loadObservations(d);
   document.getElementById("results").classList.remove("open");
   panel.classList.add("open");
+}
+
+async function loadObservations(d) {
+  const version = touchObservations(d);
+  try {
+    const res = await fetch(`/api/entity?project=${encodeURIComponent(d.project)}&name=${encodeURIComponent(d.name)}`);
+    if (!res.ok) return;
+    const { observations } = await res.json();
+    if (d.obsVersion !== version) return;
+    d.observations = observations;
+    if (panelDatum === d) renderObservations(d);
+  } catch (e) { /* transient; keep what is shown */ }
 }
 
 function renderObservations(d) {

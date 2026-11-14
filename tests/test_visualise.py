@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -19,6 +19,7 @@ from mcp_memory.models import Relation
 from mcp_memory.storage.pure.rows import hash_observation
 from mcp_memory.visualise import (
     get_all_graph_data,
+    get_entity_observations,
     get_project_paths,
     get_projects,
     register_visualise_routes,
@@ -80,9 +81,7 @@ class TestGetAllGraphData:
         entity = result["entities"][0]
         assert entity["name"] == "e1"
         assert entity["entity_type"] == "task"
-        observations = cast("list[dict[str, object]]", entity["observations"])
-        assert [o["content"] for o in observations] == ["obs1", "obs2"]
-        assert all("content_hash" in o and "vote_score" in o for o in observations)
+        assert "observations" not in entity
         assert entity["status"] == "planned"
         assert entity["vote_score"] == 1
 
@@ -119,8 +118,7 @@ class TestGetAllGraphData:
     def test_observation_votes_align_with_ordered_observations(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}])
         store.observations.vote("proj", "e1", 1, content="c")
-        entity = get_all_graph_data(store, "proj")["entities"][0]
-        observations = cast("list[dict[str, object]]", entity["observations"])
+        observations = get_entity_observations(store, "proj", "e1")
         assert [(o["content"], o["vote_score"]) for o in observations] == [
             ("c", 1),
             ("a", 0),
@@ -158,6 +156,14 @@ class TestVisualisePage:
         assert "MCP_DREAM_HEAVY_ENABLED=true" in resp.text
         assert "lightButton.disabled = !lightEnabled" in resp.text
         assert "heavyButton.disabled = !heavyEnabled" in resp.text
+
+    @pytest.mark.anyio
+    async def test_ignores_stale_observation_responses(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "if (d.obsVersion !== version) return;" in resp.text
+        assert resp.text.count("touchObservations(d)") == 3
+        assert resp.text.count("const d = panelDatum, { project, name } = d;") == 2
+        assert "if (panelDatum === d) renderObservations(d);" in resp.text
 
     @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
@@ -228,6 +234,22 @@ class TestApiGraph:
         store.entities.create("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
         result = get_all_graph_data(store, "proj")
         assert result["entities"][0]["project"] == "proj"
+
+
+class TestApiEntity:
+    @pytest.mark.anyio
+    async def test_returns_observations(self, client: httpx.AsyncClient, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["obs1", "obs2"]}])
+        resp = await client.get("/api/entity", params={"project": "proj", "name": "e1"})
+        assert resp.status_code == 200
+        observations = resp.json()["observations"]
+        assert [o["content"] for o in observations] == ["obs1", "obs2"]
+        assert all("content_hash" in o and "vote_score" in o for o in observations)
+
+    @pytest.mark.anyio
+    async def test_unknown_entity_returns_404(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/api/entity", params={"project": "proj", "name": "ghost"})
+        assert resp.status_code == 404
 
 
 class TestApiActivity:
@@ -836,9 +858,7 @@ class TestApiMergeObservation:
         assert resp.status_code == 200
         assert resp.json() == {"name": "e1", "project": "proj", "merged": 1}
 
-        entity = get_all_graph_data(store, "proj")["entities"][0]
-        observations = cast("list[dict[str, object]]", entity["observations"])
-        hashes = {o["content_hash"] for o in observations}
+        hashes = {o["content_hash"] for o in get_entity_observations(store, "proj", "e1")}
         assert hash_observation("src") not in hashes
         assert hash_observation("dst") in hashes
 

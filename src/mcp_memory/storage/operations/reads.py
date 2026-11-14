@@ -317,11 +317,11 @@ class Reads:
 
         return {"entities": entities, "relations": relations}
 
-    def all_entities(self, project: str | None = None) -> NodeList:
+    def all_entities(self, project: str | None = None, *, compact: bool = False) -> NodeList:
         """Return every entity and its relations, optionally scoped to one project.
 
         Serves the visualiser. Observations are unbudgeted - the full detail, not the
-        config-limited read every other method here applies.
+        config-limited read every other method here applies - unless ``compact`` omits them.
         """
         where = "WHERE e.deleted_at IS NULL"
         params: list[str | int] = []
@@ -345,7 +345,7 @@ class Reads:
         entity_ids: list[int] = []
         project_ids: set[int] = set()
         for row in rows:
-            observations, omitted = self._observations.budgeted(row["id"], -1)
+            observations, omitted = ([], 0) if compact else self._observations.budgeted(row["id"], -1)
             entities.append(build_entity(row, observations, omitted, project_name=row["project_name"]))
             entity_ids.append(row["id"])
             project_ids.add(row["project_id"])
