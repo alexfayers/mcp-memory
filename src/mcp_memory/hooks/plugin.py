@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable
 import contextlib
 from datetime import UTC, datetime
@@ -55,6 +56,7 @@ from mcp_memory.storage.pure.rows import strip_today_date_prefix
 from mcp_memory.tool_names import DEDUPED_READ_TOOLS, MUTATING_TOOLS, READ_ONLY_TOOLS
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(MUTATING_TOOLS)
+_RESULT_WRAPPER_KEYS = ("Json", "Text", "content", "text")
 _MEMORY_WRITE_CALL = re.compile(rf"_(?:{'|'.join(map(re.escape, MUTATING_TOOLS))})\b")
 
 _MEMORY_READ_TOOL_NAMES = frozenset(READ_ONLY_TOOLS)
@@ -194,6 +196,40 @@ def _resolve_memory_tool(tool_name: str, parameters: dict[str, object]) -> str:
     if tool_name == "use_mcp_tool":
         return str(parameters.get("tool_name", ""))
     return _extract_mcp_suffix(tool_name)
+
+
+def _parse_result_text(text: str) -> object:
+    """Parse a result string as JSON, or as the Python literal a frontend's str() of a list or dict produces."""
+    for parse in (json.loads, ast.literal_eval):
+        try:
+            return parse(text)
+        except (ValueError, SyntaxError):
+            continue
+    return text
+
+
+def _carries_error(value: object) -> bool:
+    """Return True when a memory tool result, in any frontend's wrapping, reports a failure.
+
+    Unwrapped plain text is a failure message. A wrapper's own `isError` flag decides for its content.
+    """
+    if isinstance(value, str):
+        parsed = _parse_result_text(value)
+        return isinstance(parsed, str) or _carries_error(parsed)
+    if isinstance(value, list):
+        return any(_carries_error(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    if "error" in value:
+        return True
+    if "isError" in value:
+        return bool(value["isError"])
+    return any(_carries_error(value[key]) for key in _RESULT_WRAPPER_KEYS if key in value)
+
+
+def _is_error_result(tool_result: object) -> bool:
+    """Return True when a memory tool result reports a failure."""
+    return isinstance(tool_result, str) and bool(tool_result.strip()) and _carries_error(tool_result)
 
 
 def _is_memory_write(tool_name: str, parameters: dict[str, object]) -> bool:
@@ -802,9 +838,10 @@ class MemoryPlugin(HooksPlugin):
             mark_edited(task_id)
 
         if _is_memory_write(tool_name, parameters):
-            reset(task_id)
-            set_reminder_chance(task_id, 0.0)
-            record_write()
+            if not _is_error_result(kwargs.get("tool_result")):
+                reset(task_id)
+                set_reminder_chance(task_id, 0.0)
+                record_write()
             return None
 
         if (
