@@ -16,13 +16,21 @@ from mcp_memory import cli, config, dream
 
 
 def _eval_since_help() -> str:
-    """Return the rendered help text of `mcp-memory eval --since`."""
+    """Return the rendered help text of `mcp-memory utils eval --since`."""
+    utils = cli._build_parser()._subparsers._group_actions[0].choices["utils"]  # type: ignore[union-attr]
     action = next(
-        a
-        for a in cli._build_parser()._subparsers._group_actions[0].choices["eval"]._actions  # type: ignore[union-attr]
-        if "--since" in a.option_strings
+        a for a in utils._subparsers._group_actions[0].choices["eval"]._actions if "--since" in a.option_strings
     )
     return str(action.help)
+
+
+class TestUtilsGroup:
+    @pytest.mark.parametrize("name", ["migrate-db", "audit", "eval", "metrics"])
+    def test_maintenance_commands_live_under_utils_only(self, name: str) -> None:
+        parser = cli._build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args([name])
+        assert parser.parse_args(["utils", name, *(["--all-projects"] if name == "audit" else [])]).command == "utils"
 
 
 class TestEvalSinceHelp:

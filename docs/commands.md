@@ -2,7 +2,7 @@
 
 `mcp-memory` with no arguments runs the server in the foreground. Run `mcp-memory <command> --help` for flags.
 
-`audit`, `eval`, `metrics`, `export` and `import` call the running server at `MCP_MEMORY_URL` and fail when it is not reachable. `migrate-db` works on the database file directly.
+`utils audit`, `utils eval`, `utils metrics`, `export` and `import` call the running server at `MCP_MEMORY_URL` and fail when it is not reachable. `utils migrate-db` works on the database file directly.
 
 | Command | What it does |
 |---|---|
@@ -10,11 +10,11 @@
 | `restart` | Restart the service |
 | `install <target>` | Register the server with an agent |
 | `uninstall copilot [--mcp-config]` | Remove the server from VS Code's `mcp.json` |
-| `audit` | Hygiene report on the graph |
-| `eval` | Search ranking quality |
-| `metrics` | Tool usage report |
+| `utils audit` | Hygiene report on the graph |
+| `utils eval` | Search ranking quality |
+| `utils metrics` | Tool usage report |
 | `export` / `import` | Back up or merge projects |
-| `migrate-db` | Move the database to the default path |
+| `utils migrate-db` | Move the database to the default path |
 
 ## install
 
@@ -46,8 +46,8 @@ Logs go to `mcp-memory.log` next to the database.
 ## audit
 
 ```bash
-mcp-memory audit --project <scope>
-mcp-memory audit --all-projects --propose-plan
+mcp-memory utils audit --project <scope>
+mcp-memory utils audit --all-projects --propose-plan
 ```
 
 Read-only. Prints JSON listing orphans, misused `project` entities, unprefixed names, ghost scopes, oversized entities, `task belongs-to project` relations, star-graph tasks and strongly downvoted entities.
@@ -57,7 +57,7 @@ Read-only. Prints JSON listing orphans, misused `project` entities, unprefixed n
 ## eval
 
 ```bash
-mcp-memory eval [--k 10] [--since 7d] [--min-content-tokens N]
+mcp-memory utils eval [--k 10] [--since 7d] [--min-content-tokens N]
 ```
 
 Read-only. Scores search ranking from recorded retrieval telemetry: mean precision, recall, nDCG and success at `k`, plus MRR. `--since` takes `30m`, `1h`, `7d`, `2w`, `3mo` or an ISO date. `--min-content-tokens` skips queries with fewer words than `N`.
@@ -65,7 +65,7 @@ Read-only. Scores search ranking from recorded retrieval telemetry: mean precisi
 ## metrics
 
 ```bash
-mcp-memory metrics [--since 7d]
+mcp-memory utils metrics [--since 7d]
 ```
 
 Prints JSON with, per tool, the call count, mean and median input and output bytes, and how often each option value is used. It also totals bytes and gives an input/output ratio (`null` if no output was recorded). Byte sizes are a proxy for token cost, not real token counts.
@@ -86,10 +86,10 @@ Import is additive and safe to re-run. New entities are inserted as-is. An exist
 ## migrate-db
 
 ```bash
-mcp-memory migrate-db [--source <path>]
+mcp-memory utils migrate-db [--source <path>]
 ```
 
-The hook plugin does not inherit `MCP_MEMORY_DB_PATH`, so a service installed with a custom `--db-path` and the plugin read different databases. `migrate-db` stops the service, moves the database to the default path (refusing to overwrite a non-empty target) and repoints the service at it. It finds the current path from the installed service unless you pass `--source`.
+The hook plugin does not inherit `MCP_MEMORY_DB_PATH`, so a service installed with a custom `--db-path` and the plugin read different databases. `utils migrate-db` stops the service, moves the database to the default path (refusing to overwrite a non-empty target) and repoints the service at it. It finds the current path from the installed service unless you pass `--source`.
 
 ## Visualiser
 

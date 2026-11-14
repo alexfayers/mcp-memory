@@ -495,7 +495,7 @@ class TestEvalCommand:
         self, api: FakeApi, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         api.results["eval"] = asdict(ranking_eval.EvalReport(1, 1.0, 1.0, 1.0, 1.0, 1.0, 5))
-        monkeypatch.setattr("sys.argv", ["mcp-memory", "eval", "--k", "5"])
+        monkeypatch.setattr("sys.argv", ["mcp-memory", "utils", "eval", "--k", "5"])
         cli.main()
 
         out = capsys.readouterr().out
@@ -515,7 +515,7 @@ class TestEvalCommand:
     ) -> None:
         api.results["eval"] = asdict(ranking_eval.EvalReport(1, 1.0, 1.0, 1.0, 1.0, 1.0, 5))
         monkeypatch.setattr(
-            "sys.argv", ["mcp-memory", "eval", "--k", "5", "--since", "7d", "--min-content-tokens", "2"]
+            "sys.argv", ["mcp-memory", "utils", "eval", "--k", "5", "--since", "7d", "--min-content-tokens", "2"]
         )
         cli.main()
 

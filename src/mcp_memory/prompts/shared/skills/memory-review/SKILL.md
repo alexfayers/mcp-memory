@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 MUST work through this checklist to audit and clean up the memory graph. The `/visualise` endpoint gives a visual overview, but auditors MUST read the graph data via the **read-only memory MCP tools** (`read_graph`, `search_nodes`, `get_entity_with_relations`), NOT via `curl`/`Read` of `/api/graph`.
 
-**MUST start with the deterministic audit:** run `mcp-memory audit --project <scope>` (or `--all-projects`) once up front. It reads the live database read-only and emits one JSON report of every *mechanical* violation - orphans, misused `project`-type entities, unprefixed names, ghost scopes, oversized entities (per the section 3 size targets), `task belongs-to project` relation violations, star-graph tasks, and strongly-downvoted entities:
+**MUST start with the deterministic audit:** run `mcp-memory utils audit --project <scope>` (or `--all-projects`) once up front. It reads the live database read-only and emits one JSON report of every *mechanical* violation - orphans, misused `project`-type entities, unprefixed names, ghost scopes, oversized entities (per the section 3 size targets), `task belongs-to project` relation violations, star-graph tasks, and strongly-downvoted entities:
 
 ```json
 {"project": "...", "orphans": [...], "misused_project_type": [...], "unprefixed": [...],

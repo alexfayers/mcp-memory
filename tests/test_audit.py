@@ -491,4 +491,4 @@ class TestAuditCommand:
     def test_parser_requires_a_scope(self) -> None:
         parser = cli._build_parser()
         with pytest.raises(SystemExit):
-            parser.parse_args(["audit"])
+            parser.parse_args(["utils", "audit"])
