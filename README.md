@@ -31,7 +31,7 @@
 | src/mcp\_memory/path\_resolver.py                    |       22 |        1 |     95% |        15 |
 | src/mcp\_memory/payload.py                           |       12 |        0 |    100% |           |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      555 |       43 |     92% |61-62, 484, 494, 530, 543, 599-601, 605, 679-680, 710-711, 719, 727, 739-740, 802-803, 817-818, 1011-1012, 1032, 1050-1055, 1094-1101, 1140-1141, 1191-1192, 1419, 1423 |
+| src/mcp\_memory/server.py                            |      555 |       43 |     92% |61-62, 485, 495, 531, 544, 600-602, 606, 680-681, 711-712, 720, 728, 740-741, 803-804, 818-819, 1012-1013, 1033, 1051-1056, 1095-1102, 1141-1142, 1192-1193, 1420, 1424 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
@@ -91,21 +91,21 @@
 | tests/test\_dream.py                                 |      782 |        4 |     99% |486-487, 584, 1032 |
 | tests/test\_dream\_status.py                         |      236 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      271 |        0 |    100% |           |
-| tests/test\_hooks\_plugin.py                         |     1067 |       66 |     94% |1670-1675, 1680-1683, 1688-1696, 1707-1710, 1739-1742, 1784-1787, 1791-1794, 1798-1802, 1806-1808, 1813-1815, 1820-1825, 1829-1830, 1834-1836, 1841-1849 |
+| tests/test\_hooks\_plugin.py                         |     1075 |       66 |     94% |1682-1687, 1692-1695, 1700-1708, 1719-1722, 1751-1754, 1796-1799, 1803-1806, 1810-1814, 1818-1820, 1825-1827, 1832-1837, 1841-1842, 1846-1848, 1853-1861 |
 | tests/test\_metrics.py                               |      183 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_path\_resolver.py                        |       41 |        2 |     95% |     56-57 |
 | tests/test\_payload.py                               |       68 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
-| tests/test\_server.py                                |      915 |        1 |     99% |      1573 |
+| tests/test\_server.py                                |      921 |        1 |     99% |      1581 |
 | tests/test\_server\_http.py                          |       73 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       17 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      656 |        0 |    100% |           |
-| **TOTAL**                                            | **14909** |  **480** | **97%** |           |
+| **TOTAL**                                            | **14923** |  **480** | **97%** |           |
 
 
 ## Setup coverage badge
