@@ -53,7 +53,7 @@ mcp-memory utils audit --all-projects --propose-plan
 
 Read-only. Prints JSON listing orphans, misused `project` entities, unprefixed names, ghost scopes, oversized entities, `task belongs-to project` relations, star-graph tasks and strongly downvoted entities.
 
-`--propose-plan` prints `{"steps": [...]}` of fix-up tool calls instead. A step with `needs_review: false` is deterministic, like `rename_entity`. Orphan relinking, deletes and `consider_split` advisories (entities mixing several scopes) have `needs_review: true`. A `trim_observations_to_outcome` step is `false` only when every observation it drops is a near-duplicate of one it keeps. The trim is a soft delete, restorable with `restore_observations`.
+`--propose-plan` prints `{"steps": [...]}` of fix-up tool calls instead. A step with `needs_review: false` is deterministic, like `rename_entity`. Orphan relinking, deletes, merging an observation contained in a longer one, and `consider_split` advisories (entities mixing several scopes) have `needs_review: true`. A `trim_observations_to_outcome` step is always `true`, since a trim drops facts. The trim is a soft delete, restorable with `restore_observations`.
 
 ## eval
 
