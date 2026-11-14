@@ -27,7 +27,7 @@ from cline_hooks.core.vocabulary import (
 )
 from cline_hooks.plugins.startup_blocks import StartupBlock
 
-from mcp_memory import api_client
+from mcp_memory import api_client, nudge_count
 from mcp_memory.config import get_memory_url, get_workspace_markers
 from mcp_memory.hooks.review_tracker import (
     record_write,
@@ -51,6 +51,7 @@ from mcp_memory.hooks.tracker import (
     should_warn,
     tick_turn,
 )
+from mcp_memory.nudge_count import NudgeKind
 from mcp_memory.path_resolver import match_project_for_path
 from mcp_memory.storage.pure.rows import strip_today_date_prefix
 from mcp_memory.tool_names import DEDUPED_READ_TOOLS, MUTATING_TOOLS, READ_ONLY_TOOLS
@@ -182,6 +183,12 @@ def _reminder_due(task_id: str) -> bool:
     due = random.random() < chance
     set_reminder_chance(task_id, 0.0 if due else chance)
     return due
+
+
+def _counted_nudge(kind: NudgeKind, note: str) -> HookResult:
+    """Return a result carrying a reminder note, and count it as shown."""
+    nudge_count.record(kind)
+    return HookResult(notes=[note])
 
 
 def _extract_mcp_suffix(tool_name: str) -> str:
@@ -680,8 +687,8 @@ class MemoryPlugin(HooksPlugin):
             "PreMcpToolUse": self._on_pre_mcp_tool_use,
             "PostToolUse": self._on_post_tool_use,
             "UserPromptSubmit": self._on_user_prompt_submit,
-            "AttemptCompletion": lambda **_: HookResult(notes=[_MEMORY_COMPLETION_REMINDER]),
-            "PreCompact": lambda **_: HookResult(notes=[_MEMORY_COMPACT_WARNING]),
+            "AttemptCompletion": lambda **_: _counted_nudge(NudgeKind.COMPLETION, _MEMORY_COMPLETION_REMINDER),
+            "PreCompact": lambda **_: _counted_nudge(NudgeKind.COMPACT, _MEMORY_COMPACT_WARNING),
         }
 
     @hookimpl(optionalhook=True)
@@ -756,6 +763,7 @@ class MemoryPlugin(HooksPlugin):
         notes: list[str] = []
         if should_nudge():
             reset_review()
+            nudge_count.record(NudgeKind.REVIEW)
             notes.append(_MEMORY_REVIEW_NUDGE)
         frustration_note = self._frustration_note(str(kwargs.get("message", "")))
         if frustration_note:
@@ -863,6 +871,6 @@ class MemoryPlugin(HooksPlugin):
             reminder = _MEMORY_REMINDER_TEMPLATE.format(
                 project=_task_scope(task_id, workspace_roots),
             )
-            return HookResult(notes=[reminder])
+            return _counted_nudge(NudgeKind.REMINDER, reminder)
 
         return None

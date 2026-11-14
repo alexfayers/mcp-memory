@@ -1,4 +1,4 @@
-"""Classification of the registered memory tools into mutating and read-only."""
+"""Classification of the registered memory tools into mutating, read-only and ranked-search."""
 
 MUTATING_TOOLS: tuple[str, ...] = (
     "create_entities",
@@ -32,3 +32,4 @@ READ_ONLY_TOOLS: tuple[str, ...] = (
     "get_entity_with_relations",
 )
 DEDUPED_READ_TOOLS = frozenset(["search_nodes", "search_all_projects", "read_graph", "get_entity_with_relations"])
+SEARCH_TOOLS: tuple[str, ...] = ("search_nodes", "search_all_projects")

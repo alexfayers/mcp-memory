@@ -22,7 +22,7 @@ from cline_hooks.core.vocabulary import BOOKKEEPING_TOOLS, FILE_EDIT_TOOLS, MESS
 from cline_hooks.frontends.claude_code.protocol import ClaudeCodeProtocol
 from cline_hooks.plugins.startup_blocks import RESERVE_CHARS, StartupBlocksPlugin
 
-from mcp_memory import server
+from mcp_memory import nudge_count, server
 from mcp_memory.api import _recent_memory, _safe_project
 from mcp_memory.hooks.plugin import (
     _DATE_PREFIX_WARNING,
@@ -558,6 +558,36 @@ class TestMemoryPluginMessages:
             assert _edit("t1") is not None
         with patch("random.random", return_value=0.5):
             assert _edit("t2") is not None
+
+    def test_each_reminder_and_nudge_shown_is_counted(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
+        repo = tmp_path / "cool-project"
+        (repo / ".git").mkdir(parents=True)
+        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
+        set_reminder_chance("t1", 1.0)
+        with patch("random.random", return_value=0.0):
+            plugin.on_hook(
+                "PostToolUse",
+                task_id="t1",
+                tool_name="write_to_file",
+                parameters={"path": str(repo / "file.py")},
+            )
+        assert nudge_count.read() == {"reminder": 1}
+
+        plugin.on_hook("AttemptCompletion", task_id="t1")
+        plugin.on_hook("PreCompact", task_id="t1")
+        with (
+            patch("mcp_memory.hooks.plugin.should_nudge", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=False),
+            patch("mcp_memory.hooks.plugin.reset_review"),
+        ):
+            plugin.on_hook("UserPromptSubmit", task_id="t1")
+
+        assert nudge_count.read() == {"reminder": 1, "completion": 1, "compact": 1, "review": 1}
+
+    def test_a_turn_with_no_reminder_is_not_counted(self, plugin: MemoryPlugin) -> None:
+        plugin.on_hook("UserPromptSubmit", task_id="t1", message="hello")
+
+        assert nudge_count.read() == {}
 
     def test_reminder_and_block_tell_the_model_to_edit_a_replaced_observation(self, plugin: MemoryPlugin) -> None:
         with (

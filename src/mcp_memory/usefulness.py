@@ -17,13 +17,14 @@ import uuid
 
 from .config import get_auto_vote_max_per_day, get_auto_vote_window_seconds
 from .models import VALID_STATUSES
+from .tool_names import SEARCH_TOOLS
 
 if TYPE_CHECKING:
     from .storage import Storage
 
 # Ranked-retrieval tools whose hits are recorded as surfacings. read_graph and direct lookups
 # are excluded: their ordering is recency/identity, not relevance, so ranking quality is moot.
-_SURFACE_TOOLS = frozenset({"search_nodes", "search_all_projects"})
+_SURFACE_TOOLS = frozenset(SEARCH_TOOLS)
 
 # Write tools that count as "using" a surfaced entity. Deletions are deliberately excluded.
 _USE_TOOLS = frozenset({

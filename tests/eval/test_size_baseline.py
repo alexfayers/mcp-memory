@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from mcp_memory.storage import open_writable
-from tests.eval.eval_fixture import _TOPICS, _build_populated_fixture
 from tests.eval.size_baseline import (
     TOOLS,
     SizeBaseline,
@@ -13,6 +12,8 @@ from tests.eval.size_baseline import (
     move_row,
     section,
 )
+
+from .eval_fixture import _TOPICS, _build_populated_fixture
 
 
 def _baseline(**overrides: int) -> SizeBaseline:
