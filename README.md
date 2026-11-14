@@ -14,7 +14,7 @@
 | src/mcp\_memory/cli.py                               |      590 |      114 |     81% |83, 178, 207-212, 230-243, 248-257, 266, 278, 293, 349-353, 358-369, 440-441, 448-449, 454-456, 460-462, 539-541, 562, 578-579, 601-602, 605-608, 614-617, 623-626, 684-685, 719-720, 755-756, 783-792, 800-802, 820-821, 845-847, 991, 993, 995, 999-1001, 1021, 1023, 1025, 1028-1039 |
 | src/mcp\_memory/config.py                            |      122 |        1 |     99% |       230 |
 | src/mcp\_memory/dedupe.py                            |       35 |        1 |     97% |        42 |
-| src/mcp\_memory/dream.py                             |      270 |        1 |     99% |       375 |
+| src/mcp\_memory/dream.py                             |      304 |        5 |     98% |225-227, 420, 464 |
 | src/mcp\_memory/dream\_status.py                     |      138 |        2 |     99% |  261, 295 |
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       69 |        4 |     94% |52-53, 88, 90 |
@@ -88,7 +88,7 @@
 | tests/test\_config.py                                |      173 |        0 |    100% |           |
 | tests/test\_database.py                              |     1860 |        2 |     99% | 609, 1764 |
 | tests/test\_db\_access.py                            |       13 |        0 |    100% |           |
-| tests/test\_dream.py                                 |      586 |        4 |     99% |446-447, 544, 904 |
+| tests/test\_dream.py                                 |      639 |        4 |     99% |480-481, 578, 976 |
 | tests/test\_dream\_status.py                         |      236 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      271 |        0 |    100% |           |
 | tests/test\_hooks\_plugin.py                         |     1067 |       66 |     94% |1670-1675, 1680-1683, 1688-1696, 1707-1710, 1739-1742, 1784-1787, 1791-1794, 1798-1802, 1806-1808, 1813-1815, 1820-1825, 1829-1830, 1834-1836, 1841-1849 |
@@ -105,7 +105,7 @@
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      574 |        0 |    100% |           |
-| **TOTAL**                                            | **14214** |  **446** | **97%** |           |
+| **TOTAL**                                            | **14301** |  **450** | **97%** |           |
 
 
 ## Setup coverage badge
