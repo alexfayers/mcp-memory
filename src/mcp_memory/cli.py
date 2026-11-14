@@ -13,6 +13,8 @@ import platform
 import pwd
 import re
 import shutil
+import socket
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -24,8 +26,10 @@ import urllib.request
 from cline_hooks.core.user_install import resolve_user_binary, user_path
 
 from . import api_client
+from .backup import restore_backup
 from .config import (
     _DEFAULT_PORT,
+    get_backup_dir,
     get_db_path,
     get_default_db_path,
     get_memory_url,
@@ -40,6 +44,7 @@ if TYPE_CHECKING:
 
 _DREAM_API_TIMEOUT_SECONDS = 10
 _DREAM_POLL_SECONDS = 5
+_PORT_PROBE_TIMEOUT_SECONDS = 2
 
 __all__ = ["Path", "argparse", "subprocess"]
 
@@ -505,6 +510,37 @@ def _cmd_migrate_db(args: argparse.Namespace) -> None:
         print("No installed service found; start the server to use the migrated database.")
 
 
+def _server_is_running() -> bool:
+    """Return whether something is listening on the configured server port."""
+    try:
+        socket.create_connection(("127.0.0.1", int(resolve_port())), timeout=_PORT_PROBE_TIMEOUT_SECONDS).close()
+    except OSError:
+        return False
+    return True
+
+
+def _cmd_restore(args: argparse.Namespace) -> None:
+    """Replace the local database with a backup, keeping a copy of the replaced database."""
+    backup_file = Path(args.backup_file).expanduser()
+    if not backup_file.is_file():
+        print(f"Error: backup file not found: {backup_file}", file=sys.stderr)
+        sys.exit(1)
+    if _server_is_running():
+        print("Error: the mcp-memory server is running. Stop it before restoring.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        previous = restore_backup(backup_file, get_db_path(), get_backup_dir())
+    except sqlite3.DatabaseError as exc:
+        print(f"Error: {backup_file} is not a valid database backup: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except OSError as exc:
+        print(f"Error: restore failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Restored {get_db_path()} from {backup_file}")
+    if previous:
+        print(f"Previous database saved to {previous}")
+
+
 def _api(op: str, args: dict[str, Any]) -> Any:
     """Run a server operation, exiting with its error when the server cannot be reached or refuses."""
     try:
@@ -903,6 +939,9 @@ def _add_utils_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         help="Source database path (default: auto-detected from the installed service)",
     )
 
+    restore = utils_sub.add_parser("restore", help="Replace the local database with a backup (server must be stopped)")
+    restore.add_argument("backup_file")
+
     audit = utils_sub.add_parser("audit", help="Report structural memory-graph hygiene issues as JSON (read-only)")
     scope = audit.add_mutually_exclusive_group(required=True)
     scope.add_argument("--project", help="Audit a single project scope")
@@ -1046,6 +1085,7 @@ def _cmd_utils(args: argparse.Namespace) -> None:
     """Dispatch the `utils` subcommand to its handler."""
     handlers: dict[str, Callable[[argparse.Namespace], None]] = {
         "migrate-db": _cmd_migrate_db,
+        "restore": _cmd_restore,
         "audit": _cmd_audit,
         "eval": _cmd_eval,
         "metrics": _cmd_metrics,

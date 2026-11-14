@@ -6,6 +6,7 @@ from collections.abc import Callable, Hashable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 
 from .config import (
@@ -19,6 +20,7 @@ from .config import (
 _STAMP_FORMAT = "%Y%m%dT%H%M%S%fZ"
 _KEEP_ALL_WINDOW = timedelta(hours=24)
 _MONTHS_PER_YEAR = 12
+_SIDECAR_SUFFIXES = ("-wal", "-shm")
 
 
 def _copy_snapshot(db_path: Path, destination_path: Path) -> None:
@@ -89,6 +91,8 @@ def prune_backups(
     for _, path in backups:
         if path not in keep:
             path.unlink()
+            for suffix in _SIDECAR_SUFFIXES:
+                path.with_name(path.name + suffix).unlink(missing_ok=True)
 
 
 def backup_database() -> Path:
@@ -106,3 +110,43 @@ def backup_database() -> Path:
         keep_monthly=get_backup_keep_monthly(),
     )
     return created
+
+
+def _preserve_files(db_path: Path, backup_dir: Path, now: datetime) -> Path | None:
+    """Copy the database file and its WAL sidecars into ``backup_dir`` without opening them, returning the copy."""
+    sources = [db_path.with_name(db_path.name + suffix) for suffix in ("", *_SIDECAR_SUFFIXES)]
+    if not any(source.exists() for source in sources):
+        return None
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    target = backup_dir / f"{db_path.stem}-{now.strftime(_STAMP_FORMAT)}{db_path.suffix}"
+    copies: list[Path] = []
+    try:
+        for source in sources:
+            if source.exists():
+                copies.append(target.with_name(target.name + source.name.removeprefix(db_path.name)))
+                shutil.copy2(source, copies[-1])
+    except OSError:
+        for copy in copies:
+            copy.unlink(missing_ok=True)
+        raise
+    return target
+
+
+def restore_backup(backup_file: Path, db_path: Path, backup_dir: Path) -> Path | None:
+    """Replace the database with ``backup_file``, returning a copy of the replaced database files if there were any.
+
+    The server MUST be stopped. Raises ``sqlite3.DatabaseError`` and leaves the database untouched
+    when ``backup_file`` is not a valid SQLite database, and ``OSError`` when the replaced database
+    cannot be preserved. The replaced files are copied byte for byte, so a damaged database is kept too.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    staged = db_path.with_name(db_path.name + ".restoring")
+    try:
+        _copy_snapshot(backup_file, staged)
+        previous = _preserve_files(db_path, backup_dir, datetime.now(UTC))
+        for suffix in _SIDECAR_SUFFIXES:
+            db_path.with_name(db_path.name + suffix).unlink(missing_ok=True)
+        staged.replace(db_path)
+    finally:
+        staged.unlink(missing_ok=True)
+    return previous

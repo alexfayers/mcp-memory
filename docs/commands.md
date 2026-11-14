@@ -2,7 +2,7 @@
 
 `mcp-memory` with no arguments runs the server in the foreground. Run `mcp-memory <command> --help` for flags.
 
-`utils audit`, `utils eval`, `utils metrics`, `export` and `import` call the running server at `MCP_MEMORY_URL` and fail when it is not reachable. `utils migrate-db` works on the database file directly.
+`utils audit`, `utils eval`, `utils metrics`, `export` and `import` call the running server at `MCP_MEMORY_URL` and fail when it is not reachable. `utils migrate-db` and `utils restore` work on the database file directly.
 
 | Command | What it does |
 |---|---|
@@ -14,6 +14,7 @@
 | `utils eval` | Search ranking quality |
 | `utils metrics` | Tool usage report |
 | `export` / `import` | Back up or merge projects |
+| `utils restore` | Replace the database with a backup |
 | `utils migrate-db` | Move the database to the default path |
 
 ## install
@@ -82,6 +83,14 @@ mcp-memory import <input_path> --project a,b [--dry-run] # merge them in
 Export writes every live project to one JSON file: entities with type, status, timestamps and votes, observations with hashes and votes, relations, registered paths and groups. Soft-deleted entities and telemetry are left out.
 
 Import is additive and safe to re-run. New entities are inserted as-is. An existing entity of the same type keeps its status and timestamps, takes the higher vote score and gains any missing observations. A name that clashes with a different entity type is skipped and reported. Paths are not imported. The summary prints the source paths so you can register local ones with `set_metadata`.
+
+## restore
+
+```bash
+mcp-memory utils restore <backup_file>
+```
+
+Replaces the local database with a backup. Stop the server first. Backups are written to `MCP_MEMORY_BACKUP_DIR` as `<db name>-<UTC timestamp>.db`. Before the swap, the database being replaced is copied to the same directory, with its WAL files, even when it is damaged.
 
 ## migrate-db
 

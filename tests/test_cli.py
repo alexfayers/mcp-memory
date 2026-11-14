@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 import functools
 import io
 import json
 import os
 from pathlib import Path
+import socket
 from types import SimpleNamespace
 
 import pytest
 
-from mcp_memory import cli, config, dream
+from mcp_memory import backup, cli, config, dream
+from mcp_memory.storage import open_writable
 
 
 def _eval_since_help() -> str:
@@ -846,6 +849,48 @@ class TestCmdDream:
         assert out.count("vote p a -1") == 1
         assert out.count("rename_entity p b c") == 1
         assert out.index("vote p d -1") < out.index('"tier": "light"')
+
+
+class TestCmdRestore:
+    @pytest.fixture(autouse=True)
+    def _server_stopped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            monkeypatch.setenv("MCP_MEMORY_PORT", str(probe.getsockname()[1]))
+
+    @staticmethod
+    def _restore(backup_file: Path) -> None:
+        cli._cmd_restore(argparse.Namespace(backup_file=str(backup_file)))
+
+    def test_refuses_while_the_server_is_running(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snapshot = tmp_path / "snapshot.db"
+        snapshot.touch()
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            monkeypatch.setenv("MCP_MEMORY_PORT", str(listener.getsockname()[1]))
+            with pytest.raises(SystemExit):
+                self._restore(snapshot)
+        assert "running" in capsys.readouterr().err
+
+    def test_reports_a_current_database_that_cannot_be_preserved_without_blaming_the_backup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = tmp_path / "source.db"
+        open_writable(source).connection.close()
+        snapshot = backup.create_backup(source, tmp_path / "backups", datetime(2026, 1, 2, tzinfo=UTC))
+        config.get_db_path().write_bytes(b"damaged")
+        blocker = tmp_path / "blocker"
+        blocker.touch()
+        monkeypatch.setenv("MCP_MEMORY_BACKUP_DIR", str(blocker))
+        with pytest.raises(SystemExit):
+            self._restore(snapshot)
+        err = capsys.readouterr().err
+        assert "restore failed" in err
+        assert "not a valid" not in err
+        assert config.get_db_path().read_bytes() == b"damaged"
 
 
 class TestCmdRestart:
