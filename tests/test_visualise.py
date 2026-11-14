@@ -189,6 +189,17 @@ class TestVisualisePage:
         assert "if (d.name !== name) return false;" in resp.text
 
     @pytest.mark.anyio
+    async def test_zoom_out_limit_follows_the_graph_extent(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "updateZoomExtent" in resp.text
+        assert "scaleExtent([zoomMin, ZOOM_MAX])" in resp.text
+
+    @pytest.mark.anyio
+    async def test_zoom_out_is_unrestricted_while_the_layout_settles(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "simulation.alpha() > simulation.alphaMin()) zoomMin = ZOOM_FLOOR" in resp.text
+
+    @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert "applyDemotedRings" in resp.text
