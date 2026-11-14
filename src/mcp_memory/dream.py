@@ -1,7 +1,7 @@
 """Opt-in idle-time dream curation of the memory graph, run inside the mcp-memory server.
 
-While the server is idle, the scheduler spawns an ephemeral headless ``claude -p``
-agent that demotes (light tier) or merges and demotes (heavy tier) stale entities
+While the server is idle, the scheduler spawns an ephemeral headless ``pi -p`` (or, without
+pi installed, ``claude -p``) agent that demotes (light tier) or merges and demotes (heavy tier) stale entities
 through the mcp-memory tools. It never deletes anything.
 """
 
@@ -21,8 +21,10 @@ import time
 from typing import TYPE_CHECKING, TypedDict
 
 from . import activity, backup, dream_status
+from .atomic_write import write_json_atomic
 from .config import (
     get_backup_enabled,
+    get_dream_agent_dir,
     get_dream_enabled,
     get_dream_heavy_enabled,
     get_dream_heavy_idle_seconds,
@@ -33,9 +35,12 @@ from .config import (
     get_dream_idle_seconds,
     get_dream_max_votes,
     get_dream_model,
+    get_dream_pi_extensions,
+    get_dream_pi_model,
     get_dream_poll_seconds,
     get_dream_timeout,
     get_memory_url,
+    get_pi_agent_dir,
 )
 from .storage.operations.maintenance import GC_DOWNVOTE_FLOOR
 from .tool_names import MUTATING_TOOLS
@@ -52,8 +57,9 @@ class SpawnResult(TypedDict):
     """The outcome of an isolated agent spawn: findings plus the reported metrics.
 
     ``ok`` distinguishes a real result from a handled failure (whose message is
-    carried in ``text``). Metrics come from the ``claude -p`` JSON payload and are
-    None when the spawn failed or the payload omitted them.
+    carried in ``text``). Metrics come from the agent's output (the ``claude -p`` result
+    event, or the ``pi`` assistant messages) and are None when the spawn failed or the
+    output omitted them.
     """
 
     text: str
@@ -212,9 +218,21 @@ def _claude_bin() -> str | None:
     return shutil.which("claude")
 
 
-def load_dream_rules(claude_home: Path | None = None) -> str:
-    """Return the installed memory rules and memory-review skill, skipping any that are missing."""
-    home = claude_home or Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+def _pi_bin() -> str | None:
+    """Return the path to the pi CLI, or None if it is not on PATH."""
+    return shutil.which("pi")
+
+
+_PI_MODEL_SETTING = {False: "dreamModelLight", True: "dreamModelHeavy"}
+_PI_LINKED_FILES = ("auth.json", "models.json")
+
+
+def load_dream_rules(home: Path | None = None) -> str:
+    """Return the installed memory rules and memory-review skill under ``home``, skipping any that are missing.
+
+    ``home`` defaults to the Claude config directory.
+    """
+    home = home or Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     texts = [text for name in _RULE_FILES if (text := _read_rule(home / name))]
     return "\n\n".join([_RULES_PRECEDENCE, *texts]) if texts else ""
 
@@ -229,6 +247,100 @@ def _read_rule(path: Path) -> str:
         logger.warning("dream rule unreadable, skipping: %s", path)
         return ""
     return _FRONTMATTER.sub("", text, count=1).strip()
+
+
+def _read_json_object(path: Path) -> dict[str, object]:
+    """Return the JSON object in ``path``, or an empty dict if the file is missing or not a JSON object."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        logger.warning("dream agent file unreadable, ignoring: %s", path)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _prepare_pi_agent_dir(agent_dir: Path, user_dir: Path, memory_url: str) -> None:
+    """Create or repair the persistent pi dream agent directory, keeping the user's edits.
+
+    ``settings.json`` is only created when absent. ``mcp.json`` always gets the memory server's
+    ``http`` type, ``url`` and ``direct`` exposure without a stdio command, and its other keys and
+    servers are kept. ``auth.json`` and ``models.json`` link to the user's pi directory when that
+    holds them, unless the agent directory has its own file.
+    """
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    if not (agent_dir / "settings.json").exists():
+        write_json_atomic(agent_dir / "settings.json", {})
+    mcp_path = agent_dir / "mcp.json"
+    config = _read_json_object(mcp_path)
+    servers = config.get("mcpServers")
+    servers = servers if isinstance(servers, dict) else {}
+    current = servers.get("memory")
+    current = current if isinstance(current, dict) else {}
+    kept = {key: value for key, value in current.items() if key not in {"command", "args"}}
+    wanted = {**kept, "type": "http", "url": memory_url, "exposure": "direct"}
+    if current != wanted:
+        write_json_atomic(mcp_path, {**config, "mcpServers": {**servers, "memory": wanted}})
+    for name in _PI_LINKED_FILES:
+        link, target = agent_dir / name, user_dir / name
+        if target.exists() and (link.is_symlink() or not link.exists()) and link.resolve() != target.resolve():
+            link.unlink(missing_ok=True)
+            link.symlink_to(target)
+
+
+def _resolve_pi_model(*, heavy: bool, agent_dir: Path, user_dir: Path) -> str | None:
+    """Return the pi model for a tier: the environment, then the dream agent settings, then the user's pi default."""
+    from_env = get_dream_pi_model(heavy=heavy)
+    if from_env:
+        return from_env
+    from_settings = _read_json_object(agent_dir / "settings.json").get(_PI_MODEL_SETTING[heavy])
+    if isinstance(from_settings, str) and from_settings:
+        return from_settings
+    user = _read_json_object(user_dir / "settings.json")
+    model, provider = user.get("defaultModel"), user.get("defaultProvider")
+    if not isinstance(model, str) or not model:
+        return None
+    if isinstance(provider, str) and provider and not model.startswith(f"{provider}/"):
+        return f"{provider}/{model}"
+    return model
+
+
+def build_pi_command(
+    *,
+    pi_bin: str,
+    model: str,
+    prompt: str,
+    disallowed: tuple[str, ...],
+    extensions: tuple[str, ...],
+    rules: str,
+) -> list[str]:
+    """Build the headless ``pi -p`` argv for a dream spawn that sees only the memory MCP tools."""
+    memory_tools = f"{_MEMORY_TOOL_PREFIX}*"
+    return [
+        pi_bin,
+        "-p",
+        "--mode",
+        "json",
+        "--no-session",
+        "--model",
+        model,
+        "--no-extensions",
+        *(arg for path in extensions for arg in ("-e", path)),
+        "-e",
+        "builtin:mcp",
+        "--no-skills",
+        "--no-context-files",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-approve",
+        "--tools",
+        memory_tools,
+        "--exclude-tools",
+        ",".join(tool for tool in disallowed if tool.startswith(_MEMORY_TOOL_PREFIX)),
+        *(["--append-system-prompt", rules] if rules else []),
+        prompt,
+    ]
 
 
 def build_mcp_config(memory_url: str) -> dict[str, object]:
@@ -391,6 +503,69 @@ def _final_result_event(stdout: str) -> dict[str, object]:
     return final
 
 
+def _assistant_messages(stdout: str) -> list[dict[str, object]]:
+    """Return every completed assistant message of a ``pi --mode json`` transcript."""
+    messages: list[dict[str, object]] = []
+    for line in stdout.splitlines():
+        event = _parse_event(line)
+        message = event.get("message") if event and event.get("type") == "message_end" else None
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            messages.append(message)
+    return messages
+
+
+def _message_text(message: dict[str, object]) -> str:
+    """Join the text blocks of an assistant message."""
+    content = message.get("content")
+    blocks = content if isinstance(content, list) else []
+    return "".join(
+        str(block.get("text")) for block in blocks if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _sum_usage(messages: list[dict[str, object]], *path: str) -> float | None:
+    """Sum a numeric usage field over the messages, or None if none reports it."""
+    values: list[float] = []
+    for message in messages:
+        node: object = message.get("usage")
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if (value := _as_float(node)) is not None:
+            values.append(value)
+    return sum(values) if values else None
+
+
+def parse_pi_result(stdout: str, *, duration_ms: int) -> SpawnResult:
+    """Extract the distilled result and summed metrics from a ``pi --mode json`` transcript.
+
+    The result is the last assistant message. Pi reports usage per message, so the metrics
+    are summed over the assistant messages and ``duration_ms`` is the caller's wall clock.
+
+    Raises:
+        RuntimeError: if the transcript has no assistant message, or the last one ended in an error
+            or abort (an earlier error that pi retried past is not a failure) or carries no text.
+    """
+    messages = _assistant_messages(stdout)
+    if not messages:
+        raise RuntimeError("dream agent returned malformed output")
+    if messages[-1].get("stopReason") in {"error", "aborted"}:
+        raise RuntimeError("dream agent reported an error")
+    text = _message_text(messages[-1])
+    if not text.strip():
+        raise RuntimeError("dream agent returned no findings")
+    return {
+        "text": text,
+        "ok": True,
+        "duration_ms": duration_ms,
+        "num_turns": len(messages),
+        "cost_usd": _sum_usage(messages, "cost", "total"),
+        "input_tokens": _as_int(_sum_usage(messages, "input")),
+        "output_tokens": _as_int(_sum_usage(messages, "output")),
+        "cache_read_tokens": _as_int(_sum_usage(messages, "cacheRead")),
+        "cache_creation_tokens": _as_int(_sum_usage(messages, "cacheWrite")),
+    }
+
+
 def _parse_event(line: str) -> dict[str, object] | None:
     """Parse one stream-json line into an event dict, or None for a blank or non-event line."""
     try:
@@ -429,16 +604,23 @@ def _short_args(tool_input: object) -> str:
     return " ".join(parts)
 
 
-def _record_progress(line: str) -> None:
-    """Record every memory tool call in one stream-json line on the dream status."""
-    event = _parse_event(line)
-    message = event.get("message") if event else None
+def _tool_calls(event: dict[str, object]) -> list[tuple[object, object]]:
+    """Return the (tool name, arguments) of every tool call in one claude stream-json or pi json event."""
+    if event.get("type") == "tool_execution_start":
+        return [(event.get("toolName"), event.get("args"))]
+    message = event.get("message")
     content = message.get("content") if isinstance(message, dict) else None
-    for block in content if isinstance(content, list) else []:
-        name = block.get("name") if isinstance(block, dict) else None
-        if isinstance(name, str) and name.startswith(_MEMORY_TOOL_PREFIX) and block.get("type") == "tool_use":
+    blocks = content if isinstance(content, list) else []
+    return [(b.get("name"), b.get("input")) for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
+
+
+def _record_progress(line: str) -> None:
+    """Record every memory tool call in one agent output line on the dream status."""
+    event = _parse_event(line)
+    for name, tool_input in _tool_calls(event) if event else []:
+        if isinstance(name, str) and name.startswith(_MEMORY_TOOL_PREFIX):
             tool = name.removeprefix(_MEMORY_TOOL_PREFIX)
-            dream_status.record_progress(tool, _short_args(block.get("input")), mutating=tool in MUTATING_TOOLS)
+            dream_status.record_progress(tool, _short_args(tool_input), mutating=tool in MUTATING_TOOLS)
 
 
 async def _read_stream(proc: asyncio.subprocess.Process) -> tuple[str, bytes]:
@@ -539,10 +721,10 @@ def _remember_metrics(result: SpawnResult) -> str:
     return result["text"]
 
 
-def _parse_logging_rejection(stdout: str, model: str) -> SpawnResult:
+def _parse_logging_rejection(parse: Callable[[str], SpawnResult], stdout: str) -> SpawnResult:
     """Parse the agent transcript, logging its captured output before re-raising a rejection."""
     try:
-        return parse_dream_result(stdout, expected_model=model)
+        return parse(stdout)
     except RuntimeError:
         logger.exception("dream agent output rejected\nstdout: %s", stdout[-_LOGGED_OUTPUT_BYTES:])
         raise
@@ -565,22 +747,19 @@ async def _spawn_with_auth_fallback(
 async def _run_isolated_agent(
     build_command: Callable[[str, str, bool], list[str]],
     *,
+    claude_bin: str,
     model: str,
     timeout: float,
 ) -> SpawnResult:
-    """Spawn a hermetic headless agent and return its parsed result.
+    """Spawn a hermetic headless claude agent and return its parsed result.
 
-    Resolves the claude CLI, then spawns in a throwaway
+    Spawns in a throwaway
     tempdir holding the mcp-config and an isolated CLAUDE_CONFIG_DIR (no user
-    hooks). ``build_command`` receives the resolved claude binary and mcp-config
+    hooks). ``build_command`` receives the claude binary and mcp-config
     path and whether to run ``--bare``. A ``--bare`` run that fails to authenticate is retried
     once without it. All failures surface as an ``ok=False`` result whose message is in
     ``text``; the tempdir is always cleaned up.
     """
-    claude_bin = _claude_bin()
-    if not claude_bin:
-        return _failed_spawn("dream unavailable: claude CLI not found")
-
     work_dir = tempfile.mkdtemp(prefix="mcp-memory-dream-")
     work_path = Path(work_dir)
     config_path = work_path / "mcp-config.json"
@@ -594,54 +773,135 @@ async def _run_isolated_agent(
             env=build_spawn_env(str(isolated_config_dir)),
             timeout=timeout,
         )
-        return _parse_logging_rejection(stdout, model)
+        return _parse_logging_rejection(lambda out: parse_dream_result(out, expected_model=model), stdout)
     except RuntimeError as exc:
         return _failed_spawn(str(exc))
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-async def run_dream_pass() -> str:
-    """Run one downvote-only curation pass in a throwaway agent, returning its audit."""
-    model = get_dream_model()
+@dataclass(frozen=True)
+class PassSpec:
+    """What one dream pass asks of a backend: its tier, advisory operation cap and timeout."""
+
+    heavy: bool
+    limit: int
+    timeout: float
+
+    @property
+    def prompt(self) -> str:
+        """The tier's ritual prompt with its cap filled in."""
+        if self.heavy:
+            return HEAVY_DREAM_RITUAL.format(max_ops=self.limit, gc_floor=GC_DOWNVOTE_FLOOR)
+        return DREAM_RITUAL.format(max_votes=self.limit, gc_floor=GC_DOWNVOTE_FLOOR)
+
+    @property
+    def disallowed(self) -> tuple[str, ...]:
+        """The tier's denied tools."""
+        return HEAVY_DREAM_DISALLOWED_TOOLS if self.heavy else DREAM_DISALLOWED_TOOLS
+
+
+async def _run_claude_pass(claude_bin: str, spec: PassSpec) -> SpawnResult:
+    """Run one pass through ``claude -p``."""
+    model = get_dream_heavy_model() if spec.heavy else get_dream_model()
     rules = load_dream_rules()
-    result = await _run_isolated_agent(
-        lambda claude_bin, config_path, bare: build_dream_command(
+
+    def build_command(claude_bin: str, config_path: str, bare: bool) -> list[str]:
+        if spec.heavy:
+            return build_heavy_dream_command(
+                claude_bin=claude_bin,
+                model=model,
+                mcp_config_path=config_path,
+                max_ops=spec.limit,
+                rules=rules,
+                bare=bare,
+            )
+        return build_dream_command(
             claude_bin=claude_bin,
             model=model,
             mcp_config_path=config_path,
-            max_votes=get_dream_max_votes(),
+            max_votes=spec.limit,
             rules=rules,
             bare=bare,
-        ),
+        )
+
+    return await _run_isolated_agent(build_command, claude_bin=claude_bin, model=model, timeout=spec.timeout)
+
+
+async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
+    """Run one pass through ``pi -p`` in the persistent dream agent directory."""
+    agent_dir, user_dir = get_dream_agent_dir(), get_pi_agent_dir()
+    try:
+        _prepare_pi_agent_dir(agent_dir, user_dir, get_memory_url())
+    except OSError:
+        logger.exception("dream agent directory setup failed: %s", agent_dir)
+        return _failed_spawn("dream agent directory setup failed")
+    model = _resolve_pi_model(heavy=spec.heavy, agent_dir=agent_dir, user_dir=user_dir)
+    if model is None:
+        return _failed_spawn("dream unavailable: no pi model configured")
+    command = build_pi_command(
+        pi_bin=pi_bin,
         model=model,
-        timeout=get_dream_timeout(),
+        prompt=spec.prompt,
+        disallowed=spec.disallowed,
+        extensions=get_dream_pi_extensions(),
+        rules=load_dream_rules(user_dir),
     )
+    started = time.monotonic()
+    try:
+        stdout = await _spawn_agent(
+            command, env={**os.environ, "PI_CODING_AGENT_DIR": str(agent_dir)}, timeout=spec.timeout
+        )
+        return _parse_logging_rejection(
+            lambda out: parse_pi_result(out, duration_ms=round((time.monotonic() - started) * 1000)), stdout
+        )
+    except RuntimeError as exc:
+        return _failed_spawn(str(exc))
+
+
+@dataclass(frozen=True)
+class DreamBackend:
+    """A CLI that can run a dream pass: its binary and how it runs a ``PassSpec`` to a ``SpawnResult``."""
+
+    binary: str
+    run: Callable[[str, PassSpec], Awaitable[SpawnResult]]
+
+
+_NO_BACKEND = "pi CLI not found and claude CLI not found"
+
+
+def _select_backend() -> DreamBackend | None:
+    """Return the pi backend when pi is installed, else the claude backend, else None."""
+    if pi_bin := _pi_bin():
+        return DreamBackend(pi_bin, _run_pi_pass)
+    if claude_bin := _claude_bin():
+        return DreamBackend(claude_bin, _run_claude_pass)
+    return None
+
+
+async def _run_pass(spec: PassSpec) -> SpawnResult:
+    """Run one dream pass through the selected backend, as an ``ok=False`` result if none is installed."""
+    backend = _select_backend()
+    if backend is None:
+        return _failed_spawn(f"dream unavailable: {_NO_BACKEND}")
+    return await backend.run(backend.binary, spec)
+
+
+async def run_dream_pass() -> str:
+    """Run one downvote-only curation pass in a throwaway agent, returning its audit."""
+    result = await _run_pass(PassSpec(heavy=False, limit=get_dream_max_votes(), timeout=get_dream_timeout()))
     return _remember_metrics(result)
 
 
 async def run_heavy_dream_pass() -> str:
     """Run one merge-and-downvote heavy curation pass in a throwaway agent, returning its audit."""
-    model = get_dream_heavy_model()
     try:
         if get_backup_enabled():
             await asyncio.to_thread(backup.backup_database)
     except (OSError, sqlite3.Error):
         logger.exception("heavy dream backup failed")
         return "dream backup failed"
-    rules = load_dream_rules()
-    result = await _run_isolated_agent(
-        lambda claude_bin, config_path, bare: build_heavy_dream_command(
-            claude_bin=claude_bin,
-            model=model,
-            mcp_config_path=config_path,
-            max_ops=get_dream_heavy_max_ops(),
-            rules=rules,
-            bare=bare,
-        ),
-        model=model,
-        timeout=get_dream_heavy_timeout(),
-    )
+    result = await _run_pass(PassSpec(heavy=True, limit=get_dream_heavy_max_ops(), timeout=get_dream_heavy_timeout()))
     return _remember_metrics(result)
 
 
@@ -832,15 +1092,15 @@ def trigger_dream(tier: str) -> dict[str, object]:
     """Kick off a manual dream pass of ``tier`` as a background task.
 
     Runs regardless of the tier's enabled flag (that flag only gates the autonomous
-    scheduler), but still requires the claude CLI and respects the single-flight
+    scheduler), but still requires the pi or claude CLI and respects the single-flight
     guard. Returns ``{"started": bool, "reason": str}`` immediately - the pass itself
     runs in the background and the visualiser reflects it via the running indicator.
     """
     spec = _TIERS_BY_NAME.get(tier)
     if spec is None:
         return {"started": False, "reason": "unknown tier"}
-    if _claude_bin() is None:
-        return {"started": False, "reason": "claude CLI not found"}
+    if _select_backend() is None:
+        return {"started": False, "reason": _NO_BACKEND}
     if not _claim_dream():
         return {"started": False, "reason": "already running"}
     task = asyncio.create_task(_run_claimed(spec))
@@ -866,7 +1126,7 @@ async def _coordinator_loop() -> None:
 def start_coordinator() -> asyncio.Task[None] | None:
     """Snapshot tier config for the visualiser and start the dream coordinator if it can run.
 
-    The coordinator starts only when the claude CLI it would spawn is present AND at
+    The coordinator starts only when the pi or claude CLI it would spawn is present AND at
     least one tier is enabled; otherwise it would poll forever with every pass
     no-opping, so None is returned. The caller owns the returned task and cancels it
     on shutdown.
@@ -880,6 +1140,6 @@ def start_coordinator() -> asyncio.Task[None] | None:
             idle_threshold_seconds=spec.idle_getter(),
             poll_seconds=spec.poll_getter(),
         )
-    if _claude_bin() is None or not _enabled_tiers():
+    if _select_backend() is None or not _enabled_tiers():
         return None
     return asyncio.create_task(_coordinator_loop())

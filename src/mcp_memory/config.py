@@ -123,6 +123,41 @@ def get_dream_model() -> str:
     return os.environ.get("MCP_DREAM_MODEL") or _DEFAULT_DREAM_MODEL
 
 
+def get_dream_pi_model(*, heavy: bool) -> str | None:
+    """Return the pi model for a dream tier from the environment, or None to fall back to the agent settings.
+
+    Read from MCP_DREAM_PI_MODEL_LIGHT or MCP_DREAM_PI_MODEL_HEAVY, as a ``provider/id`` pattern pi accepts.
+    """
+    return os.environ.get("MCP_DREAM_PI_MODEL_HEAVY" if heavy else "MCP_DREAM_PI_MODEL_LIGHT") or None
+
+
+def get_dream_pi_extensions() -> tuple[str, ...]:
+    """Return the extension paths a dream pi spawn loads, e.g. the package providing the model's provider.
+
+    Read from MCP_DREAM_PI_EXTENSIONS (comma-separated), empty by default. Pi runs with extension
+    discovery off, so a provider that comes from an extension must be listed here.
+    """
+    raw = os.environ.get("MCP_DREAM_PI_EXTENSIONS", "")
+    return tuple(str(Path(path.strip()).expanduser()) for path in raw.split(",") if path.strip())
+
+
+def get_dream_agent_dir() -> Path:
+    """Return the persistent pi agent directory that dream spawns run in, created on demand.
+
+    MCP_DREAM_AGENT_DIR, else ``mcp-memory/dream-agent`` under XDG_CONFIG_HOME (default ``~/.config``).
+    """
+    explicit = os.environ.get("MCP_DREAM_AGENT_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    config_home = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
+    return Path(config_home).expanduser() / "mcp-memory" / "dream-agent"
+
+
+def get_pi_agent_dir() -> Path:
+    """Return the user's own pi agent directory: PI_CODING_AGENT_DIR, else ``~/.pi/agent``."""
+    return Path(os.environ.get("PI_CODING_AGENT_DIR") or "~/.pi/agent").expanduser()
+
+
 def get_dream_timeout() -> float:
     """Return the overall timeout for a single dream spawn."""
     return float(os.environ.get("MCP_DREAM_TIMEOUT", _DEFAULT_DREAM_TIMEOUT))

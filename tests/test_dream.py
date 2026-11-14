@@ -22,6 +22,12 @@ _MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 @pytest.fixture(autouse=True)
+def _no_pi(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hide the pi CLI so the claude backend is selected unless a test installs pi."""
+    monkeypatch.setattr(dream, "_pi_bin", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _reset_coordinator_state() -> None:
     """Reset the dream status marker and the coordinator state per test."""
     dream_status.clear()
@@ -514,7 +520,7 @@ class TestTriggerDream:
     def test_missing_claude_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream, "_claude_bin", lambda: None)
         result = dream.trigger_dream("light")
-        assert result == {"started": False, "reason": "claude CLI not found"}
+        assert result == {"started": False, "reason": "pi CLI not found and claude CLI not found"}
 
     def test_already_running_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream, "_claude_bin", lambda: "/usr/bin/claude")
@@ -999,3 +1005,120 @@ class TestRunHeavyDreamPass:
         monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
         result = asyncio.run(dream.run_heavy_dream_pass())
         assert "unexpected model" in result
+
+
+def _pi_message(text: str, *, stop_reason: str = "stop", cost: float = 0.01) -> str:
+    message = {
+        "role": "assistant",
+        "model": "m",
+        "stopReason": stop_reason,
+        "content": [{"type": "text", "text": text}],
+        "usage": {"input": 5, "output": 7, "cacheRead": 100, "cacheWrite": 20, "cost": {"total": cost}},
+    }
+    return json.dumps({"type": "message_end", "message": message})
+
+
+class TestPiBackend:
+    @pytest.fixture
+    def pi_dirs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+        agent_dir, user_dir = tmp_path / "dream-agent", tmp_path / "pi"
+        user_dir.mkdir()
+        monkeypatch.setattr(dream, "get_dream_agent_dir", lambda: agent_dir)
+        monkeypatch.setattr(dream, "get_pi_agent_dir", lambda: user_dir)
+        monkeypatch.delenv("MCP_DREAM_PI_MODEL_LIGHT", raising=False)
+        monkeypatch.delenv("MCP_DREAM_PI_MODEL_HEAVY", raising=False)
+        return agent_dir, user_dir
+
+    def test_prefers_pi_over_claude_and_returns_summed_telemetry(
+        self, monkeypatch: pytest.MonkeyPatch, pi_dirs: tuple[Path, Path]
+    ) -> None:
+        _, user_dir = pi_dirs
+        (user_dir / "settings.json").write_text(json.dumps({"defaultProvider": "prov", "defaultModel": "m1"}))
+        monkeypatch.setattr(dream, "_pi_bin", lambda: "/usr/bin/pi")
+        monkeypatch.setattr(dream, "_claude_bin", lambda: "/usr/bin/claude")
+        captured: dict[str, object] = {}
+
+        async def fake_spawn(command: list[str], *, env: dict[str, str] | None = None, timeout: float = 0) -> str:
+            captured["command"], captured["env"] = command, env
+            return "\n".join([_pi_message("working", cost=0.01), _pi_message("[p/e] - demoted", cost=0.02)])
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        assert asyncio.run(dream.run_dream_pass()) == "[p/e] - demoted"
+        command, env = cast("list[str]", captured["command"]), cast("dict[str, str]", captured["env"])
+        assert command[0] == "/usr/bin/pi"
+        assert command[command.index("--model") + 1] == "prov/m1"
+        assert env["PI_CODING_AGENT_DIR"] == str(pi_dirs[0])
+        metrics = dream._pass_metrics
+        assert metrics is not None
+        assert (metrics["num_turns"], metrics["input_tokens"], metrics["output_tokens"]) == (2, 10, 14)
+        assert (metrics["cache_read_tokens"], metrics["cache_creation_tokens"]) == (200, 40)
+        assert metrics["cost_usd"] == pytest.approx(0.03)
+
+    def test_model_comes_from_env_then_agent_settings_then_user_default(
+        self, monkeypatch: pytest.MonkeyPatch, pi_dirs: tuple[Path, Path]
+    ) -> None:
+        agent_dir, user_dir = pi_dirs
+        agent_dir.mkdir()
+        (user_dir / "settings.json").write_text(json.dumps({"defaultModel": "user-default"}))
+        resolve = lambda heavy: dream._resolve_pi_model(heavy=heavy, agent_dir=agent_dir, user_dir=user_dir)  # ruff: ignore[lambda-assignment]
+        assert resolve(False) == "user-default"
+        (agent_dir / "settings.json").write_text(json.dumps({"dreamModelLight": "from-settings"}))
+        assert resolve(False) == "from-settings"
+        assert resolve(True) == "user-default"
+        monkeypatch.setenv("MCP_DREAM_PI_MODEL_LIGHT", "from-env")
+        assert resolve(False) == "from-env"
+
+    def test_command_loads_only_memory_tools_and_denies_mutations(self) -> None:
+        light = dream.PassSpec(heavy=False, limit=7, timeout=1)
+        command = dream.build_pi_command(
+            pi_bin="pi", model="p/m", prompt="go", disallowed=light.disallowed, extensions=("/ext.ts",), rules="r"
+        )
+        assert command[-1] == "go"
+        assert command[command.index("--tools") + 1] == "mcp__memory__*"
+        assert command[command.index("--append-system-prompt") + 1] == "r"
+        assert command[command.index("-e") : command.index("-e") + 4] == ["-e", "/ext.ts", "-e", "builtin:mcp"]
+        excluded = command[command.index("--exclude-tools") + 1].split(",")
+        assert "mcp__memory__merge_entities" in excluded
+        assert "mcp__memory__vote" not in excluded
+        assert "Bash" not in excluded
+
+    def test_agent_dir_is_created_linked_and_keeps_user_edits(self, tmp_path: Path) -> None:
+        agent_dir, user_dir = tmp_path / "dream-agent", tmp_path / "pi"
+        user_dir.mkdir()
+        (user_dir / "auth.json").write_text("{}")
+        dream._prepare_pi_agent_dir(agent_dir, user_dir, "http://h/mcp")
+        assert json.loads((agent_dir / "mcp.json").read_text())["mcpServers"]["memory"]["exposure"] == "direct"
+        assert (agent_dir / "auth.json").resolve() == (user_dir / "auth.json").resolve()
+        assert not (agent_dir / "models.json").exists()
+        moved = tmp_path / "moved"
+        moved.mkdir()
+        (moved / "auth.json").write_text("{}")
+        dream._prepare_pi_agent_dir(agent_dir, moved, "http://h/mcp")
+        assert (agent_dir / "auth.json").resolve() == (moved / "auth.json").resolve()
+        (agent_dir / "settings.json").write_text('{"dreamModelHeavy": "mine"}')
+        (agent_dir / "mcp.json").write_text(
+            '{"mcpServers": {"memory": {"type": "stdio", "command": "x", "url": "http://old/mcp", "timeout": 5}}}'
+        )
+        dream._prepare_pi_agent_dir(agent_dir, user_dir, "http://h/mcp")
+        assert json.loads((agent_dir / "settings.json").read_text()) == {"dreamModelHeavy": "mine"}
+        memory = json.loads((agent_dir / "mcp.json").read_text())["mcpServers"]["memory"]
+        assert (memory["url"], memory["timeout"], memory["type"]) == ("http://h/mcp", 5, "http")
+        assert "command" not in memory
+
+    def test_error_stop_reason_fails_the_pass(self) -> None:
+        stdout = "\n".join([_pi_message("x"), _pi_message("", stop_reason="error")])
+        with pytest.raises(RuntimeError, match="reported an error"):
+            dream.parse_pi_result(stdout, duration_ms=1)
+
+    def test_an_error_that_pi_retried_past_is_not_a_failure(self) -> None:
+        stdout = "\n".join([_pi_message("", stop_reason="error"), _pi_message("[p/e] - demoted")])
+        assert dream.parse_pi_result(stdout, duration_ms=1)["text"] == "[p/e] - demoted"
+
+    def test_memory_tool_calls_are_recorded_from_pi_events(self) -> None:
+        dream_status.clear()
+        dream_status.record_pass_start("light")
+        event = {"type": "tool_execution_start", "toolName": "mcp__memory__vote", "args": {"project": "p", "name": "e"}}
+        TestSpawnProgress._spawn([json.dumps(event)])
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"]["calls"] == ["vote p e"]
