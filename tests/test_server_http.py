@@ -143,6 +143,22 @@ def test_telemetry_flush_route_reports_pending_calls(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.usefixtures("server_db")
+def test_telemetry_flush_route_succeeds_when_the_send_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def report(_self: server.telemetry.UsageTelemetry, up_to: int | None = None) -> None:
+        raise RuntimeError("send failed")
+
+    monkeypatch.setattr(server.telemetry.UsageTelemetry, "report", report)
+
+    async def scenario() -> int:
+        async with _serving() as url:
+            request = urllib.request.Request(url.removesuffix("/mcp") + "/api/telemetry/flush", method="POST")  # ruff: ignore[suspicious-url-open-usage]
+            with await asyncio.to_thread(urllib.request.urlopen, request) as response:  # ruff: ignore[suspicious-url-open-usage]
+                return int(response.status)
+
+    assert asyncio.run(scenario()) == 204
+
+
+@pytest.mark.usefixtures("server_db")
 def test_telemetry_loop_reports_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     threads: list[int] = []
     reported = threading.Event()

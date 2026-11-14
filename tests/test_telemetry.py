@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from llm_prompts import telemetry_core as core
 import pytest
 
-from mcp_memory import activity, dream, nudge_count, server, telemetry
+from mcp_memory import activity, dream, metrics, nudge_count, server, telemetry
 from mcp_memory.eval import clear_cache
 from mcp_memory.models import Relation
 from mcp_memory.nudge_count import NudgeKind
@@ -528,6 +528,19 @@ def test_a_tool_call_after_idle_marks_the_end_of_the_previous_batch(
     server._get_usage().report_when_due(0)
 
     assert sent[0]["properties"]["tools"]["search_nodes"]["ok"] == 1
+
+
+def test_a_failing_usage_hook_still_records_the_call(store: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(_self: telemetry.UsageTelemetry, _idle_seconds: float) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(server, "_db", store)
+    monkeypatch.setattr(server, "_usage", None)
+    monkeypatch.setattr(telemetry.UsageTelemetry, "note_call", fail)
+
+    server.search_nodes("proj", "x")
+
+    assert metrics.usage_report(store).total_calls == 1
 
 
 @pytest.fixture

@@ -48,7 +48,10 @@ logger = logging.getLogger(__name__)
 
 def _observe_call(name: str, arguments: dict[str, Any], result: dict[str, Any]) -> None:
     """Feed one tool call to the activity log, usefulness, metrics and telemetry."""
-    _get_usage().note_call(activity.idle_seconds())
+    try:
+        _get_usage().note_call(activity.idle_seconds())
+    except Exception:
+        logger.exception("Usage telemetry failed")
     record_tool(name, arguments, result)
     usefulness.observe(_get_db(), name, arguments, result)
     metrics.record(_get_db(), name, arguments, result)
@@ -1482,7 +1485,10 @@ def _get_usage() -> telemetry.UsageTelemetry:
 @mcp.custom_route("/api/telemetry/flush", methods=["POST"], include_in_schema=False)  # type: ignore[untyped-decorator]
 async def _telemetry_flush(_request: Request) -> Response:
     """Send the pending usage rollup now."""
-    await asyncio.to_thread(_get_usage().report)
+    try:
+        await asyncio.to_thread(_get_usage().report)
+    except Exception:
+        logger.exception("Usage telemetry failed")
     return Response(status_code=204)
 
 
