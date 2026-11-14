@@ -31,9 +31,12 @@ select:hover, button:hover { border-color: #58a6ff; }
 #panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #484f58; cursor: pointer; font-size: 18px; }
 svg { width: 100vw; height: 100vh; }
 .link { stroke-width: var(--link-px, 1px); }
+svg.labels-off .link-label, svg.gradual-labels .node:not(.labelled) text:not(.search-badge) { display: none; }
+svg.gradual-labels .node.labelled text:not(.search-badge) { font-size: var(--label-px); }
 .link-label { font-size: 9px; fill: #484f58; pointer-events: none; }
 .node circle { stroke-width: 1.5; cursor: pointer; }
 .node text { font-size: 10px; fill: #8b949e; pointer-events: none; }
+svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-weight: 600; fill: #c9d1d9; }
 .node.selected circle { stroke: #f0f6fc !important; stroke-width: 3; }
 .node.orphan circle { stroke: #f85149; stroke-dasharray: 4 2; }
 #legend { position: fixed; bottom: 12px; left: 12px; z-index: 10; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; font-size: 11px; }
@@ -253,14 +256,20 @@ const nodeLayer = g.append("g");
 
 let lastUserInteract = 0, refitView = false, refitTicks = 0;
 const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, FIT_MS = 600, REFIT_TICKS = 10, ZOOM_MIN = 0.2, ZOOM_MAX = 4, ZOOM_FIT_MARGIN = 0.9, ZOOM_FLOOR = 0.01;
+const LARGE_GRAPH_NODES = 500, LINK_LABEL_MIN_ZOOM = FOLLOW_SCALE, NODE_LABELS_MIN = 12, NODE_LABELS_MAX = 300, NODE_LABELS_HARD_MAX = 1000, PROJECT_LABELS_MAX = 60, LABEL_ALL_ZOOM = 2.5, LABEL_CELL_WIDTHS = 16, LABEL_CELL_HEIGHTS = 1.4, LABEL_CHAR_EM = 0.56;
 const LINK_COLOUR = "#6e7681", LINK_OPACITY = 0.55, LINK_SCREEN_PX = 1.25;
 let zoomMin = ZOOM_MIN, viewTransform = d3.zoomIdentity;
 const linkPx = () => LINK_SCREEN_PX / viewTransform.k;
 const updateLinkPx = () => svg.style("--link-px", `${linkPx()}px`);
+const largeGraph = () => nodes.length > LARGE_GRAPH_NODES;
+const linkLabelsHidden = () => largeGraph() && viewTransform.k < LINK_LABEL_MIN_ZOOM;
+let labelOrder = [], labelledIds = new Set(), heldLabels = new Set();
+const nodeClass = d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : "") + (d.entity_type === "project" ? " project-node" : "") + (labelledIds.has(d.id) ? " labelled" : "");
 const zoom = d3.zoom().scaleExtent([zoomMin, ZOOM_MAX]).on("zoom", e => {
   viewTransform = e.transform;
   g.attr("transform", e.transform);
   updateLinkPx();
+  updateSvgLabels();
   if (e.sourceEvent) { lastUserInteract = Date.now(); refitView = false; }
 });
 svg.call(zoom);
@@ -512,7 +521,7 @@ function render(data) {
   );
 
   nodeSel
-    .attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""))
+    .attr("class", nodeClass)
     .call(d3.drag().on("start", dragStart).on("drag", dragged).on("end", dragEnd))
     .on("click", (e, d) => { selectedNode = d.id; showPanel(d); updateSelection(); });
 
@@ -544,6 +553,8 @@ function render(data) {
 
   updateZoomExtent();
   if (refitView) fitView(nodes, 0);
+  labelOrder = nodes.slice().sort((a, b) => (relCount.get(b.id) || 0) - (relCount.get(a.id) || 0));
+  updateSvgLabels();
   applySearchRings();  // nodeSel was just rebuilt; reapply persistent search rings
   applyDemotedRings();  // flag nodes the dream (or a manual vote) demoted
 }
@@ -551,6 +562,53 @@ function render(data) {
 function settled() {
   updateZoomExtent();
   if (refitView) { refitView = false; fitView(nodes, FIT_MS); }
+  updateSvgLabels();
+}
+
+function viewOutcode() {
+  const w = width(), h = height(), t = viewTransform, pad = 40 + 2 * 25;
+  const x0 = -t.x / t.k - pad, y0 = -t.y / t.k - pad, x1 = (w - t.x) / t.k + pad, y1 = (h - t.y) / t.k + pad;
+  return (x, y) => (x < x0 ? 1 : x > x1 ? 2 : 0) | (y < y0 ? 4 : y > y1 ? 8 : 0);
+}
+
+function labelledNodes(outcode) {
+  const t = Math.max(0, Math.log(viewTransform.k / ZOOM_MIN)) / Math.log(ZOOM_MAX / ZOOM_MIN);
+  const limit = Math.round(NODE_LABELS_MIN * Math.pow(NODE_LABELS_MAX / NODE_LABELS_MIN, t));
+  const k = viewTransform.k, scale = Math.max(k, 1), cellW = LABEL_CELL_WIDTHS * 10 * scale / k, cellH = LABEL_CELL_HEIGHTS * 10 * scale / k;
+  const u = 10 / Math.min(k, 1), placed = new Map(), bucket = (x, y) => Math.floor(x / cellW) * 65536 + Math.floor(y / cellH);
+  const labelWidth = d => nodeRadius(d) + 3 + Math.min(d.name.length, 40) * LABEL_CHAR_EM * u;
+  const fits = d => {
+    for (let dx = -2; dx <= 2; dx++) for (let dy = -1; dy <= 1; dy++) {
+      if ((placed.get(bucket(d.x + dx * cellW, d.y + dy * cellH)) || []).some(e => Math.abs(e.y - d.y) < cellH && e.x < d.x + labelWidth(d) && d.x < e.x + labelWidth(e))) return false;
+    }
+    return true;
+  };
+  const pick = (candidates, max) => {
+    const out = [];
+    [true, false].forEach(wasHeld => candidates.forEach(d => {
+      if (heldLabels.has(d.id) !== wasHeld || out.length >= max || !fits(d)) return;
+      const key = bucket(d.x, d.y);
+      placed.set(key, (placed.get(key) || []).concat(d)); out.push(d);
+    }));
+    return out;
+  };
+  const inView = labelOrder.filter(d => !outcode(d.x, d.y)), isProject = d => d.entity_type === "project";
+  const projects = pick(inView.filter(isProject), PROJECT_LABELS_MAX), others = inView.filter(d => !isProject(d));
+  const extra = k > 1 ? Math.ceil(Math.min(1, (k - 1) / (LABEL_ALL_ZOOM - 1)) * Math.max(0, others.length - limit)) : 0;
+  const all = pick(others, Math.min(limit + extra, NODE_LABELS_HARD_MAX)).concat(projects);
+  heldLabels = new Set(all.map(d => d.id));
+  return all;
+}
+
+function updateSvgLabels() {
+  svg.classed("labels-off", linkLabelsHidden()).classed("gradual-labels", largeGraph())
+    .style("--label-px", largeGraph() ? `${10 / Math.min(viewTransform.k, 1)}px` : null);
+  if (!nodeSel) return;
+  const outcode = viewOutcode();
+  const next = new Set(largeGraph() ? labelledNodes(outcode).map(d => d.id) : []);
+  const changed = new Set([...labelledIds].filter(id => !next.has(id)).concat([...next].filter(id => !labelledIds.has(id))));
+  labelledIds = next;
+  if (changed.size) nodeSel.filter(d => changed.has(d.id)).classed("labelled", d => next.has(d.id));
 }
 
 function ticked() {
@@ -657,7 +715,7 @@ function renderObservations(d) {
 }
 
 function updateSelection() {
-  if (nodeSel) nodeSel.attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""));
+  if (nodeSel) nodeSel.attr("class", nodeClass);
 }
 
 document.getElementById("project").onchange = () => { refitView = true; currentData = null; if (simulation) { simulation.stop(); simulation = null; } updateControlsPath(); fetchGraph(); runSearch(); };
