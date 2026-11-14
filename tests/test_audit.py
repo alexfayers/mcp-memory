@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from mcp_memory import cli
+from mcp_memory import api, cli, server
 from mcp_memory.audit import audit_graph, propose_plan
 from mcp_memory.models import Relation
 from mcp_memory.storage.services.ids import (
@@ -589,22 +589,82 @@ class TestProposePlan:
         }
         assert step["needs_review"] is True
 
+    def test_unprefixed_with_existing_prefixed_twin_merges(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "foo", "entityType": "task", "observations": ["o"]},
+                {"name": "task/foo", "entityType": "task", "observations": ["p"]},
+            ],
+        )
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "merge_entities")
+        assert step["arguments"] == {"project": "proj", "source": "foo", "target": "task/foo"}
+        assert step["needs_review"] is False
+
+    @pytest.mark.parametrize("retire", ["archive", "soft_delete"])
+    def test_unusable_prefixed_twin_needs_review(self, store: Storage, retire: str) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "foo", "entityType": "task", "observations": ["o"]},
+                {"name": "task/foo", "entityType": "task", "observations": ["p"], "status": "resolved"},
+            ],
+        )
+        if retire == "archive":
+            store.entities.set_status("proj", "task/foo", "archived")
+        else:
+            soft_delete_store(store, "proj", "task/foo")
+        steps = self._plan(store, "proj")
+        assert [s["needs_review"] for s in steps if s.get("tool") in {"merge_entities", "rename_entity"}] == [True]
+
+    def test_orphan_feature_relinks_to_project_root(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "project/proj", "entityType": "project", "observations": ["o"]},
+                {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
+            ],
+        )
+        (step,) = (s for s in self._plan(store, "proj") if s.get("tool") == "create_relations")
+        assert (step["arguments"]["relations"][0]["target"], step["needs_review"]) == ("project/proj", False)  # type: ignore[index]
+
 
 class TestAuditCommand:
+    def test_apply_runs_safe_steps_and_archives_only_the_scoped_project(
+        self, live_server: None, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        db = server._get_db()
+        for project in ("proj", "other"):
+            db.entities.create(
+                project, [{"name": "task/old", "entityType": "task", "observations": ["o"], "status": "resolved"}]
+            )
+        db.entities.create("proj", [{"name": "Plain", "entityType": "task", "observations": ["o"]}])
+        with db.connection.transaction():
+            db.connection.write("UPDATE entities SET updated_at = datetime('now', '-400 days') WHERE name = 'task/old'")
+
+        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False, apply=True))
+
+        payload = json.loads(capsys.readouterr().out)
+        assert len(payload["applied"]) == 2
+        assert db.reads.get_entity("other", "task/old").status == "resolved"
+
+    def test_api_audit_defaults_apply_to_off(self, store: Storage) -> None:
+        assert api._audit(store, {"project": "proj", "plan": False})["project"] == "proj"
+
     def test_prints_the_report_for_the_scope(self, api: FakeApi, capsys: pytest.CaptureFixture[str]) -> None:
         api.results["audit"] = {"project": "proj", "orphans": []}
 
-        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False))
+        cli._cmd_audit(cli.argparse.Namespace(project="proj", all_projects=False, propose_plan=False, apply=False))
 
-        assert api.calls == [("audit", {"project": "proj", "plan": False})]
+        assert api.calls == [("audit", {"project": "proj", "plan": False, "apply": False})]
         assert json.loads(capsys.readouterr().out)["project"] == "proj"
 
     def test_propose_plan_asks_for_all_projects_plan(self, api: FakeApi) -> None:
         api.results["audit"] = {"steps": []}
 
-        cli._cmd_audit(cli.argparse.Namespace(project=None, all_projects=True, propose_plan=True))
+        cli._cmd_audit(cli.argparse.Namespace(project=None, all_projects=True, propose_plan=True, apply=False))
 
-        assert api.calls == [("audit", {"project": None, "plan": True})]
+        assert api.calls == [("audit", {"project": None, "plan": True, "apply": False})]
 
     def test_parser_requires_a_scope(self) -> None:
         parser = cli._build_parser()

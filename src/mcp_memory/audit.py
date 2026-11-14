@@ -93,6 +93,11 @@ _SCOPE_COUNT_SQL = (
 )
 
 
+_NAME_SQL = (
+    "SELECT p.name AS project, e.name, e.deleted_at IS NULL AND e.status IS NOT 'archived' AS usable "
+    "FROM entities e JOIN projects p ON e.project_id = p.id"
+)
+
 _OBSERVATION_SQL = (
     "SELECT e.id AS entity_id, e.name, p.name AS project, "
     "o.content, o.content_hash, o.vote_score, o.created_at "
@@ -390,9 +395,65 @@ def _oversized_step(entity: Finding, observations: list[Observation]) -> dict[st
     return _trim_step(entity, observations)
 
 
+def _alias_step(entity: Finding, names: dict[tuple[str, str], bool]) -> dict[str, object] | None:
+    """Merge into the prefixed twin or rename to it, needing review when the twin is archived or deleted."""
+    if entity["entity_type"] == "project":
+        return None
+    project, name = cast("str", entity["project"]), cast("str", entity["name"])
+    prefixed = f"{entity['entity_type']}/{name}"
+    twin_usable = names.get((project, prefixed))
+    if twin_usable:
+        return {
+            "tool": "merge_entities",
+            "arguments": {"project": project, "source": name, "target": prefixed},
+            "reason": f"name '{name}' lacks a standard type prefix and '{prefixed}' already exists",
+            "needs_review": False,
+        }
+    return {
+        "tool": "rename_entity",
+        "arguments": {"project": project, "old_name": name, "new_name": prefixed},
+        "reason": f"name '{name}' lacks a standard type prefix"
+        + ("" if twin_usable is None else f" and '{prefixed}' is archived or deleted"),
+        "needs_review": twin_usable is not None,
+    }
+
+
+def _orphan_step(entity: Finding, names: dict[tuple[str, str], bool]) -> dict[str, object]:
+    """Relink an orphan feature to its project root, else a needs-review placeholder relation."""
+    project, name = cast("str", entity["project"]), cast("str", entity["name"])
+    root = f"project/{project}"
+    unambiguous = name.startswith("feature/") and names.get((project, root), False)
+    return {
+        "tool": "create_relations",
+        "arguments": {
+            "project": project,
+            "relations": [
+                {
+                    "source": name,
+                    "relationType": "belongs-to" if unambiguous else "<RELATION_TBD>",
+                    "target": root if unambiguous else "<TARGET_TBD>",
+                }
+            ],
+        },
+        "reason": (
+            f"orphan feature belongs to its project root '{root}'"
+            if unambiguous
+            else "entity has no relations; link it to a feature/parent"
+        ),
+        "needs_review": not unambiguous,
+    }
+
+
 def propose_plan(db: Storage, report: dict[str, object]) -> list[dict[str, object]]:
     """Turn an audit report into a structured, deterministic list of fix-it tool calls."""
-    grouped = _load_observations(db, cast("str | None", report["project"]))
+    project = cast("str | None", report["project"])
+    grouped = _load_observations(db, project)
+    names = {
+        (row["project"], row["name"]): bool(row["usable"])
+        for row in db.connection.query_all(
+            _NAME_SQL + ("" if project is None else " WHERE p.name = ?"), () if project is None else (project,)
+        )
+    }
     steps: list[dict[str, object]] = []
 
     steps.extend(_merge_observation_steps(grouped))
@@ -402,19 +463,10 @@ def propose_plan(db: Storage, report: dict[str, object]) -> list[dict[str, objec
         if step is not None:
             steps.append(step)
 
-    steps.extend(
-        {
-            "tool": "rename_entity",
-            "arguments": {
-                "project": e["project"],
-                "old_name": e["name"],
-                "new_name": f"{e['entity_type']}/{e['name']}",
-            },
-            "reason": f"name '{e['name']}' lacks a standard type prefix",
-            "needs_review": False,
-        }
-        for e in _findings(report, "unprefixed")
-    )
+    alias_steps = ((e, _alias_step(e, names)) for e in _findings(report, "unprefixed"))
+    alias_pairs = [(e, step) for e, step in alias_steps if step is not None]
+    steps.extend(step for _, step in alias_pairs)
+    merged_away = {(e["project"], e["name"]) for e, step in alias_pairs if step["tool"] == "merge_entities"}
 
     steps.extend(
         {
@@ -437,22 +489,7 @@ def propose_plan(db: Storage, report: dict[str, object]) -> list[dict[str, objec
     )
 
     steps.extend(
-        {
-            "tool": "create_relations",
-            "arguments": {
-                "project": e["project"],
-                "relations": [
-                    {
-                        "source": e["name"],
-                        "relationType": "<RELATION_TBD>",
-                        "target": "<TARGET_TBD>",
-                    }
-                ],
-            },
-            "reason": "entity has no relations; link it to a feature/parent",
-            "needs_review": True,
-        }
-        for e in _findings(report, "orphans")
+        _orphan_step(e, names) for e in _findings(report, "orphans") if (e["project"], e["name"]) not in merged_away
     )
 
     steps.extend(

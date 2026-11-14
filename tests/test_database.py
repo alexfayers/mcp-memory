@@ -631,7 +631,7 @@ class TestArchiveStale:
         with store.connection.transaction():
             store.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'")
 
-        assert store.maintenance._archive_stale_entities(threshold_days=56) == 1
+        assert store.maintenance.archive_stale_entities(threshold_days=56) == [("proj", "e1")]
         assert store.reads.get_entity("proj", "e1").status == "archived"
 
     def test_keeps_resolved_entity_inside_threshold(self, store: Storage) -> None:
@@ -642,7 +642,7 @@ class TestArchiveStale:
         with store.connection.transaction():
             store.connection.write("UPDATE entities SET updated_at = datetime('now', '-10 days') WHERE name = 'e1'")
 
-        assert store.maintenance._archive_stale_entities(threshold_days=56) == 0
+        assert store.maintenance.archive_stale_entities(threshold_days=56) == []
         assert store.reads.get_entity("proj", "e1").status == "resolved"
 
     def test_keeps_entity_used_after_surfacing(self, store: Storage) -> None:
@@ -655,7 +655,7 @@ class TestArchiveStale:
         store.telemetry.record_surfaced("search_nodes", "q", "rid", [("proj", "e1", 1)])
         store.telemetry.register_use("proj", "e1", window_seconds=1800, max_per_day=3)
 
-        assert store.maintenance._archive_stale_entities(threshold_days=56) == 0
+        assert store.maintenance.archive_stale_entities(threshold_days=56) == []
         assert store.reads.get_entity("proj", "e1").status == "resolved"
 
     def test_keeps_surfaced_but_unused_entity_archivable(self, store: Storage) -> None:
@@ -667,7 +667,7 @@ class TestArchiveStale:
             store.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'")
         store.telemetry.record_surfaced("search_nodes", "q", "rid", [("proj", "e1", 1)])
 
-        assert store.maintenance._archive_stale_entities(threshold_days=56) == 1
+        assert store.maintenance.archive_stale_entities(threshold_days=56) == [("proj", "e1")]
         assert store.reads.get_entity("proj", "e1").status == "archived"
 
     def test_ignores_non_resolved_statuses(self, store: Storage) -> None:
@@ -678,7 +678,7 @@ class TestArchiveStale:
         with store.connection.transaction():
             store.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'")
 
-        assert store.maintenance._archive_stale_entities(threshold_days=56) == 0
+        assert store.maintenance.archive_stale_entities(threshold_days=56) == []
         assert store.reads.get_entity("proj", "e1").status == "in-progress"
 
     def test_ignores_soft_deleted_entity(self, store: Storage) -> None:
@@ -690,7 +690,7 @@ class TestArchiveStale:
             store.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'e1'")
         soft_delete_store(store, "proj", "e1")
 
-        assert store.maintenance._archive_stale_entities(threshold_days=56) == 0
+        assert store.maintenance.archive_stale_entities(threshold_days=56) == []
 
     def test_startup_archives_stale_entities_by_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_MEMORY_ARCHIVE_ENABLED", raising=False)

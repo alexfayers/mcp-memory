@@ -102,8 +102,12 @@ class Maintenance:
             )
         return cursor.rowcount
 
-    def _archive_stale_entities(self, threshold_days: int = ARCHIVE_STALE_DAYS) -> int:
-        """Auto-archive stale resolved entities, returning the number archived.
+    def archive_stale_entities(
+        self, threshold_days: int = ARCHIVE_STALE_DAYS, project: str | None = None
+    ) -> list[tuple[str, str]]:
+        """Auto-archive stale resolved entities, returning the archived (project, name) pairs.
+
+        Limited to one project when given, otherwise every project.
 
         Archives an entity that is all of: live, status='resolved', last updated more than
         threshold_days ago, and outside the never-evict set - entities ever acted on after
@@ -111,16 +115,21 @@ class Maintenance:
         retrieval bumps updated_at, so renewal is already handled elsewhere.
         """
         with self._conn.transaction():
-            cursor = self._conn.write(
-                "UPDATE entities SET status = 'archived' "
-                "WHERE deleted_at IS NULL "
-                "AND status = 'resolved' "
-                "AND updated_at < datetime('now', ?) "
-                "AND name NOT IN "
-                "(SELECT entity_name FROM surfaced_entities WHERE used_at IS NOT NULL)",
-                (days_ago(threshold_days),),
+            rows = self._conn.query_all(
+                "SELECT entities.id, p.name AS project, entities.name FROM entities "
+                "JOIN projects p ON entities.project_id = p.id "
+                "WHERE entities.deleted_at IS NULL "
+                "AND entities.status = 'resolved' "
+                "AND entities.updated_at < datetime('now', ?) "
+                "AND NOT EXISTS (SELECT 1 FROM surfaced_entities s WHERE s.used_at IS NOT NULL "
+                "AND s.project = p.name AND s.entity_name = entities.name)"
+                + ("" if project is None else " AND p.name = ?"),
+                (days_ago(threshold_days), *(() if project is None else (project,))),
             )
-        return cursor.rowcount
+            self._conn.write_many(
+                "UPDATE entities SET status = 'archived' WHERE id = ?", [(row["id"],) for row in rows]
+            )
+        return [(row["project"], row["name"]) for row in rows]
 
     def run_sweeps(self) -> None:
         """Run best-effort maintenance in a fixed order, tolerating lock contention.
@@ -148,4 +157,4 @@ class Maintenance:
         if get_purge_enabled():
             self._purge_soft_deleted(get_purge_grace_days())
         if get_archive_enabled():
-            self._archive_stale_entities()
+            self.archive_stale_entities()

@@ -551,9 +551,9 @@ def _api(op: str, args: dict[str, Any]) -> Any:
 
 
 def _cmd_audit(args: argparse.Namespace) -> None:
-    """Emit the read-only structural-hygiene report, or a proposed fix plan, as JSON on stdout."""
+    """Emit the structural-hygiene report or proposed fix plan as JSON, optionally applying the safe steps first."""
     project = None if args.all_projects else args.project
-    print(json.dumps(_api("audit", {"project": project, "plan": args.propose_plan}), indent=2))
+    print(json.dumps(_api("audit", {"project": project, "plan": args.propose_plan, "apply": args.apply}), indent=2))
 
 
 def _cmd_eval(args: argparse.Namespace) -> None:
@@ -950,6 +950,11 @@ def _add_utils_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         "--propose-plan",
         action="store_true",
         help="Emit a structured plan of tool calls to fix findings, instead of the raw report",
+    )
+    audit.add_argument(
+        "--apply",
+        action="store_true",
+        help="Implies --propose-plan: first apply the safe (needs_review false) steps and archive stale entities",
     )
 
     evaluate_cmd = utils_sub.add_parser(
