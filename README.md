@@ -37,7 +37,7 @@
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
 | src/mcp\_memory/storage/operations/\_\_init\_\_.py   |        0 |        0 |    100% |           |
 | src/mcp\_memory/storage/operations/maintenance.py    |       49 |        3 |     94% |123-124, 131 |
-| src/mcp\_memory/storage/operations/reads.py          |      148 |        0 |    100% |           |
+| src/mcp\_memory/storage/operations/reads.py          |      144 |        0 |    100% |           |
 | src/mcp\_memory/storage/operations/transfer.py       |      118 |        2 |     98% |  212, 237 |
 | src/mcp\_memory/storage/pure/\_\_init\_\_.py         |        0 |        0 |    100% |           |
 | src/mcp\_memory/storage/pure/ranking.py              |       18 |        0 |    100% |           |
@@ -55,7 +55,7 @@
 | src/mcp\_memory/storage/services/integrity.py        |       24 |        0 |    100% |           |
 | src/mcp\_memory/tool\_names.py                       |        3 |        0 |    100% |           |
 | src/mcp\_memory/usefulness.py                        |       72 |        2 |     97% |     50-51 |
-| src/mcp\_memory/visualise.py                         |      174 |        5 |     97% |149, 218-219, 292, 296 |
+| src/mcp\_memory/visualise.py                         |      184 |        5 |     97% |165, 234-235, 308, 312 |
 | tests/\_\_init\_\_.py                                |       43 |        1 |     98% |        85 |
 | tests/conftest.py                                    |       40 |        0 |    100% |           |
 | tests/eval/\_\_init\_\_.py                           |        0 |        0 |    100% |           |
@@ -104,8 +104,8 @@
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
-| tests/test\_visualise.py                             |      574 |        0 |    100% |           |
-| **TOTAL**                                            | **14733** |  **480** | **97%** |           |
+| tests/test\_visualise.py                             |      588 |        0 |    100% |           |
+| **TOTAL**                                            | **14753** |  **480** | **97%** |           |
 
 
 ## Setup coverage badge
