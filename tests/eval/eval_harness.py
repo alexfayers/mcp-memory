@@ -17,7 +17,7 @@ from tests.eval.eval_baseline import RANKING_METRICS
 if TYPE_CHECKING:
     import pytest
 
-    from mcp_memory.eval import EvalReport
+    from mcp_memory.eval import EvalReport, LabelledQuery
     from mcp_memory.storage import Storage
 
 _FIXTURE_NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -132,6 +132,7 @@ def measure_change(
     k: int = 10,
     now: datetime,
     require_mutation: bool = True,
+    ranker: Callable[[LabelledQuery], list[str]] | None = None,
 ) -> MeasuredChange:
     """Evaluate `db`, apply `mutate`, then re-evaluate with the same `k` and `now`.
 
@@ -139,13 +140,14 @@ def measure_change(
     by measuring at different instants. When `require_mutation` is true (the default), this
     snapshots `db.connection.total_changes` immediately either side of `mutate` and fails if it
     did not move; this only observes writes made through `db`'s own connection, so a mutation
-    that opens its own connection needs `require_mutation=False`.
+    that opens its own connection needs `require_mutation=False`. `ranker`, when given, scores
+    both sides on that ranking instead of the built-in search replay.
     """
-    before = evaluate(db, k=k, now=now)
+    before = evaluate(db, k=k, now=now, ranker=ranker)
     changes_before = db.connection.total_changes
     mutate(db)
     changes_after = db.connection.total_changes
-    after = evaluate(db, k=k, now=now)
+    after = evaluate(db, k=k, now=now, ranker=ranker)
     result = MeasuredChange(before=before, after=after)
     if require_mutation and changes_after == changes_before:
         raise AssertionError(f"mutate() made no changes on db's own connection\n{result.format()}")
