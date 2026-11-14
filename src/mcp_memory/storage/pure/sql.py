@@ -14,6 +14,11 @@ _RELATIVE_UNITS = {
     "mo": timedelta(days=30),
 }
 
+REVIVE_RELATION_ON_CONFLICT = (
+    "ON CONFLICT(source_id, target_id, relation_type_id) "
+    "DO UPDATE SET deleted_at = NULL WHERE relations.deleted_at IS NOT NULL"
+)
+
 
 def parse_date(value: str) -> str:
     """Parse a relative ('30m', '1h', '7d', '2w', '3mo') or ISO date/timestamp string to an

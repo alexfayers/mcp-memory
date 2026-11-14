@@ -213,10 +213,10 @@ def get_dream_heavy_max_ops() -> int:
 
 
 def get_purge_enabled() -> bool:
-    """Return whether soft-deleted entities are hard-purged past the grace window.
+    """Return whether soft-deleted entities, observations and relations are hard-purged past the grace window.
 
     Off by default so a normal boot (and every test database) never silently
-    hard-deletes a soft-deleted entity.
+    hard-deletes a soft-deleted row.
     """
     return os.environ.get("MCP_MEMORY_PURGE_ENABLED", "false").strip().lower() in _TRUTHY
 

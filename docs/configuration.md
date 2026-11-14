@@ -17,7 +17,7 @@ Environment variables. The server reads the first table. The hook plugin reads t
 | `MCP_MEMORY_SWEEP_INTERVAL_SECONDS` | How often the maintenance sweep runs. It also runs once at startup | `43200` |
 | `MCP_MEMORY_ARCHIVE_ENABLED` | Sweep: archive resolved entities untouched for 56+ days, unless they were surfaced and then acted on | `true` |
 | `MCP_MEMORY_GC_ENABLED` | Sweep: soft-delete orphan entities with a vote score of `-10` or lower and no live incoming relation | off |
-| `MCP_MEMORY_PURGE_ENABLED` | Sweep: hard-delete entities that were soft-deleted longer ago than the grace window. This is the only permanent removal of entities | off |
+| `MCP_MEMORY_PURGE_ENABLED` | Sweep: hard-delete entities, observations and relations that were soft-deleted longer ago than the grace window. This is the only permanent removal of them | off |
 | `MCP_MEMORY_PURGE_GRACE_DAYS` | Grace window for the purge | `30` |
 | `MCP_MEMORY_CALL_METRICS_ENABLED` | Record per-call usage metrics (byte sizes and option usage) | `true` |
 | `MCP_MEMORY_CALL_METRICS_RETENTION_DAYS` | Days to keep call metrics | `90` |
@@ -57,7 +57,7 @@ def memory_workspace_markers(self) -> frozenset[str]:
 Dreaming lets the server curate memory while it is idle. It runs a headless `pi -p` session when the `pi` CLI is on `PATH` and a pi model resolves, else a headless `claude -p` session, and the session connects back to the server. Both tiers are off by default. Set the variables, then run `mcp-memory setup-service` so the service picks them up.
 
 - Light (`MCP_DREAM_ENABLED`): downvotes stale, superseded or duplicated entities and observations. It never deletes.
-- Heavy (`MCP_DREAM_HEAVY_ENABLED`): does the same, and also merges duplicate entities (reversible soft-delete) and duplicate observations in one entity (not reversible).
+- Heavy (`MCP_DREAM_HEAVY_ENABLED`): does the same, and also merges duplicate entities (reversible soft-delete) and duplicate observations in one entity (restorable with `restore_observations`).
 
 Each tier fires once per idle session. At most one pass runs at a time. The visualiser's dream card has Run light and Run heavy buttons that start a pass on demand, whether or not the tier is enabled.
 

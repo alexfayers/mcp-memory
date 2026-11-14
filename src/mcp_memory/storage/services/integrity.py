@@ -27,7 +27,7 @@ def would_be_orphaned_by_relation_delete(
         "SELECT COUNT(*) AS n FROM relations r "
         "JOIN entities src ON r.source_id = src.id "
         "JOIN entities tgt ON r.target_id = tgt.id "
-        "WHERE src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
+        "WHERE r.deleted_at IS NULL AND src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
         "AND (r.source_id = ? OR r.target_id = ?) "
         "AND NOT (r.source_id = ? AND r.target_id = ? AND r.relation_type_id = ?)",
         (entity_id, entity_id, source_id, target_id, relation_type_id),
@@ -45,7 +45,7 @@ def orphaned_neighbors_if_entity_deleted(connection: Connection, entity_id: int)
         "JOIN entities tgt ON r.target_id = tgt.id "
         "JOIN entities other "
         "ON other.id = CASE WHEN r.source_id = ? THEN r.target_id ELSE r.source_id END "
-        "WHERE src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
+        "WHERE r.deleted_at IS NULL AND src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
         "AND (r.source_id = ? OR r.target_id = ?)",
         (entity_id, entity_id, entity_id),
     )
@@ -58,7 +58,7 @@ def orphaned_neighbors_if_entity_deleted(connection: Connection, entity_id: int)
             "SELECT COUNT(*) AS n FROM relations r "
             "JOIN entities src ON r.source_id = src.id "
             "JOIN entities tgt ON r.target_id = tgt.id "
-            "WHERE src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
+            "WHERE r.deleted_at IS NULL AND src.deleted_at IS NULL AND tgt.deleted_at IS NULL "
             "AND (r.source_id = ? OR r.target_id = ?) "
             "AND r.source_id != ? AND r.target_id != ?",
             (other_id, other_id, entity_id, entity_id),

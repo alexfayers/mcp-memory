@@ -222,6 +222,22 @@ class TestRelationViolationsAndStarGraph:
         stars = cast("list[dict[str, object]]", report["star_graph_tasks"])
         assert [v["task"] for v in stars] == ["task/t"]
 
+    def test_deleted_relation_is_not_reported(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "project/proj", "entityType": "project", "observations": ["o"]},
+                {"name": "feature/f", "entityType": "feature", "observations": ["o"]},
+                {"name": "task/t", "entityType": "task", "observations": ["o"]},
+            ],
+        )
+        store.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
+        _insert_relation_row(store, "proj", Relation("task/t", "project/proj", "belongs-to"))
+        store.relations.delete("proj", "task/t", "project/proj", "belongs-to")
+        report = audit_graph(store, "proj")
+        assert report["relation_violations"] == []
+        assert report["star_graph_tasks"] == []
+
     def test_task_implements_feature_is_neither(self, store: Storage) -> None:
         store.entities.create(
             "proj",

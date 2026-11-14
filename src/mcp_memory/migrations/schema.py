@@ -788,4 +788,40 @@ MIGRATIONS: list[Migration] = [
                   (SELECT entity_name FROM surfaced_entities WHERE used_at IS NOT NULL)""",
         ],
     ),
+    Migration(
+        version=28,
+        statements=[
+            # Soft-delete for observations and relations: deleted_at marks a row hidden from
+            # all reads while it stays restorable. NULL means live. Soft-deleted observations
+            # are excluded from the FTS projection, so the observation triggers ignore them
+            # and the repository refreshes the index around every deleted_at write. No FTS
+            # rebuild is needed: no soft-deleted rows exist when this runs.
+            "ALTER TABLE observations ADD COLUMN deleted_at DATETIME",
+            "ALTER TABLE relations ADD COLUMN deleted_at DATETIME",
+            "CREATE INDEX IF NOT EXISTS idx_observations_deleted_at ON observations(deleted_at)",
+            "CREATE INDEX IF NOT EXISTS idx_relations_deleted_at ON relations(deleted_at)",
+            "DROP TRIGGER IF EXISTS observations_fts_insert",
+            "DROP TRIGGER IF EXISTS observations_fts_delete",
+            "DROP TRIGGER IF EXISTS entities_updated_at_obs_delete",
+            """CREATE TRIGGER IF NOT EXISTS observations_fts_insert AFTER INSERT ON observations BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)
+                VALUES('delete', new.entity_id, (SELECT name FROM entities WHERE id = new.entity_id), (SELECT t.name FROM entity_types t JOIN entities e ON e.entity_type_id = t.id WHERE e.id = new.entity_id), COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_id = new.entity_id AND id != new.id AND deleted_at IS NULL), ''), (SELECT p.name FROM projects p JOIN entities e ON e.project_id = p.id WHERE e.id = new.entity_id));
+                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)
+                SELECT e.id, e.name, t.name, (SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_id = new.entity_id AND deleted_at IS NULL), p.name
+                FROM entities e JOIN entity_types t ON t.id = e.entity_type_id JOIN projects p ON p.id = e.project_id WHERE e.id = new.entity_id;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS observations_fts_delete AFTER DELETE ON observations
+                WHEN old.deleted_at IS NULL BEGIN
+                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)
+                VALUES('delete', old.entity_id, (SELECT name FROM entities WHERE id = old.entity_id), (SELECT t.name FROM entity_types t JOIN entities e ON e.entity_type_id = t.id WHERE e.id = old.entity_id), COALESCE((SELECT GROUP_CONCAT(content, ' ') || ' ' FROM observations WHERE entity_id = old.entity_id AND deleted_at IS NULL), '') || old.content, (SELECT p.name FROM projects p JOIN entities e ON e.project_id = p.id WHERE e.id = old.entity_id));
+                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)
+                SELECT e.id, e.name, t.name, COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_id = old.entity_id AND deleted_at IS NULL), ''), p.name
+                FROM entities e JOIN entity_types t ON t.id = e.entity_type_id JOIN projects p ON p.id = e.project_id WHERE e.id = old.entity_id;
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS entities_updated_at_obs_delete
+                AFTER DELETE ON observations WHEN old.deleted_at IS NULL BEGIN
+                UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = old.entity_id;
+            END""",
+        ],
+    ),
 ]

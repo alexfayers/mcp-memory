@@ -104,8 +104,7 @@ DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
 # The heavy tier may also merge duplicates (entities and observations), so vote,
 # merge_entities, and merge_observations are the memory tools it is NOT denied;
 # every delete_* (and restore_entity) stays denied, so removal is never hard -
-# merge only soft-deletes the folded-away source entity (observation merges hard-delete
-# the source observation, consistent with delete_observations).
+# merge only soft-deletes the folded-away source entity or observation.
 _HEAVY_TIER_ALLOWED = {"vote", "merge_entities", "merge_observations"}
 HEAVY_DREAM_DISALLOWED_TOOLS: tuple[str, ...] = (
     *(f"mcp__memory__{tool}" for tool in MUTATING_TOOLS if tool not in _HEAVY_TIER_ALLOWED),

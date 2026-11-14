@@ -54,12 +54,12 @@ _NEGATIVE_VOTE_THRESHOLD = -5
 _ENTITY_SQL = (
     "SELECT e.id AS entity_id, e.name, et.name AS entity_type, e.status, e.vote_score, "
     "p.name AS project, "
-    "(SELECT COUNT(*) FROM observations o WHERE o.entity_id = e.id) AS obs_count, "
+    "(SELECT COUNT(*) FROM observations o WHERE o.entity_id = e.id AND o.deleted_at IS NULL) AS obs_count, "
     "(SELECT COUNT(*) FROM relations r "
     "JOIN entities se ON r.source_id = se.id "
     "JOIN entities te ON r.target_id = te.id "
     "WHERE (r.source_id = e.id OR r.target_id = e.id) "
-    "AND se.deleted_at IS NULL AND te.deleted_at IS NULL) AS rel_count "
+    "AND r.deleted_at IS NULL AND se.deleted_at IS NULL AND te.deleted_at IS NULL) AS rel_count "
     "FROM entities e "
     "JOIN entity_types et ON e.entity_type_id = et.id "
     "JOIN projects p ON e.project_id = p.id "
@@ -77,7 +77,7 @@ _RELATION_SQL = (
     "JOIN entity_types tt ON te.entity_type_id = tt.id "
     "JOIN relation_types rt ON r.relation_type_id = rt.id "
     "JOIN projects sp ON se.project_id = sp.id "
-    "WHERE se.deleted_at IS NULL AND te.deleted_at IS NULL"
+    "WHERE r.deleted_at IS NULL AND se.deleted_at IS NULL AND te.deleted_at IS NULL"
 )
 
 _SCOPE_COUNT_SQL = (

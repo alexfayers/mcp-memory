@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mcp_memory.audit import audit_graph
 from mcp_memory.migrations.runner import run_migrations
 from mcp_memory.migrations.schema import MIGRATIONS, Migration, _relation_type_backfill_statements
 from mcp_memory.models import MAX_VOTE_MAGNITUDE, Entity, Observation, Relation
@@ -130,6 +131,13 @@ class TestDeleteProject:
         store.projects.set_paths("doomed", [str(repo)])
         store.projects.delete("doomed")
         assert store.projects.get_project_for_path(str(repo)) is None
+
+    def test_deletes_project_holding_only_soft_deleted_entities(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+        store.entities.delete("proj", "e1")
+        store.projects.delete("proj")
+        assert store.connection.query_one("SELECT 1 FROM projects WHERE name = 'proj'") is None
+        assert store.connection.query_one("SELECT 1 FROM entities") is None
 
     def test_missing_project_raises(self, store: Storage) -> None:
         with pytest.raises(ValueError, match="not found"):
@@ -332,6 +340,13 @@ class TestMigrations:
         for row in rows:
             assert row["content_hash"] == hash_observation(row["content"])
 
+    @staticmethod
+    def _rerun_archive_backfill(store: Storage) -> None:
+        v27 = next(m for m in MIGRATIONS if m.version == 27)
+        with store.connection.transaction():
+            for statement in v27.statements:
+                store.connection.write(statement)
+
     def test_archive_backfill_archives_resolved_stale_entities(self, store: Storage) -> None:
         store.entities.create(
             "proj",
@@ -352,9 +367,8 @@ class TestMigrations:
         )
         with store.connection.transaction():
             store.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'stale'")
-            store.connection.write("DELETE FROM schema_version WHERE version = 27")
 
-        run_migrations(store.connection.raw)
+        self._rerun_archive_backfill(store)
 
         assert store.reads.get_entity("proj", "stale").status == "archived"
         assert store.reads.get_entity("proj", "fresh").status == "resolved"
@@ -368,10 +382,8 @@ class TestMigrations:
             store.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'used'")
         store.telemetry.record_surfaced("search_nodes", "q", "rid", [("proj", "used", 1)])
         store.telemetry.register_use("proj", "used", window_seconds=1800, max_per_day=3)
-        with store.connection.transaction():
-            store.connection.write("DELETE FROM schema_version WHERE version = 27")
 
-        run_migrations(store.connection.raw)
+        self._rerun_archive_backfill(store)
 
         assert store.reads.get_entity("proj", "used").status == "resolved"
 
@@ -385,10 +397,9 @@ class TestMigrations:
         )
         with store.connection.transaction():
             store.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days')")
-            store.connection.write("DELETE FROM schema_version WHERE version = 27")
         assert store.connection.query_one("SELECT COUNT(*) FROM surfaced_entities")[0] == 0
 
-        run_migrations(store.connection.raw)
+        self._rerun_archive_backfill(store)
 
         assert store.reads.get_entity("proj", "a").status == "archived"
         assert store.reads.get_entity("proj", "b").status == "archived"
@@ -400,13 +411,10 @@ class TestMigrations:
         )
         with store.connection.transaction():
             store.connection.write("UPDATE entities SET updated_at = datetime('now', '-60 days') WHERE name = 'stale'")
-            store.connection.write("DELETE FROM schema_version WHERE version = 27")
-        run_migrations(store.connection.raw)
+        self._rerun_archive_backfill(store)
         assert store.reads.get_entity("proj", "stale").status == "archived"
 
-        with store.connection.transaction():
-            store.connection.write("DELETE FROM schema_version WHERE version = 27")
-        run_migrations(store.connection.raw)
+        self._rerun_archive_backfill(store)
 
         assert store.reads.get_entity("proj", "stale").status == "archived"
 
@@ -799,6 +807,9 @@ class TestDeleteEntityPurgesSurfaced:
         store.telemetry.record_surfaced("search_nodes", "q", "rid", [("proj", "task/a", 1)])
 
         store.entities.delete("proj", "task/a")
+        with store.connection.transaction():
+            store.connection.write("UPDATE entities SET deleted_at = datetime('now', '-40 days')")
+        store.maintenance._purge_soft_deleted(grace_days=30)
 
         count = store.connection.query_one("SELECT COUNT(*) AS n FROM surfaced_entities WHERE entity_name = 'task/a'")[
             "n"
@@ -1049,6 +1060,157 @@ class TestProjectGroups:
         assert sorted(store.projects.groups()) == [("a", "g1"), ("b", "g2")]
 
 
+class TestSoftDeleteObservations:
+    def test_deleted_observation_is_hidden_and_unsearchable(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["alpha", "beta"]}])
+        hashes = store.observations.delete("proj", "e1", ["alpha"])
+        assert hashes == [hash_observation("alpha")]
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["beta"]
+        assert store.reads.search("proj", "alpha")["entities"] == []
+        assert [e.name for e in store.reads.search("proj", "beta")["entities"]] == ["e1"]
+
+    def test_deleted_observation_cannot_be_voted_edited_or_merged(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
+        gone = store.observations.delete("proj", "e1", ["a"])[0]
+        kept = hash_observation("b")
+        with pytest.raises(ValueError, match="not found"):
+            store.observations.vote("proj", "e1", 1, content_hash=gone)
+        with pytest.raises(ValueError, match="not found"):
+            store.observations.edit("proj", "e1", gone, "new text")
+        with pytest.raises(ValueError, match="not found"):
+            store.observations.merge("proj", "e1", gone, kept)
+
+    def test_merged_source_is_hidden_unsearchable_and_restorable(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["alpha", "beta"]}])
+        source, target = hash_observation("alpha"), hash_observation("beta")
+        assert store.observations.merge("proj", "e1", source, target) == {"merged": 1, "hashes": [source]}
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["beta"]
+        assert store.reads.search("proj", "alpha")["entities"] == []
+        assert store.observations.restore("proj", "e1", hashes=[source]) == [source]
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["alpha", "beta"]
+        assert [e.name for e in store.reads.search("proj", "alpha")["entities"]] == ["e1"]
+
+    def test_restoring_merge_source_keeps_target_vote_bump(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["alpha", "beta"]}])
+        source, target = hash_observation("alpha"), hash_observation("beta")
+        store.observations.vote("proj", "e1", 3, content_hash=source)
+        store.observations.merge("proj", "e1", source, target)
+        store.observations.restore("proj", "e1", hashes=[source])
+        scores = {o.content: o.vote_score for o in store.reads.get_entity("proj", "e1").observations}
+        assert scores == {"alpha": 3, "beta": 3}
+
+    def test_deleted_observation_is_not_counted_by_audit(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [{"name": "task/big", "entityType": "task", "observations": ["a", "b", "c", "d"], "status": "resolved"}],
+        )
+        store.observations.delete("proj", "task/big", ["d"])
+        assert audit_graph(store, "proj")["oversized"] == []
+
+    def test_restored_observation_is_visible_and_searchable_again(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["alpha", "beta"]}])
+        deleted = store.observations.delete("proj", "e1", ["alpha"])
+        assert store.observations.restore("proj", "e1", hashes=deleted) == deleted
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["alpha", "beta"]
+        assert [e.name for e in store.reads.search("proj", "alpha")["entities"]] == ["e1"]
+
+    def test_restore_by_content_and_unknown_hash_restores_nothing(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["alpha", "beta"]}])
+        store.observations.delete("proj", "e1", ["alpha"])
+        assert store.observations.restore("proj", "e1", hashes=["deadbeef"]) == []
+        assert store.observations.restore("proj", "e1", observations=["alpha"]) == [hash_observation("alpha")]
+        with pytest.raises(ValueError, match="at least one"):
+            store.observations.restore("proj", "e1")
+
+    def test_restore_skips_hash_that_has_a_live_copy(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["alpha"]}])
+        store.observations.delete("proj", "e1", ["alpha"])
+        store.observations.add("proj", "e1", ["alpha"])
+        assert store.observations.restore("proj", "e1", observations=["alpha"]) == []
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["alpha"]
+
+
+class TestSoftDeleteRelations:
+    @staticmethod
+    def _seed(store: Storage) -> None:
+        names = ["x/f1", "x/f2", "x/f3"]
+        store.entities.create(
+            "proj",
+            [
+                {"name": "project/root", "entityType": "project", "observations": ["r"]},
+                {"name": "task/t", "entityType": "task", "observations": ["t"]},
+                *({"name": name, "entityType": "feature", "observations": [name]} for name in names),
+            ],
+        )
+        store.relations.create(
+            "proj",
+            [
+                *(Relation(source="task/t", target=name, relation_type="implements") for name in names),
+                *(Relation(source=name, target="project/root", relation_type="belongs-to") for name in names),
+            ],
+        )
+
+    @staticmethod
+    def _targets(store: Storage, name: str) -> list[str]:
+        return sorted(
+            r.target for r in store.reads.get_entity_with_relations("proj", name)["relations"] if r.source == name
+        )
+
+    def test_deleted_relation_is_hidden_from_reads(self, store: Storage) -> None:
+        self._seed(store)
+        store.relations.delete("proj", "task/t", "x/f1", "implements")
+        assert self._targets(store, "task/t") == ["x/f2", "x/f3"]
+
+    def test_deleted_relation_does_not_count_for_orphan_guard(self, store: Storage) -> None:
+        self._seed(store)
+        store.relations.delete("proj", "task/t", "x/f1", "implements")
+        store.relations.delete("proj", "task/t", "x/f2", "implements")
+        with pytest.raises(ValueError, match="would orphan"):
+            store.relations.delete("proj", "task/t", "x/f3", "implements")
+
+    def test_gc_treats_deleted_relation_as_gone(self, store: Storage) -> None:
+        self._seed(store)
+        store.relations.delete("proj", "task/t", "x/f1", "implements")
+        for _ in range(10):
+            store.entities.vote("proj", "x/f1", -1)
+        assert store.maintenance._gc_downvoted_orphans() == 1
+
+    def test_restored_relation_is_visible_again(self, store: Storage) -> None:
+        self._seed(store)
+        store.relations.delete("proj", "task/t", "x/f1", "implements")
+        store.relations.restore("proj", "task/t", "x/f1", "implements")
+        store.relations.restore("proj", "task/t", "x/f1", "implements")
+        assert self._targets(store, "task/t") == ["x/f1", "x/f2", "x/f3"]
+        with pytest.raises(ValueError, match="not found"):
+            store.relations.restore("proj", "task/t", "project/root", "implements")
+
+    def test_restore_accepts_a_relation_type_alias(self, store: Storage) -> None:
+        self._seed(store)
+        store.relations.create("proj", [Relation(source="task/t", target="x/f1", relation_type="blocked-by")])
+        store.relations.delete("proj", "task/t", "x/f1", "depends-on")
+        store.relations.restore("proj", "task/t", "x/f1", "blocked-by")
+        assert "x/f1" in self._targets(store, "task/t")
+
+    def test_create_relations_revives_deleted_relation(self, store: Storage) -> None:
+        self._seed(store)
+        store.relations.delete("proj", "task/t", "x/f1", "implements")
+        store.relations.create("proj", [Relation(source="task/t", target="x/f1", relation_type="implements")])
+        assert self._targets(store, "task/t") == ["x/f1", "x/f2", "x/f3"]
+
+    def test_merge_entities_skips_deleted_relation_and_revives_deleted_twin(self, store: Storage) -> None:
+        self._seed(store)
+        store.entities.create("proj", [{"name": "task/dup", "entityType": "task", "observations": ["d"]}])
+        store.relations.create(
+            "proj",
+            [Relation(source="task/dup", target=name, relation_type="implements") for name in ["x/f1", "x/f2", "x/f3"]],
+        )
+        store.relations.delete("proj", "task/dup", "x/f1", "implements")
+        store.relations.delete("proj", "task/t", "x/f1", "implements")
+        store.relations.delete("proj", "task/t", "x/f2", "implements")
+        store.entities.merge("proj", "task/dup", "task/t")
+        assert self._targets(store, "task/t") == ["x/f2", "x/f3"]
+
+
 class TestObservations:
     def test_add_observations(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
@@ -1067,14 +1229,13 @@ class TestObservations:
 
     def test_delete_observations(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}])
-        count = store.observations.delete("proj", "e1", ["b"])
-        assert count == 1
+        hashes = store.observations.delete("proj", "e1", ["b"])
+        assert hashes == [hash_observation("b")]
         assert obs_contents(store.reads.get_entity("proj", "e1")) == ["a", "c"]
 
     def test_delete_observations_nonexistent_content(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
-        count = store.observations.delete("proj", "e1", ["missing"])
-        assert count == 0
+        assert store.observations.delete("proj", "e1", ["missing"]) == []
 
     def test_delete_observations_missing_entity_raises(self, store: Storage) -> None:
         with pytest.raises(ValueError, match="not found"):
@@ -1087,13 +1248,13 @@ class TestObservations:
 
     def test_delete_observations_by_hash(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}])
-        count = store.observations.delete("proj", "e1", hashes=[hash_observation("b")])
-        assert count == 1
+        hashes = store.observations.delete("proj", "e1", hashes=[hash_observation("b")])
+        assert hashes == [hash_observation("b")]
         assert obs_contents(store.reads.get_entity("proj", "e1")) == ["a", "c"]
 
     def test_delete_observations_unknown_hash_deletes_nothing(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
-        assert store.observations.delete("proj", "e1", hashes=["deadbeef"]) == 0
+        assert store.observations.delete("proj", "e1", hashes=["deadbeef"]) == []
 
     def test_trim_observations_to_outcome(self, store: Storage) -> None:
         store.entities.create(
@@ -1101,8 +1262,10 @@ class TestObservations:
             [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c", "d", "e"]}],
         )
         keep = [hash_observation("a"), hash_observation("c")]
-        assert store.observations.trim_to_outcome("proj", "e1", keep) == 3
+        trimmed = store.observations.trim_to_outcome("proj", "e1", keep)
+        assert sorted(trimmed) == sorted(hash_observation(c) for c in "bde")
         assert obs_contents(store.reads.get_entity("proj", "e1")) == ["a", "c"]
+        assert store.reads.search("proj", "b")["entities"] == []
 
     def test_trim_observations_to_outcome_empty_keep_raises(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
@@ -1459,6 +1622,62 @@ class TestDeleteEntity:
         result = store.reads.get_entity_with_relations("proj", "b")
         assert len(result["relations"]) == 0
 
+    def test_restore_brings_back_what_was_live_at_delete_time(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": ["keep", "gone-earlier"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+                {"name": "c", "entityType": "project", "observations": ["z"]},
+            ],
+        )
+        store.relations.create(
+            "proj",
+            [
+                Relation(source="a", target="b", relation_type="belongs-to"),
+                Relation(source="a", target="c", relation_type="used-in"),
+            ],
+        )
+        store.observations.delete("proj", "a", ["gone-earlier"])
+        store.relations.delete("proj", "a", "c", "used-in")
+        store.entities.delete("proj", "a")
+        assert store.reads.get_entity_with_relations("proj", "b")["relations"] == []
+
+        store.entities.restore("proj", "a")
+
+        assert obs_contents(store.reads.get_entity("proj", "a")) == ["keep"]
+        assert [r.target for r in store.reads.get_entity_with_relations("proj", "a")["relations"]] == ["b"]
+        assert [e.name for e in store.reads.search("proj", "keep")["entities"]] == ["a"]
+
+    def test_deleted_entity_outgoing_edge_does_not_block_deleting_its_target(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        store.relations.create("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
+        store.entities.delete("proj", "a")
+        store.entities.delete("proj", "b")
+
+    def test_rename_and_move_into_a_soft_deleted_name_work(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "old", "entityType": "task", "observations": ["x"]},
+                {"name": "taken", "entityType": "task", "observations": ["t"]},
+            ],
+        )
+        store.entities.create("other", [{"name": "moving", "entityType": "task", "observations": ["m"]}])
+        store.entities.create("proj", [{"name": "moving", "entityType": "task", "observations": ["tomb"]}])
+        store.entities.delete("proj", "taken")
+        store.entities.delete("proj", "moving")
+        store.entities.rename("proj", "old", "taken")
+        store.entities.move_cross_scope("other", "proj", "moving")
+        assert obs_contents(store.reads.get_entity("proj", "taken")) == ["x"]
+        assert obs_contents(store.reads.get_entity("proj", "moving")) == ["m"]
+
     def test_delete_entity_blocked_when_it_would_orphan_neighbor(self, store: Storage) -> None:
         store.entities.create(
             "proj",
@@ -1574,6 +1793,18 @@ class TestTombstoneVisibility:
             )
         assert store.maintenance._purge_soft_deleted(grace_days=30) == 1
         assert get_entity_id(store.connection, "e1", project_id, include_deleted=True) is None
+
+    def test_purge_removes_soft_deleted_observations_past_grace_only(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["old", "recent", "kept"]}])
+        store.observations.delete("proj", "e1", ["old", "recent"])
+        with store.connection.transaction():
+            store.connection.write(
+                "UPDATE observations SET deleted_at = datetime('now', '-40 days') WHERE content = 'old'"
+            )
+        assert store.maintenance._purge_soft_deleted(grace_days=30) == 1
+        assert store.observations.restore("proj", "e1", observations=["old"]) == []
+        assert store.observations.restore("proj", "e1", observations=["recent"]) == [hash_observation("recent")]
+        assert [e.name for e in store.reads.search("proj", "kept")["entities"]] == ["e1"]
 
 
 class TestMergeEntities:
@@ -1722,7 +1953,8 @@ class TestMergeObservations:
     def test_source_is_removed(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["source", "target"]}])
         hashes = self._hashes(store, "proj", "e1")
-        assert store.observations.merge("proj", "e1", hashes["source"], hashes["target"]) == {"merged": 1}
+        merged = store.observations.merge("proj", "e1", hashes["source"], hashes["target"])
+        assert merged == {"merged": 1, "hashes": [hashes["source"]]}
         assert obs_contents(store.reads.get_entity("proj", "e1")) == ["target"]
 
     def test_unknown_source_hash_raises(self, store: Storage) -> None:

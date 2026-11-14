@@ -42,6 +42,8 @@ _KIND_BY_TOOL: dict[str, Kind] = {
     "create_relations": "create",
     "add_observations": "update",
     "delete_observations": "update",
+    "restore_observations": "update",
+    "restore_relation": "update",
     "edit_observation": "update",
     "set_entity_status": "update",
     "vote": "update",
@@ -173,6 +175,7 @@ def _names_from_write_kwargs(tool_name: str, kwargs: dict[str, Any]) -> list[str
     elif tool_name in {
         "add_observations",
         "delete_observations",
+        "restore_observations",
         "edit_observation",
         "merge_observations",
     } and kwargs.get("entityName"):
@@ -183,7 +186,7 @@ def _names_from_write_kwargs(tool_name: str, kwargs: dict[str, Any]) -> list[str
         for relation in kwargs.get("relations", []) or []:
             if isinstance(relation, dict):
                 names.extend(str(relation[k]) for k in ("source", "target") if relation.get(k))
-    elif tool_name == "delete_relation":
+    elif tool_name in {"delete_relation", "restore_relation"}:
         names.extend(str(kwargs[k]) for k in ("source", "target") if kwargs.get(k))
     return _dedup(names)
 
