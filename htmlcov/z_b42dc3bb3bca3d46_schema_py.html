@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_3352f668749ccb62_models_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.3">coverage.py v7.17.3</a>,
-            created at 2026-11-14 17:12 +0000
+            created at 2026-11-14 17:28 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -870,7 +870,43 @@
     <p class="run run2"><span class="n"><a id="t788" href="#t788">788</a></span><span class="t"><span class="str">                  (SELECT entity_name FROM surfaced_entities WHERE used_at IS NOT NULL)&quot;&quot;&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t789" href="#t789">789</a></span><span class="t">        <span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t790" href="#t790">790</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t791" href="#t791">791</a></span><span class="t"><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t791" href="#t791">791</a></span><span class="t">    <span class="nam">Migration</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t792" href="#t792">792</a></span><span class="t">        <span class="nam">version</span><span class="op">=</span><span class="num">28</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t793" href="#t793">793</a></span><span class="t">        <span class="nam">statements</span><span class="op">=</span><span class="op">[</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t794" href="#t794">794</a></span><span class="t">            <span class="com"># Soft-delete for observations and relations: deleted_at marks a row hidden from</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t795" href="#t795">795</a></span><span class="t">            <span class="com"># all reads while it stays restorable. NULL means live. Soft-deleted observations</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t796" href="#t796">796</a></span><span class="t">            <span class="com"># are excluded from the FTS projection, so the observation triggers ignore them</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t797" href="#t797">797</a></span><span class="t">            <span class="com"># and the repository refreshes the index around every deleted_at write. No FTS</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t798" href="#t798">798</a></span><span class="t">            <span class="com"># rebuild is needed: no soft-deleted rows exist when this runs.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t799" href="#t799">799</a></span><span class="t">            <span class="str">&quot;ALTER TABLE observations ADD COLUMN deleted_at DATETIME&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t800" href="#t800">800</a></span><span class="t">            <span class="str">&quot;ALTER TABLE relations ADD COLUMN deleted_at DATETIME&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t801" href="#t801">801</a></span><span class="t">            <span class="str">&quot;CREATE INDEX IF NOT EXISTS idx_observations_deleted_at ON observations(deleted_at)&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t802" href="#t802">802</a></span><span class="t">            <span class="str">&quot;CREATE INDEX IF NOT EXISTS idx_relations_deleted_at ON relations(deleted_at)&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t803" href="#t803">803</a></span><span class="t">            <span class="str">&quot;DROP TRIGGER IF EXISTS observations_fts_insert&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t804" href="#t804">804</a></span><span class="t">            <span class="str">&quot;DROP TRIGGER IF EXISTS observations_fts_delete&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t805" href="#t805">805</a></span><span class="t">            <span class="str">&quot;DROP TRIGGER IF EXISTS entities_updated_at_obs_delete&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t806" href="#t806">806</a></span><span class="t">            <span class="str">&quot;&quot;&quot;CREATE TRIGGER IF NOT EXISTS observations_fts_insert AFTER INSERT ON observations BEGIN</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t807" href="#t807">807</a></span><span class="t"><span class="str">                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t808" href="#t808">808</a></span><span class="t"><span class="str">                VALUES(&#x27;delete&#x27;, new.entity_id, (SELECT name FROM entities WHERE id = new.entity_id), (SELECT t.name FROM entity_types t JOIN entities e ON e.entity_type_id = t.id WHERE e.id = new.entity_id), COALESCE((SELECT GROUP_CONCAT(content, &#x27; &#x27;) FROM observations WHERE entity_id = new.entity_id AND id != new.id AND deleted_at IS NULL), &#x27;&#x27;), (SELECT p.name FROM projects p JOIN entities e ON e.project_id = p.id WHERE e.id = new.entity_id));</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t809" href="#t809">809</a></span><span class="t"><span class="str">                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t810" href="#t810">810</a></span><span class="t"><span class="str">                SELECT e.id, e.name, t.name, (SELECT GROUP_CONCAT(content, &#x27; &#x27;) FROM observations WHERE entity_id = new.entity_id AND deleted_at IS NULL), p.name</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t811" href="#t811">811</a></span><span class="t"><span class="str">                FROM entities e JOIN entity_types t ON t.id = e.entity_type_id JOIN projects p ON p.id = e.project_id WHERE e.id = new.entity_id;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t812" href="#t812">812</a></span><span class="t"><span class="str">            END&quot;&quot;&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t813" href="#t813">813</a></span><span class="t">            <span class="str">&quot;&quot;&quot;CREATE TRIGGER IF NOT EXISTS observations_fts_delete AFTER DELETE ON observations</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t814" href="#t814">814</a></span><span class="t"><span class="str">                WHEN old.deleted_at IS NULL BEGIN</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t815" href="#t815">815</a></span><span class="t"><span class="str">                INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t816" href="#t816">816</a></span><span class="t"><span class="str">                VALUES(&#x27;delete&#x27;, old.entity_id, (SELECT name FROM entities WHERE id = old.entity_id), (SELECT t.name FROM entity_types t JOIN entities e ON e.entity_type_id = t.id WHERE e.id = old.entity_id), COALESCE((SELECT GROUP_CONCAT(content, &#x27; &#x27;) || &#x27; &#x27; FROM observations WHERE entity_id = old.entity_id AND deleted_at IS NULL), &#x27;&#x27;) || old.content, (SELECT p.name FROM projects p JOIN entities e ON e.project_id = p.id WHERE e.id = old.entity_id));</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t817" href="#t817">817</a></span><span class="t"><span class="str">                INSERT INTO entities_fts(rowid, name, entity_type, observations, project)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t818" href="#t818">818</a></span><span class="t"><span class="str">                SELECT e.id, e.name, t.name, COALESCE((SELECT GROUP_CONCAT(content, &#x27; &#x27;) FROM observations WHERE entity_id = old.entity_id AND deleted_at IS NULL), &#x27;&#x27;), p.name</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t819" href="#t819">819</a></span><span class="t"><span class="str">                FROM entities e JOIN entity_types t ON t.id = e.entity_type_id JOIN projects p ON p.id = e.project_id WHERE e.id = old.entity_id;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t820" href="#t820">820</a></span><span class="t"><span class="str">            END&quot;&quot;&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t821" href="#t821">821</a></span><span class="t">            <span class="str">&quot;&quot;&quot;CREATE TRIGGER IF NOT EXISTS entities_updated_at_obs_delete</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t822" href="#t822">822</a></span><span class="t"><span class="str">                AFTER DELETE ON observations WHEN old.deleted_at IS NULL BEGIN</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t823" href="#t823">823</a></span><span class="t"><span class="str">                UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = old.entity_id;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t824" href="#t824">824</a></span><span class="t"><span class="str">            END&quot;&quot;&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t825" href="#t825">825</a></span><span class="t">        <span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t826" href="#t826">826</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t827" href="#t827">827</a></span><span class="t"><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -880,7 +916,7 @@
             <a class="nav" href="z_3352f668749ccb62_models_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.3">coverage.py v7.17.3</a>,
-            created at 2026-11-14 17:12 +0000
+            created at 2026-11-14 17:28 +0000
         </p>
     </div>
 </footer>
