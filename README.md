@@ -6,12 +6,12 @@
 |----------------------------------------------------- | -------: | -------: | ------: | --------: |
 | src/mcp\_memory/\_\_init\_\_.py                      |        0 |        0 |    100% |           |
 | src/mcp\_memory/activity.py                          |      113 |        3 |     97% |147-148, 198 |
-| src/mcp\_memory/api.py                               |       90 |       10 |     89% |62, 65, 93-94, 121-122, 131, 158, 162-163 |
+| src/mcp\_memory/api.py                               |       97 |        8 |     92% |63, 66, 94-95, 138, 165, 169-170 |
 | src/mcp\_memory/api\_client.py                       |       22 |        3 |     86% | 27, 31-32 |
 | src/mcp\_memory/atomic\_write.py                     |       16 |        3 |     81% |     20-22 |
-| src/mcp\_memory/audit.py                             |      144 |        0 |    100% |           |
+| src/mcp\_memory/audit.py                             |      164 |        1 |     99% |       401 |
 | src/mcp\_memory/backup.py                            |       99 |        4 |     96% |   130-133 |
-| src/mcp\_memory/cli.py                               |      649 |      121 |     81% |88, 183, 212-217, 235-248, 253-262, 271, 283, 298, 354-358, 363-374, 486-487, 494-495, 500-502, 506-508, 526-527, 534-535, 539-541, 616-618, 639, 655-656, 678-679, 682-685, 691-694, 700-703, 761-762, 796-797, 832-833, 860-869, 877-879, 897-898, 922-924, 1071, 1073, 1075, 1079-1081, 1102, 1104, 1106, 1109-1120 |
+| src/mcp\_memory/cli.py                               |      650 |      121 |     81% |88, 183, 212-217, 235-248, 253-262, 271, 283, 298, 354-358, 363-374, 486-487, 494-495, 500-502, 506-508, 526-527, 534-535, 539-541, 616-618, 639, 655-656, 678-679, 682-685, 691-694, 700-703, 761-762, 796-797, 832-833, 860-869, 877-879, 897-898, 922-924, 1076, 1078, 1080, 1084-1086, 1107, 1109, 1111, 1114-1125 |
 | src/mcp\_memory/config.py                            |      135 |        7 |     95% |149-153, 158, 265 |
 | src/mcp\_memory/dedupe.py                            |       35 |        1 |     97% |        42 |
 | src/mcp\_memory/dream.py                             |      461 |       18 |     96% |246-248, 258-260, 560, 565, 609, 659, 768-769, 870-872, 877, 898-899 |
@@ -30,13 +30,14 @@
 | src/mcp\_memory/models.py                            |       46 |        0 |    100% |           |
 | src/mcp\_memory/path\_resolver.py                    |       22 |        1 |     95% |        15 |
 | src/mcp\_memory/payload.py                           |       12 |        0 |    100% |           |
+| src/mcp\_memory/plan\_apply.py                       |       39 |        1 |     97% |        40 |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
 | src/mcp\_memory/server.py                            |      575 |       38 |     93% |61-62, 484, 494, 530, 543, 599-601, 605, 679-680, 710-711, 719, 727, 739-740, 802-803, 817-818, 1011-1012, 1032, 1053-1058, 1150, 1193-1194, 1248-1249, 1480, 1484 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
 | src/mcp\_memory/storage/operations/\_\_init\_\_.py   |        0 |        0 |    100% |           |
-| src/mcp\_memory/storage/operations/maintenance.py    |       52 |        3 |     94% |141-142, 149 |
+| src/mcp\_memory/storage/operations/maintenance.py    |       53 |        3 |     94% |150-151, 158 |
 | src/mcp\_memory/storage/operations/reads.py          |      144 |        0 |    100% |           |
 | src/mcp\_memory/storage/operations/transfer.py       |      119 |        2 |     98% |  215, 240 |
 | src/mcp\_memory/storage/pure/\_\_init\_\_.py         |        0 |        0 |    100% |           |
@@ -82,7 +83,7 @@
 | tests/naming\_check.py                               |      105 |      105 |      0% |    12-162 |
 | tests/test\_activity.py                              |      149 |        0 |    100% |           |
 | tests/test\_api\_client.py                           |       47 |        0 |    100% |           |
-| tests/test\_audit.py                                 |      272 |        0 |    100% |           |
+| tests/test\_audit.py                                 |      302 |        0 |    100% |           |
 | tests/test\_backup.py                                |      140 |        0 |    100% |           |
 | tests/test\_cli.py                                   |      657 |        2 |     99% |   70, 263 |
 | tests/test\_config.py                                |      173 |        0 |    100% |           |
@@ -96,6 +97,7 @@
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_path\_resolver.py                        |       41 |        2 |     95% |     56-57 |
 | tests/test\_payload.py                               |       68 |        0 |    100% |           |
+| tests/test\_plan\_apply.py                           |       27 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
 | tests/test\_server.py                                |      947 |        1 |     99% |      1619 |
@@ -105,7 +107,7 @@
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      656 |        0 |    100% |           |
-| **TOTAL**                                            | **15269** |  **476** | **97%** |           |
+| **TOTAL**                                            | **15394** |  **476** | **97%** |           |
 
 
 ## Setup coverage badge
