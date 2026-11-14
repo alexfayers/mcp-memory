@@ -123,6 +123,14 @@ _ENABLE_TOOL_SEARCH = "false"
 # mutating ones) with no hooks of any kind.
 AGENT_SETTINGS: dict[str, object] = {"permissions": {"allow": ["mcp__memory__*"]}}
 
+# ``--bare`` skips CLAUDE.md and every built-in extra, so the dream rules are appended to the
+# system prompt from the files llm-prompts installs under the Claude config directory.
+_RULE_FILES = ("rules/memory.md", "rules/memory-read.md", "skills/memory-review/SKILL.md")
+_FRONTMATTER = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
+_RULES_PRECEDENCE = "Background memory rules follow. Your task prompt overrides them wherever they conflict."
+# A ``--bare`` run reads Anthropic credentials only from ANTHROPIC_API_KEY.
+_AUTH_FAILURE = re.compile(r"not logged in|invalid api key", re.IGNORECASE)
+
 DREAM_RITUAL = (
     "You are a memory curation agent grooming a knowledge graph while it is idle, "
     "with access to the mcp__memory__* tools. "
@@ -201,6 +209,25 @@ def _claude_bin() -> str | None:
     return shutil.which("claude")
 
 
+def load_dream_rules(claude_home: Path | None = None) -> str:
+    """Return the installed memory rules and memory-review skill, skipping any that are missing."""
+    home = claude_home or Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    texts = [text for name in _RULE_FILES if (text := _read_rule(home / name))]
+    return "\n\n".join([_RULES_PRECEDENCE, *texts]) if texts else ""
+
+
+def _read_rule(path: Path) -> str:
+    """Return a rule file's text without its frontmatter, or an empty string if it is missing or unreadable."""
+    if not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        logger.warning("dream rule unreadable, skipping: %s", path)
+        return ""
+    return _FRONTMATTER.sub("", text, count=1).strip()
+
+
 def build_mcp_config(memory_url: str) -> dict[str, object]:
     """Build the --mcp-config payload pointing the spawned agent at mcp-memory only."""
     return {"mcpServers": {"memory": {"type": "http", "url": memory_url}}}
@@ -213,14 +240,24 @@ def _build_curation_command(
     mcp_config_path: str,
     prompt: str,
     disallowed: tuple[str, ...],
+    rules: str,
+    bare: bool,
 ) -> list[str]:
-    """Build the headless ``claude -p`` argv shared by both dream curation tiers."""
+    """Build the headless ``claude -p`` argv shared by both dream curation tiers.
+
+    Every spawn drops the built-in tools. ``bare`` also drops the built-in skills, plugins and
+    CLAUDE.md, and so needs the memory permissions passed as ``--settings``.
+    """
     return [
         claude_bin,
         "-p",
         prompt,
         "--model",
         model,
+        "--tools",
+        "",
+        *(["--bare", "--settings", json.dumps(AGENT_SETTINGS)] if bare else []),
+        *(["--append-system-prompt", rules] if rules else []),
         "--mcp-config",
         mcp_config_path,
         "--strict-mcp-config",
@@ -238,6 +275,8 @@ def build_dream_command(
     model: str,
     mcp_config_path: str,
     max_votes: int,
+    rules: str = "",
+    bare: bool = True,
 ) -> list[str]:
     """Build the headless ``claude -p`` argv for a downvote-only dream curation spawn."""
     return _build_curation_command(
@@ -246,6 +285,8 @@ def build_dream_command(
         mcp_config_path=mcp_config_path,
         prompt=DREAM_RITUAL.format(max_votes=max_votes, gc_floor=GC_DOWNVOTE_FLOOR),
         disallowed=DREAM_DISALLOWED_TOOLS,
+        rules=rules,
+        bare=bare,
     )
 
 
@@ -255,6 +296,8 @@ def build_heavy_dream_command(
     model: str,
     mcp_config_path: str,
     max_ops: int,
+    rules: str = "",
+    bare: bool = True,
 ) -> list[str]:
     """Build the headless ``claude -p`` argv for a merge-and-downvote heavy curation spawn."""
     return _build_curation_command(
@@ -263,6 +306,8 @@ def build_heavy_dream_command(
         mcp_config_path=mcp_config_path,
         prompt=HEAVY_DREAM_RITUAL.format(max_ops=max_ops, gc_floor=GC_DOWNVOTE_FLOOR),
         disallowed=HEAVY_DREAM_DISALLOWED_TOOLS,
+        rules=rules,
+        bare=bare,
     )
 
 
@@ -410,6 +455,20 @@ async def _read_stream(proc: asyncio.subprocess.Process) -> tuple[str, bytes]:
         stderr.cancel()
 
 
+def _is_auth_failure(stdout: str, stderr: str) -> bool:
+    """Return whether the agent's stderr or an error result event reports a failed authentication."""
+    errors = [stderr]
+    for line in stdout.splitlines():
+        event = _parse_event(line)
+        if event is not None and event.get("type") == "result" and event.get("is_error"):
+            errors.append(str(event.get("result")))
+    return any(_AUTH_FAILURE.search(error) for error in errors)
+
+
+class DreamAuthError(RuntimeError):
+    """The dream agent exited because it could not authenticate."""
+
+
 async def _spawn_agent(
     command: list[str],
     *,
@@ -441,6 +500,8 @@ async def _spawn_agent(
             stderr.decode(errors="replace")[-_LOGGED_OUTPUT_BYTES:],
             stdout[-_LOGGED_OUTPUT_BYTES:],
         )
+        if _is_auth_failure(stdout, stderr.decode(errors="replace")):
+            raise DreamAuthError("dream agent failed to authenticate")
         raise RuntimeError("dream agent exited with an error")
     return stdout
 
@@ -484,8 +545,22 @@ def _parse_logging_rejection(stdout: str, model: str) -> SpawnResult:
         raise
 
 
+async def _spawn_with_auth_fallback(
+    build_command: Callable[[bool], list[str]],
+    *,
+    env: dict[str, str],
+    timeout: float,
+) -> str:
+    """Spawn the ``--bare`` agent, retrying once without ``--bare`` if it fails to authenticate."""
+    try:
+        return await _spawn_agent(build_command(True), env=env, timeout=timeout)
+    except DreamAuthError:
+        logger.warning("dream --bare run failed to authenticate, retrying without --bare")
+        return await _spawn_agent(build_command(False), env=env, timeout=timeout)
+
+
 async def _run_isolated_agent(
-    build_command: Callable[[str, str], list[str]],
+    build_command: Callable[[str, str, bool], list[str]],
     *,
     model: str,
     timeout: float,
@@ -495,7 +570,8 @@ async def _run_isolated_agent(
     Resolves the claude CLI, then spawns in a throwaway
     tempdir holding the mcp-config and an isolated CLAUDE_CONFIG_DIR (no user
     hooks). ``build_command`` receives the resolved claude binary and mcp-config
-    path. All failures surface as an ``ok=False`` result whose message is in
+    path and whether to run ``--bare``. A ``--bare`` run that fails to authenticate is retried
+    once without it. All failures surface as an ``ok=False`` result whose message is in
     ``text``; the tempdir is always cleaned up.
     """
     claude_bin = _claude_bin()
@@ -510,8 +586,11 @@ async def _run_isolated_agent(
         config_path.write_text(json.dumps(build_mcp_config(get_memory_url())), encoding="utf-8")
         isolated_config_dir.mkdir()
         (isolated_config_dir / "settings.json").write_text(json.dumps(AGENT_SETTINGS), encoding="utf-8")
-        command = build_command(claude_bin, str(config_path))
-        stdout = await _spawn_agent(command, env=build_spawn_env(str(isolated_config_dir)), timeout=timeout)
+        stdout = await _spawn_with_auth_fallback(
+            lambda bare: build_command(claude_bin, str(config_path), bare),
+            env=build_spawn_env(str(isolated_config_dir)),
+            timeout=timeout,
+        )
         return _parse_logging_rejection(stdout, model)
     except RuntimeError as exc:
         return _failed_spawn(str(exc))
@@ -522,12 +601,15 @@ async def _run_isolated_agent(
 async def run_dream_pass() -> str:
     """Run one downvote-only curation pass in a throwaway agent, returning its audit."""
     model = get_dream_model()
+    rules = load_dream_rules()
     result = await _run_isolated_agent(
-        lambda claude_bin, config_path: build_dream_command(
+        lambda claude_bin, config_path, bare: build_dream_command(
             claude_bin=claude_bin,
             model=model,
             mcp_config_path=config_path,
             max_votes=get_dream_max_votes(),
+            rules=rules,
+            bare=bare,
         ),
         model=model,
         timeout=get_dream_timeout(),
@@ -544,12 +626,15 @@ async def run_heavy_dream_pass() -> str:
     except (OSError, sqlite3.Error):
         logger.exception("heavy dream backup failed")
         return "dream backup failed"
+    rules = load_dream_rules()
     result = await _run_isolated_agent(
-        lambda claude_bin, config_path: build_heavy_dream_command(
+        lambda claude_bin, config_path, bare: build_heavy_dream_command(
             claude_bin=claude_bin,
             model=model,
             mcp_config_path=config_path,
             max_ops=get_dream_heavy_max_ops(),
+            rules=rules,
+            bare=bare,
         ),
         model=model,
         timeout=get_dream_heavy_timeout(),

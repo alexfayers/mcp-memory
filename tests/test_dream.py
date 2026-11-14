@@ -73,6 +73,24 @@ class TestBuildMcpConfig:
         assert config == {"mcpServers": {"memory": {"type": "http", "url": "http://localhost:3000/mcp"}}}
 
 
+class TestLoadDreamRules:
+    def test_joins_installed_rules_and_skill_without_frontmatter(self, tmp_path: Path) -> None:
+        (tmp_path / "rules").mkdir()
+        (tmp_path / "skills" / "memory-review").mkdir(parents=True)
+        (tmp_path / "rules" / "memory.md").write_text("WRITE RULE\n")
+        (tmp_path / "rules" / "memory-read.md").write_text("READ RULE\n")
+        (tmp_path / "skills" / "memory-review" / "SKILL.md").write_text("---\nname: memory-review\n---\nREVIEW SKILL\n")
+        rules = dream.load_dream_rules(tmp_path)
+        assert rules.endswith("WRITE RULE\n\nREAD RULE\n\nREVIEW SKILL")
+        assert "name: memory-review" not in rules
+
+    def test_skips_files_that_are_not_installed(self, tmp_path: Path) -> None:
+        (tmp_path / "rules").mkdir()
+        (tmp_path / "rules" / "memory.md").write_text("WRITE RULE")
+        assert dream.load_dream_rules(tmp_path).endswith("WRITE RULE")
+        assert dream.load_dream_rules(tmp_path / "missing") == ""
+
+
 class TestMemoryToolClassification:
     def test_classification_partitions_every_registered_tool(self) -> None:
         mutating = set(tool_names.MUTATING_TOOLS)
@@ -110,6 +128,22 @@ class TestBuildDreamCommand:
         assert command[command.index("--mcp-config") + 1] == "/tmp/cfg.json"
         assert command[command.index("--output-format") + 1] == "stream-json"
         assert "--verbose" in command
+
+    def test_bare_spawn_drops_builtins_and_passes_memory_permissions(self) -> None:
+        command = dream.build_dream_command(claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7)
+        assert "--bare" in command
+        assert command[command.index("--tools") + 1] == ""
+        assert json.loads(command[command.index("--settings") + 1]) == dream.AGENT_SETTINGS
+
+    def test_appends_rules_only_when_present(self) -> None:
+        with_rules = dream.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=5, rules="RULES"
+        )
+        without = dream.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=5
+        )
+        assert with_rules[with_rules.index("--append-system-prompt") + 1] == "RULES"
+        assert "--append-system-prompt" not in without
 
     def test_prompt_is_downvote_only_and_embeds_the_cap(self) -> None:
         command = dream.build_dream_command(claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_votes=7)
@@ -786,6 +820,29 @@ class TestRunDreamPass:
         assert isinstance(command, list)
         assert "mcp__memory__vote" not in command
 
+    def test_retries_without_bare_when_authentication_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(dream, "get_dream_model", lambda: _MODEL)
+        commands: list[list[str]] = []
+
+        async def fake_spawn(
+            command: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            timeout: float = 0,
+        ) -> str:
+            commands.append(command)
+            if "--bare" in command:
+                raise dream.DreamAuthError("dream agent failed to authenticate")
+            return _dream_payload("- demoted [mcp-memory/task/old]: superseded")
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        result = asyncio.run(dream.run_dream_pass())
+        assert result == "- demoted [mcp-memory/task/old]: superseded"
+        assert len(commands) == 2
+        assert "--bare" not in commands[1]
+        assert commands[1][commands[1].index("--tools") + 1] == ""
+
     def test_reports_missing_claude_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dream.shutil, "which", lambda _: None)
         result = asyncio.run(dream.run_dream_pass())
@@ -822,6 +879,21 @@ class TestFailedAgentLogging:
         assert result == "dream agent exited with an error"
         assert "boom-detail" in caplog.text
         assert "exited 1" in caplog.text
+
+    def test_classifies_a_failed_login_as_an_authentication_failure(self, tmp_path: Path) -> None:
+        fake_bin = tmp_path / "claude"
+        fake_bin.write_text("#!/bin/sh\necho 'Not logged in' >&2\nexit 1\n")
+        fake_bin.chmod(0o755)
+        with pytest.raises(dream.DreamAuthError):
+            asyncio.run(dream._spawn_agent([str(fake_bin)], timeout=10))
+
+    def test_agent_text_mentioning_a_login_is_not_an_authentication_failure(self, tmp_path: Path) -> None:
+        fake_bin = tmp_path / "claude"
+        fake_bin.write_text('#!/bin/sh\necho \'{"type":"assistant","text":"Not logged in"}\'\nexit 1\n')
+        fake_bin.chmod(0o755)
+        with pytest.raises(RuntimeError) as raised:
+            asyncio.run(dream._spawn_agent([str(fake_bin)], timeout=10))
+        assert not isinstance(raised.value, dream.DreamAuthError)
 
     def test_logs_agent_output_when_the_agent_reports_an_error_after_a_clean_exit(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
