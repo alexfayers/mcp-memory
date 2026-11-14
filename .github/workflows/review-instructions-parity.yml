@@ -19,7 +19,7 @@ jobs:
       HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
-      - name: Compare review instructions with alexfayers/llm-prompts main
+      - name: Compare review instructions with alexfayers/llm-prompts-ci main
         run: |
           if [ "$HEAD_REF" = "bot/copilot-review-rules" ]; then
             echo "Bot PR carries the update, skipping."
@@ -27,7 +27,7 @@ jobs:
           fi
           for name in review python typescript prompts; do
             path=.github/instructions/$name.instructions.md
-            curl -fsSL "https://raw.githubusercontent.com/alexfayers/llm-prompts/main/$path" -o "canonical-$name.md"
+            curl -fsSL "https://raw.githubusercontent.com/alexfayers/llm-prompts-ci/main/$path" -o "canonical-$name.md"
             curl -fsSL "https://raw.githubusercontent.com/$HEAD_REPO/$HEAD_SHA/$path" -o "mirrored-$name.md"
             cmp "canonical-$name.md" "mirrored-$name.md"
           done
