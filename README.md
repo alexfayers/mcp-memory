@@ -58,4 +58,5 @@ source = "git+https://github.com/alexfayers/mcp-memory.git"
 - [Configuration](docs/configuration.md): all environment variables, the hook plugin and dreaming
 - [Commands](docs/commands.md): every command, the service and the visualiser
 - [Tools](docs/tools.md): the MCP tools
+- [Telemetry](docs/telemetry.md): what is sent
 - [Contributing](CONTRIBUTING.md)

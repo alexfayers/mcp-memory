@@ -12,6 +12,7 @@ from pathlib import Path
 import platform
 import pwd
 import re
+import shlex
 import shutil
 import socket
 import sqlite3
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 _DREAM_API_TIMEOUT_SECONDS = 10
 _DREAM_POLL_SECONDS = 5
 _PORT_PROBE_TIMEOUT_SECONDS = 2
+_FLUSH_TIMEOUT_SECONDS = 10
 
 __all__ = ["Path", "argparse", "subprocess"]
 
@@ -55,8 +57,11 @@ _LEGACY_AGENT_LABEL = "com.memory-agent"
 _LEGACY_AGENT_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{_LEGACY_AGENT_LABEL}.plist"
 _LEGACY_AGENT_UNIT = Path("/etc/systemd/system/memory-agent.service")
 _LEGACY_AGENT_SERVERS = ("memory-agent", "memory_agent")
-_PLIST_DREAM_ENV_RE = re.compile(r"<key>(MCP_DREAM_\w+)</key>\s*<string>([^<]*)</string>")
-_SYSTEMD_DREAM_ENV_RE = re.compile(r"^Environment=(MCP_DREAM_\w+)=(.*)$", re.MULTILINE)
+_TELEMETRY_OPT_OUT_ENV = ("DO_NOT_TRACK", "LLM_PROMPTS_NO_TELEMETRY")
+_KEPT_ENV_NAME_RE = re.compile("|".join([r"MCP_DREAM_\w+", *_TELEMETRY_OPT_OUT_ENV]))
+_PLIST_ENV_RE = re.compile(r"<key>(\w+)</key>\s*<string>([^<]*)</string>")
+_SYSTEMD_ENV_LINE_RE = re.compile(r"^[ \t]*Environment[ \t]*=(.*)$", re.MULTILINE)
+_SYSTEMD_CONTINUATION_RE = re.compile(r"\\\n(?:[ \t]*[#;].*\n)*")
 _PLIST_ENV_START_RE = re.compile(r"<key>EnvironmentVariables</key>\s*<dict>\n")
 
 
@@ -86,7 +91,7 @@ def _memory_spec(port: str, db_path: Path) -> _ServiceSpec:
     env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_MEMORY_BACKUP_")})
     if "MCP_MEMORY_SURFACED_RETENTION_DAYS" in os.environ:
         env["MCP_MEMORY_SURFACED_RETENTION_DAYS"] = os.environ["MCP_MEMORY_SURFACED_RETENTION_DAYS"]
-    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_DREAM_")})
+    env.update({k: v for k, v in os.environ.items() if k.startswith("MCP_DREAM_") or k in _TELEMETRY_OPT_OUT_ENV})
     path = user_path()
     if path:
         env["PATH"] = path
@@ -262,27 +267,51 @@ def _setup_service_from_spec(spec: _ServiceSpec) -> None:
     print(f"Server running on http://localhost:{spec.port}/mcp")
 
 
-def _dream_env_files(system: str) -> tuple[Path, Path, re.Pattern[str]] | None:
-    """Return the retired-agent file, the mcp-memory service file and the MCP_DREAM_* pattern for a platform."""
+def _parse_plist_kept_env(content: str) -> dict[str, str]:
+    """Return the kept env (MCP_DREAM_* and telemetry opt-out) set in a launchd plist."""
+    return {k: v for k, v in _PLIST_ENV_RE.findall(content) if _KEPT_ENV_NAME_RE.fullmatch(k)}
+
+
+def _split_assignments(line: str) -> list[str]:
+    """Split an Environment= value into assignments, or none when its quotes are unbalanced."""
+    try:
+        return shlex.split(line)
+    except ValueError:
+        return []
+
+
+def _parse_systemd_kept_env(content: str) -> dict[str, str]:
+    """Return the kept env set in a systemd unit, across quoted, unquoted, multi-assignment and continued lines."""
+    assignments = (
+        assignment
+        for line in _SYSTEMD_ENV_LINE_RE.findall(_SYSTEMD_CONTINUATION_RE.sub(" ", content))
+        for assignment in _split_assignments(line)
+    )
+    pairs = (assignment.partition("=") for assignment in assignments)
+    return {key: value for key, _, value in pairs if _KEPT_ENV_NAME_RE.fullmatch(key)}
+
+
+def _kept_env_files(system: str) -> tuple[Path, Path, Callable[[str], dict[str, str]]] | None:
+    """Return the retired-agent file, the mcp-memory service file and the kept-env parser for a platform."""
     if system == "Darwin":
-        return _LEGACY_AGENT_PLIST, _LAUNCHD_PLIST, _PLIST_DREAM_ENV_RE
+        return _LEGACY_AGENT_PLIST, _LAUNCHD_PLIST, _parse_plist_kept_env
     if system == "Linux":
-        return _LEGACY_AGENT_UNIT, _SYSTEMD_UNIT, _SYSTEMD_DREAM_ENV_RE
+        return _LEGACY_AGENT_UNIT, _SYSTEMD_UNIT, _parse_systemd_kept_env
     return None
 
 
-def _read_dream_env(path: Path, pattern: re.Pattern[str]) -> dict[str, str]:
-    """Read the MCP_DREAM_* env from a service file, or {} when it is absent."""
-    return dict(pattern.findall(path.read_text(encoding="utf-8"))) if path.exists() else {}
+def _read_kept_env(path: Path, parse: Callable[[str], dict[str, str]]) -> dict[str, str]:
+    """Read the MCP_DREAM_* and telemetry opt-out env from a service file, or {} when it is absent."""
+    return parse(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
-def _keep_installed_dream_env(spec: _ServiceSpec) -> _ServiceSpec:
-    """Keep MCP_DREAM_* already in the installed service unless the spec sets them."""
-    files = _dream_env_files(platform.system())
+def _keep_installed_env(spec: _ServiceSpec) -> _ServiceSpec:
+    """Keep MCP_DREAM_* and telemetry opt-out env already in the installed service unless the spec sets them."""
+    files = _kept_env_files(platform.system())
     if not files:
         return spec
     env = dict(spec.env)
-    for key, value in _read_dream_env(files[1], files[2]).items():
+    for key, value in _read_kept_env(files[1], files[2]).items():
         env.setdefault(key, value)
     return replace(spec, env=env)
 
@@ -293,11 +322,11 @@ def _migrate_legacy_dream_env() -> None:
     Values already set on the mcp-memory service are kept. Reloads it only when something was added.
     """
     system = platform.system()
-    files = _dream_env_files(system)
+    files = _kept_env_files(system)
     if not files:
         return
-    legacy, main, pattern = files
-    legacy_env = _read_dream_env(legacy, pattern)
+    legacy, main, parse = files
+    legacy_env = _read_kept_env(legacy, parse)
     if not legacy_env:
         return
     if not main.exists():
@@ -307,7 +336,7 @@ def _migrate_legacy_dream_env() -> None:
         )
         return
     content = main.read_text(encoding="utf-8")
-    current = dict(pattern.findall(content))
+    current = parse(content)
     missing = {key: value for key, value in legacy_env.items() if key not in current}
     if not missing:
         return
@@ -345,7 +374,7 @@ def _remove_legacy_agent_service() -> None:
 
 def _cmd_setup_service(args: argparse.Namespace) -> None:
     """Handle the setup-service subcommand."""
-    _setup_service_from_spec(_keep_installed_dream_env(_memory_spec(args.port, Path(args.db_path).expanduser())))
+    _setup_service_from_spec(_keep_installed_env(_memory_spec(args.port, Path(args.db_path).expanduser())))
     _remove_legacy_agent_service()
 
 
@@ -476,6 +505,15 @@ def _cmd_dream(args: argparse.Namespace) -> None:
     summary = _pass_summary(state["last_pass"])
     if summary:
         print(summary)
+
+
+def _cmd_telemetry_flush(_args: argparse.Namespace) -> None:
+    """Ask the running server to send its pending usage telemetry. Silent when it is not running."""
+    request = urllib.request.Request(f"http://127.0.0.1:{resolve_port()}/api/telemetry/flush", method="POST")
+    try:
+        urllib.request.urlopen(request, timeout=_FLUSH_TIMEOUT_SECONDS).close()  # ruff: ignore[suspicious-url-open-usage]
+    except (urllib.error.URLError, OSError):
+        return
 
 
 def _cmd_migrate_db(args: argparse.Namespace) -> None:
@@ -1000,6 +1038,8 @@ def _add_utils_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         help=("Only include calls on or after this instant (relative '30m'/'1h'/'7d'/'2w'/'3mo' or ISO date)."),
     )
 
+    utils_sub.add_parser("telemetry-flush", help="Send the running server's pending usage telemetry now")
+
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
@@ -1094,6 +1134,7 @@ def _cmd_utils(args: argparse.Namespace) -> None:
         "audit": _cmd_audit,
         "eval": _cmd_eval,
         "metrics": _cmd_metrics,
+        "telemetry-flush": _cmd_telemetry_flush,
     }
     handlers[args.utils_command](args)
 

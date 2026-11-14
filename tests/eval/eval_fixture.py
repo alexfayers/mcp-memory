@@ -11,24 +11,39 @@ live use.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 import itertools
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from mcp_memory.eval import evaluate
 from mcp_memory.models import Relation
 
-from .eval_harness import _FIXTURE_NOW, _pinned, mark_used
-
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from datetime import datetime
     from pathlib import Path
 
     from mcp_memory.eval import EvalReport, LabelledQuery
     from mcp_memory.storage import Storage
 
+_FIXTURE_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 _K = 10
 _POOL_TERM = "service"
+
+
+def _pinned(days: float) -> str:
+    """Return the SQLite timestamp `days` days before the pinned fixture instant."""
+    return (_FIXTURE_NOW - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def mark_used(db: Storage, retrieval_id: str, *names: str) -> None:
+    """Mark `names` used within `retrieval_id`, keyed by the (retrieval_id, name) pair."""
+    used_at = _pinned(0)
+    with db.connection.transaction():
+        db.connection.write_many(
+            "UPDATE surfaced_entities SET used_at = ? WHERE retrieval_id = ? AND entity_name = ?",
+            [(used_at, retrieval_id, name) for name in names],
+        )
+
 
 # archetype -> entity type, updated_at age days, vote score, obs count, obs chars, status
 _ARCHETYPES: dict[str, tuple[str, int, int, int, int, str | None]] = {
@@ -624,16 +639,10 @@ def _manifest_rows(
     """Derive `project`'s manifest rows from its entities, in their given insertion order."""
     rows: list[tuple[str, str, str, int, int, int, str | None]] = []
     for entity in entities:
-        name = entity["name"]
-        rows.append((
-            project,
-            name,
-            entity["entityType"],
-            ages[name],
-            votes[name],
-            len(entity["observations"]),
-            entity["status"],
-        ))
+        name = str(entity["name"])
+        observations = cast("list[str]", entity["observations"])
+        status = cast("str | None", entity["status"])
+        rows.append((project, name, str(entity["entityType"]), ages[name], votes[name], len(observations), status))
     return rows
 
 

@@ -8,16 +8,15 @@ import pytest
 
 from mcp_memory.eval import EvalReport
 from tests.eval.eval_harness import (
-    _FIXTURE_NOW,
     MeasuredChange,
     _build_eval_fixture,
-    _pinned,
     assert_improves,
     assert_no_regression,
     attach_eval_report,
-    mark_used,
     measure_change,
 )
+
+from .eval_fixture import _FIXTURE_NOW, _pinned, mark_used
 
 if TYPE_CHECKING:
     from mcp_memory.storage import Storage

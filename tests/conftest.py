@@ -67,6 +67,12 @@ def live_server(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(api_client, "call", call)
 
 
+@pytest.fixture(autouse=True)
+def _opt_out_of_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep tests from sending real telemetry."""
+    monkeypatch.setenv("LLM_PROMPTS_NO_TELEMETRY", "1")
+
+
 @pytest.fixture
 def store(tmp_path: Path) -> Storage:
     """Create a fresh store-backed database for each test."""
