@@ -17,7 +17,7 @@ import subprocess
 import sys
 import textwrap
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 import urllib.error
 import urllib.request
 
@@ -411,6 +411,36 @@ def _dream_api(path: str, body: dict[str, str] | None = None) -> dict[str, objec
     return payload
 
 
+def _progress_calls(state: dict[str, object]) -> list[str]:
+    """Return the mutating tool-call lines a dream status reports, or none when it has no progress."""
+    progress = state.get("progress")
+    return cast("list[str]", progress["calls"]) if isinstance(progress, dict) else []
+
+
+def _thousands(tokens: int) -> str:
+    """Format a token count in thousands from 1000 up, e.g. 123k."""
+    return f"{round(tokens / 1000)}k" if tokens >= 1000 else str(tokens)
+
+
+def _pass_summary(last_pass: object) -> str:
+    """Return a one-line usage summary of a finished pass, or "" when it reported no usage."""
+    metrics = last_pass.get("metrics") if isinstance(last_pass, dict) else None
+    if not metrics or metrics.get("input_tokens") is None:
+        return ""
+    parts = [
+        f"{_thousands(metrics['input_tokens'])} in",
+        f"{_thousands(metrics.get('output_tokens') or 0)} out",
+        f"{_thousands(metrics.get('cache_read_tokens') or 0)} cache read",
+    ]
+    cost = metrics.get("cost_usd")
+    tail = [f"{metrics.get('num_turns') or 0} turns"]
+    if cost is not None:
+        tail.append(f"${cost:.2f}")
+    if metrics.get("duration_ms") is not None:
+        tail.append(f"{round(metrics['duration_ms'] / 1000)}s")
+    return f"tokens: {' / '.join(parts)}, {', '.join(tail)}"
+
+
 def _action_counts(last_pass: object) -> str:
     """Return a finished pass's operation count per action, e.g. "merge 2, rename 1", or "" when it had none."""
     operations = last_pass.get("operations") if isinstance(last_pass, dict) else None
@@ -424,12 +454,23 @@ def _cmd_dream(args: argparse.Namespace) -> None:
     print(f"Started {args.tier} dream pass.")
     if not args.wait:
         return
-    while (state := _dream_api("dream"))["running"]:
+    printed = 0
+    while True:
+        state = _dream_api("dream")
+        calls = _progress_calls(state)
+        for line in calls[printed:]:
+            print(line, flush=True)
+        printed = len(calls)
+        if not state["running"]:
+            break
         time.sleep(_DREAM_POLL_SECONDS)
     print(json.dumps(state["last_pass"], indent=2))
     counts = _action_counts(state["last_pass"])
     if counts:
         print(f"actions: {counts}")
+    summary = _pass_summary(state["last_pass"])
+    if summary:
+        print(summary)
 
 
 def _cmd_migrate_db(args: argparse.Namespace) -> None:

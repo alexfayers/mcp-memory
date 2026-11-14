@@ -787,6 +787,26 @@ class TestCmdDream:
         assert [r.full_url.rsplit("/api/", 1)[1] for r in requests] == ["dream/trigger", "dream", "dream"]
         assert "LAST-PASS-MARK" in capsys.readouterr().out
 
+    def test_wait_prints_a_usage_summary(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None))
+        metrics = {
+            "input_tokens": 123_000,
+            "output_tokens": 4_000,
+            "cache_read_tokens": 98_000,
+            "num_turns": 37,
+            "cost_usd": 1.234,
+            "duration_ms": 361_000,
+        }
+        self._fake_urlopen(
+            monkeypatch, {"started": True}, {"running": None, "last_pass": {"tier": "light", "metrics": metrics}}
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="light", wait=True))
+
+        assert "tokens: 123k in / 4k out / 98k cache read, 37 turns, $1.23, 361s" in capsys.readouterr().out
+
     def test_wait_prints_a_count_per_action(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -799,6 +819,33 @@ class TestCmdDream:
         cli._cmd_dream(argparse.Namespace(tier="heavy", wait=True))
 
         assert "actions: merge 2, trim 1" in capsys.readouterr().out
+
+    def test_wait_prints_each_new_progress_line_once(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None))
+
+        def progress(*calls: str) -> dict[str, object]:
+            return {"reads": 2, "calls": list(calls)}
+
+        self._fake_urlopen(
+            monkeypatch,
+            {"started": True},
+            {"running": "light", "last_pass": None, "progress": progress("vote p a -1")},
+            {"running": "light", "last_pass": None, "progress": progress("vote p a -1", "rename_entity p b c")},
+            {
+                "running": None,
+                "last_pass": {"tier": "light"},
+                "progress": progress("vote p a -1", "rename_entity p b c", "vote p d -1"),
+            },
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="light", wait=True))
+
+        out = capsys.readouterr().out
+        assert out.count("vote p a -1") == 1
+        assert out.count("rename_entity p b c") == 1
+        assert out.index("vote p d -1") < out.index('"tier": "light"')
 
 
 class TestCmdRestart:
