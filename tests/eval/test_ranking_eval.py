@@ -630,7 +630,7 @@ class TestArchivingEffectOnEval:
             store.entities.set_status("proj", name, "resolved")
             backdate_store(store, name, 60)
 
-        store.maintenance._archive_stale_entities()
+        store.maintenance.archive_stale_entities()
 
         for name in relevant:
             assert store.reads.get_entity("proj", name).status != "archived"

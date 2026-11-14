@@ -15,6 +15,7 @@ from .eval import evaluate_cached_async
 from .export_import import export_database, import_projects, validate_export
 from .metrics import usage_report
 from .path_resolver import normalize_path
+from .plan_apply import apply_safe_steps, archive_stale
 from .visualise import get_project_paths
 
 if TYPE_CHECKING:
@@ -118,7 +119,13 @@ def _register_workspace(db: Storage, args: dict[str, Any]) -> str | None:
 
 
 def _audit(db: Storage, args: dict[str, Any]) -> object:
-    report = audit_graph(db, args["project"])
+    project = args["project"]
+    applied: list[str] | None = None
+    if args.get("apply"):
+        applied = apply_safe_steps(db, propose_plan(db, audit_graph(db, project))) + archive_stale(db, project)
+    report = audit_graph(db, project)
+    if applied is not None:
+        return {"applied": applied, "steps": propose_plan(db, report)}
     return {"steps": propose_plan(db, report)} if args["plan"] else report
 
 

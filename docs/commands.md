@@ -51,9 +51,11 @@ mcp-memory utils audit --project <scope>
 mcp-memory utils audit --all-projects --propose-plan
 ```
 
-Read-only. Prints JSON listing orphans, misused `project` entities, unprefixed names, ghost scopes, oversized entities, `task belongs-to project` relations, star-graph tasks and strongly downvoted entities.
+Read-only unless `--apply` is given. Prints JSON listing orphans, misused `project` entities, unprefixed names, ghost scopes, oversized entities, `task belongs-to project` relations, star-graph tasks and strongly downvoted entities.
 
-`--propose-plan` prints `{"steps": [...]}` of fix-up tool calls instead. A step with `needs_review: false` is deterministic, like `rename_entity`. Orphan relinking, deletes, merging an observation contained in a longer one, and `consider_split` advisories (entities mixing several scopes) have `needs_review: true`. A `trim_observations_to_outcome` step is always `true`, since a trim drops facts. The trim is a soft delete, restorable with `restore_observations`.
+`--propose-plan` prints `{"steps": [...]}` of fix-up tool calls instead. A step with `needs_review: false` is deterministic, like `rename_entity`. Orphan relinking, deletes, merging an observation contained in a longer one, and `consider_split` advisories (entities mixing several scopes) have `needs_review: true`. Merging an unprefixed entity into its active prefixed twin and linking an orphan `feature/` to its project root are also `false`. A twin that is archived or soft-deleted needs review. A `trim_observations_to_outcome` step is always `true`, since a trim drops facts. The trim is a soft delete, restorable with `restore_observations`.
+
+`--apply` (implies `--propose-plan`) runs the `needs_review: false` steps and archives stale resolved entities, then prints `{"applied": [...], "steps": [remaining plan]}`.
 
 ## eval
 
