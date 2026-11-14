@@ -221,6 +221,21 @@ class TestVisualisePage:
         assert ".components(nodes, links)" in resp.text
 
     @pytest.mark.anyio
+    async def test_fits_the_view_when_the_project_changes_until_the_user_takes_over(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        resp = await client.get("/visualise")
+        assert 'getElementById("project").onchange = () => { refitView = true;' in resp.text
+        assert "if (refitView) { refitView = false; fitView(nodes, FIT_MS); }" in resp.text
+        assert "{ lastUserInteract = Date.now(); refitView = false; }" in resp.text
+        assert "function dragStart(e, d) { refitView = false; svg.interrupt();" in resp.text
+
+    @pytest.mark.anyio
+    async def test_rebuilds_links_whenever_the_simulation_restarts(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "if (topologyChanged || !simulation) links = newLinks;" in resp.text
+
+    @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert "applyDemotedRings" in resp.text
