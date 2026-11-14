@@ -280,6 +280,7 @@ function updateZoomExtent() {
 }
 
 const LINK_DISTANCE = 80, LINK_STRENGTH = 1, GRAVITY = 0.005;
+const COMPONENT_GAP = 40;
 let simulation = null, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, panelDatum = null, orphans = new Set();
 let mergeSource = null;
 let nodes = [], links = [], relCount = new Map();
@@ -402,6 +403,60 @@ async function fetchGraph() {
 
 const nodeRadius = d => 5 + Math.min((relCount.get(d.id) || 0) * 2, 25);
 
+// Collision force that also keeps unconnected components COMPONENT_GAP apart (not while dragging): those pairs push the whole component.
+function forceCollideApart(componentGap) {
+  let nodes, radius, radii = new Float64Array(0), push = new Float64Array(0), size = new Float64Array(0);
+  const prepare = q => {
+    if (q.data) return q.r = radii[q.data.index];
+    q.r = 0;
+    for (let i = 0; i < 4; ++i) if (q[i] && q[i].r > q.r) q.r = q[i].r;
+  };
+  function force() {
+    const gap = simulation.alphaTarget() ? 0 : componentGap;
+    radii = Float64Array.from(nodes, radius);
+    const tree = d3.quadtree(nodes, d => d.x + d.vx, d => d.y + d.vy).visitAfter(prepare);
+    push.fill(0);
+    for (const node of nodes) {
+      const ri = radii[node.index], xi = node.x + node.vx, yi = node.y + node.vy;
+      tree.visit((q, x0, y0, x1, y1) => {
+        const r = ri + q.r + gap;
+        if (!q.data) return x0 > xi + r || x1 < xi - r || y0 > yi + r || y1 < yi - r;
+        for (let d = q; d; d = d.next) {
+          const other = d.data;
+          if (other.index <= node.index) continue;
+          const apart = gap > 0 && other.component !== node.component, rj = radii[other.index], reach = ri + rj + (apart ? gap : 0);
+          let dx = xi - other.x - other.vx || 1e-6, dy = yi - other.y - other.vy, dist = dx * dx + dy * dy;
+          if (dist >= reach * reach) continue;
+          dist = Math.sqrt(dist);
+          dx *= (reach - dist) / dist; dy *= (reach - dist) / dist;
+          if (apart) {
+            push[2 * node.component] += dx; push[2 * node.component + 1] += dy;
+            push[2 * other.component] -= dx; push[2 * other.component + 1] -= dy;
+          } else {
+            const weight = rj * rj / (ri * ri + rj * rj);
+            node.vx += dx * weight; node.vy += dy * weight; other.vx -= dx * (1 - weight); other.vy -= dy * (1 - weight);
+          }
+        }
+        return true;
+      });
+    }
+    for (const node of nodes) { node.vx += push[2 * node.component] / size[node.component]; node.vy += push[2 * node.component + 1] / size[node.component]; }
+  }
+  force.initialize = n => { nodes = n; };
+  force.radius = f => (radius = f, force);
+  force.components = (ns, ls) => {
+    const index = new Map(ns.map((d, i) => [d.id, i])), parent = ns.map((_, i) => i);
+    const root = i => { while (parent[i] !== i) i = parent[i] = parent[parent[i]]; return i; };
+    ls.forEach(l => { parent[root(index.get(l.source.id ?? l.source))] = root(index.get(l.target.id ?? l.target)); });
+    const ids = new Map();
+    ns.forEach((d, i) => { const r = root(i); if (!ids.has(r)) ids.set(r, ids.size); d.component = ids.get(r); });
+    size = new Float64Array(ids.size); ns.forEach(d => size[d.component]++);
+    push = new Float64Array(2 * ids.size);
+    return force;
+  };
+  return force;
+}
+
 function render(data) {
   const incoming = data.entities.map(e => ({ ...e, id: nodeKey(e.project, e.name) }));
   const nodeSet = new Set(incoming.map(n => n.id));
@@ -476,13 +531,14 @@ function render(data) {
       .force("center", d3.forceCenter(width() / 2, height() / 2))
       .force("x", d3.forceX(width() / 2).strength(GRAVITY))
       .force("y", d3.forceY(height() / 2).strength(GRAVITY))
-      .force("collision", d3.forceCollide().radius(d => 5 + nodeRadius(d)))
+      .force("collision", forceCollideApart(COMPONENT_GAP).radius(d => 5 + nodeRadius(d)))
       .on("tick", ticked)
       .on("end", updateZoomExtent);
+    simulation.force("collision").components(nodes, links);
   } else if (topologyChanged) {
     simulation.nodes(nodes);
     simulation.force("link").links(links);
-    simulation.force("collision").radius(d => 5 + nodeRadius(d));
+    simulation.force("collision").radius(d => 5 + nodeRadius(d)).components(nodes, links);
     simulation.alpha(0.05).restart();
   }
 
