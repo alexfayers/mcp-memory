@@ -200,6 +200,14 @@ class TestVisualisePage:
         assert "simulation.alpha() > simulation.alphaMin()) zoomMin = ZOOM_FLOOR" in resp.text
 
     @pytest.mark.anyio
+    async def test_pulls_every_link_with_equal_strength_and_gravity_keeps_components_near(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        resp = await client.get("/visualise")
+        assert ".strength(LINK_STRENGTH)" in resp.text
+        assert 'force("x", d3.forceX(width() / 2).strength(GRAVITY))' in resp.text
+
+    @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert "applyDemotedRings" in resp.text
