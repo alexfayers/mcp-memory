@@ -100,7 +100,9 @@ class RelationRepository:
         if target_id is None:
             raise ValueError(f"Target entity '{target}' not found in project '{project}'")
 
-        row = self._conn.query_one("SELECT id FROM relation_types WHERE name = ?", (relation_type,))
+        row = self._conn.query_one(
+            "SELECT id FROM relation_types WHERE name = ?", (normalize_relation_type(relation_type),)
+        )
         if row is None:
             raise ValueError(f"Relation type '{relation_type}' not found")
 
