@@ -189,6 +189,13 @@ class TestVisualisePage:
         assert "if (d.name !== name) return false;" in resp.text
 
     @pytest.mark.anyio
+    async def test_reveals_node_labels_gradually_with_zoom(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "labelledNodes" in resp.text
+        assert "PROJECT_LABELS_MAX" in resp.text
+        assert "heldLabels.has(d.id)" in resp.text
+
+    @pytest.mark.anyio
     async def test_zoom_out_limit_follows_the_graph_extent(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert "updateZoomExtent" in resp.text
