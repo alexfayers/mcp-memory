@@ -572,6 +572,18 @@ class TestMemoryPluginMessages:
         assert "edit_observation" in (blocked.block or "")
         assert "edit_observation" in reminded.notes[0]
 
+    def test_reminder_and_completion_ask_for_lasting_facts_only(self, plugin: MemoryPlugin) -> None:
+        with (
+            patch("mcp_memory.hooks.plugin.should_warn", return_value=True),
+            patch("mcp_memory.hooks.plugin._is_memory_server_reachable", return_value=True),
+        ):
+            reminded = plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
+        completed = plugin.on_hook("AttemptCompletion", task_id="t1")
+        assert reminded is not None
+        assert completed is not None
+        assert "MUST NOT narrate implementation steps" in reminded.notes[0]
+        assert "MUST NOT narrate implementation steps" in completed.notes[0]
+
     @pytest.mark.parametrize("warn", [False, True])
     def test_reminder_fires_for_any_tool_type_once_the_soft_threshold_is_reached(
         self, plugin: MemoryPlugin, warn: bool

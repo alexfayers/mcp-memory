@@ -67,24 +67,24 @@ _MEMORY_REPLACE_CLAUSE = (
     "If this replaces or contradicts an observation, search_nodes then edit_observation it instead of appending."
 )
 _MEMORY_REMINDER_TEMPLATE = (
-    "MEMORY UPDATE REQUIRED: MUST update the `{project}` project and `global`"
-    " scopes in the memory server now.\n"
-    "MUST record what you just did and why. MUST write one fact per observation. " + _MEMORY_REPLACE_CLAUSE
+    "MEMORY CHECK: MUST record any new lasting fact (a decision and why, gotcha, preference, where something lives)"
+    " in `{project}` or `global` now. MUST NOT narrate implementation steps. " + _MEMORY_REPLACE_CLAUSE
 )
 _MEMORY_REMINDER_CHANCE = 0.6
 _MEMORY_COOLDOWN_STEPS = 5
 _MEMORY_BLOCK_TEMPLATE = (
-    "MEMORY UPDATE REQUIRED: MUST update the `{project}` project and `global` scopes in the memory server "
-    "before continuing. " + _MEMORY_REPLACE_CLAUSE
+    "MEMORY UPDATE REQUIRED: MUST record any lasting fact in `{project}` or `global` before continuing, "
+    "or set the task's status if there is none. " + _MEMORY_REPLACE_CLAUSE
 )
 _MEMORY_SERVER_DOWN_NOTE = (
     "Memory server appears to be unreachable ({url}) - skipping the memory-update "
     "block so you aren't stuck. Let the user know memory is currently unavailable."
 )
 _MEMORY_COMPLETION_REMINDER = (
-    "REQUIRED before completing:\n1. Update `memory`\n2. One observation per fact (what changed, why, TODOs)"
+    "REQUIRED before completing:\n- MUST write one observation per lasting fact.\n"
+    "- MUST NOT narrate implementation steps."
 )
-_MEMORY_COMPACT_WARNING = "Save any important context, decisions, or progress to memory NOW before it's lost."
+_MEMORY_COMPACT_WARNING = "MUST save lasting decisions and gotchas to memory NOW."
 _MEMORY_REVIEW_NUDGE = (
     "MEMORY REVIEW DUE: many memory writes have accumulated since the last review. "
     "Mention this to the user and let them run `/memory-review` when they choose - "
