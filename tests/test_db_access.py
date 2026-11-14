@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 _SOURCE = Path(__file__).parent.parent / "src" / "mcp_memory"
-_DB_OPENERS = ("storage/", "server.py", "eval.py", "relocate.py", "backup.py")
+_DB_OPENERS = ("storage/", "server.py", "eval.py", "relocate.py", "backup.py", "dream.py")
 _OPENER_NAMES = {"open_readonly", "open_writable"}
 
 

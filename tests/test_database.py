@@ -1267,6 +1267,17 @@ class TestObservations:
         assert obs_contents(store.reads.get_entity("proj", "e1")) == ["a", "c"]
         assert store.reads.search("proj", "b")["entities"] == []
 
+    def test_trim_protecting_corrections_keeps_user_corrections(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [{"name": "e1", "entityType": "task", "observations": ["alpha", "Correction: beta", "gamma"]}],
+        )
+        trimmed = store.observations.trim_to_outcome(
+            "proj", "e1", [hash_observation("alpha")], protect_corrections=True
+        )
+        assert trimmed == [hash_observation("gamma")]
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["alpha", "Correction: beta"]
+
     def test_trim_observations_to_outcome_empty_keep_raises(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         with pytest.raises(ValueError, match="at least one"):

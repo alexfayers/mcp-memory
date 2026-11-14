@@ -76,7 +76,15 @@ def _dream_payload(
 class TestBuildMcpConfig:
     def test_points_only_at_memory_server(self) -> None:
         config = dream.build_mcp_config("http://localhost:3000/mcp")
-        assert config == {"mcpServers": {"memory": {"type": "http", "url": "http://localhost:3000/mcp"}}}
+        assert config == {
+            "mcpServers": {
+                "memory": {
+                    "type": "http",
+                    "url": "http://localhost:3000/mcp",
+                    "headers": {dream.DREAM_CALLER_HEADER: "1"},
+                }
+            }
+        }
 
 
 class TestLoadDreamRules:
@@ -143,10 +151,10 @@ class TestBuildDreamCommand:
 
     def test_appends_rules_only_when_present(self) -> None:
         with_rules = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=5, rules="RULES"
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=5, audit="{}", rules="RULES"
         )
         without = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=5
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=5, audit="{}"
         )
         assert with_rules[with_rules.index("--append-system-prompt") + 1] == "RULES"
         assert "--append-system-prompt" not in without
@@ -210,21 +218,23 @@ class TestBuildDreamCommand:
 
 
 class TestBuildHeavyDreamCommand:
-    def test_allows_vote_and_merge_but_denies_other_mutations(self) -> None:
+    def test_allows_reversible_tools_but_denies_edits_and_moves(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10, audit="{}"
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
         assert "mcp__memory__vote" not in denied
         assert "mcp__memory__merge_entities" not in denied
-        assert "mcp__memory__delete_entity" in denied
-        assert "mcp__memory__create_entities" in denied
-        assert "mcp__memory__restore_entity" in denied
+        assert "mcp__memory__delete_entity" not in denied
+        assert "mcp__memory__trim_observations_to_outcome" not in denied
+        assert "mcp__memory__restore_entity" not in denied
+        for tool in ("edit_observation", "set_entity_status", "delete_project", "move_project_entities"):
+            assert f"mcp__memory__{tool}" in denied
 
     def test_still_denies_filesystem_and_web_read_builtins(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10, audit="{}"
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
@@ -233,7 +243,7 @@ class TestBuildHeavyDreamCommand:
 
     def test_isolates_and_pins_the_spawn(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10, audit="{}"
         )
         assert "--strict-mcp-config" in command
         assert command[command.index("--model") + 1] == _MODEL
@@ -241,9 +251,19 @@ class TestBuildHeavyDreamCommand:
         assert command[command.index("--output-format") + 1] == "stream-json"
         assert "--verbose" in command
 
+    def test_prompt_embeds_the_audit_and_guards_deletes_and_trims(self) -> None:
+        command = dream.build_heavy_dream_command(
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit='{"report":"AUDIT-MARK"}'
+        )
+        prompt = command[command.index("-p") + 1]
+        assert "AUDIT-MARK" in prompt
+        assert "Never delete an entity that has live depends-on or implements edges" in prompt
+        assert "must_keep_hashes" in prompt
+        assert "Emit only these lines" in prompt
+
     def test_prompt_covers_merge_and_downvote_and_embeds_the_cap(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit="{}"
         )
         prompt = command[command.index("-p") + 1]
         assert "4" in prompt
@@ -253,14 +273,14 @@ class TestBuildHeavyDreamCommand:
 
     def test_prompt_interpolates_the_gc_downvote_floor(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit="{}"
         )
         prompt = command[command.index("-p") + 1]
         assert "-10" in prompt
 
     def test_prompt_specifies_a_parseable_audit_format(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit="{}"
         )
         prompt = command[command.index("-p") + 1]
         assert "[project/entity-name] - action reason" in prompt
@@ -279,7 +299,7 @@ class TestBuildHeavyDreamCommand:
 
     def test_heavy_allows_observation_vote_and_merge(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10
+            claude_bin="claude", model=_MODEL, mcp_config_path="/tmp/cfg.json", max_ops=10, audit="{}"
         )
         deny_index = command.index("--disallowedTools")
         denied = set(command[deny_index + 1 :])
@@ -288,7 +308,7 @@ class TestBuildHeavyDreamCommand:
 
     def test_prompt_permits_observation_ops(self) -> None:
         command = dream.build_heavy_dream_command(
-            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4
+            claude_bin="claude", model=_MODEL, mcp_config_path="/c.json", max_ops=4, audit="{}"
         )
         prompt = command[command.index("-p") + 1]
         assert "vote" in prompt
@@ -1058,6 +1078,111 @@ class TestRunHeavyDreamPass:
         assert "unexpected model" in result
 
 
+class TestHeavyDreamPrepass:
+    @pytest.fixture(autouse=True)
+    def _fake_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(dream.shutil, "which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr(dream, "get_dream_heavy_model", lambda: _MODEL)
+        db = open_writable(get_db_path())
+        db.entities.create("proj", [{"name": "task/dup", "entityType": "task", "observations": ["o"]}])
+        db.entities.create("proj", [{"name": "dup", "entityType": "task", "observations": ["p"]}])
+        db.connection.close()
+
+    def test_applies_safe_steps_before_the_audit_and_lists_them_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        prompts: list[str] = []
+
+        async def fake_spawn(command: list[str], **_: object) -> str:
+            prompts.append(command[command.index("-p") + 1])
+            return _dream_payload("[proj/task/x] - deleted: wrong")
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        result = asyncio.run(dream.run_heavy_dream_pass())
+
+        lines = result.splitlines()
+        assert lines[0].startswith("[proj/dup] - merged into task/dup")
+        assert lines[-1] == "[proj/task/x] - deleted: wrong"
+        assert '"name":"dup"' not in prompts[0]
+
+    def test_prepass_failure_aborts_without_spawning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fail() -> list[str]:
+            raise OSError("locked")
+
+        async def must_not_spawn(*_: object, **__: object) -> str:
+            raise AssertionError("spawned after a failed prepass")
+
+        monkeypatch.setattr(dream, "_dream_prepass", fail)
+        monkeypatch.setattr(dream, "_spawn_agent", must_not_spawn)
+        assert asyncio.run(dream.run_heavy_dream_pass()) == "dream prepass failed"
+
+    def test_prepass_lines_follow_a_failed_agent_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def fake_spawn(*_: object, **__: object) -> str:
+            raise RuntimeError("dream agent exited with an error")
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        result = asyncio.run(dream.run_heavy_dream_pass())
+
+        assert result.startswith("dream ")
+        assert "merged into task/dup" in result
+        assert not dream._pass_succeeded(result)
+
+    def test_unexpected_error_keeps_prepass_lines_and_fails_cleanly(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def explode(*_: object, **__: object) -> str:
+            raise KeyError("tool")
+
+        monkeypatch.setattr(dream, "_heavy_dream_audit", explode)
+        result = asyncio.run(dream.run_heavy_dream_pass())
+
+        assert result.startswith("dream failed: KeyError")
+        assert "merged into task/dup" in result
+        assert "KeyError" in caplog.text
+
+
+class TestHeavyDreamAudit:
+    def test_trim_step_carries_must_keep_hashes(self) -> None:
+        db = open_writable(get_db_path())
+        db.entities.create("proj", [{"name": "project/proj", "entityType": "project", "observations": ["root"]}])
+        words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo"]
+        db.entities.create(
+            "proj",
+            [{"name": "task/big", "entityType": "task", "observations": [f"{w} distinct fact" for w in words * 3]}],
+        )
+        db.entities.set_status("proj", "task/big", "resolved")
+        db.connection.close()
+
+        steps = json.loads(dream._heavy_dream_audit(30))["steps"]
+        trims = [step for step in steps if step["tool"] == "trim_observations_to_outcome"]
+
+        assert trims
+        for step in trims:
+            assert "keep_hashes" not in step["arguments"]
+            assert step["arguments"]["must_keep_hashes"]
+            assert step["needs_review"] is True
+
+    def test_capped_audit_spans_projects(self) -> None:
+        db = open_writable(get_db_path())
+        for index in range(8):
+            db.entities.create("alpha", [{"name": f"task/a{index}", "entityType": "task", "observations": ["o"]}])
+        db.entities.create("beta", [{"name": "task/b0", "entityType": "task", "observations": ["o"]}])
+        db.connection.close()
+
+        audit = json.loads(dream._heavy_dream_audit(3))
+
+        assert {orphan["project"] for orphan in audit["report"]["orphans"]} == {"alpha", "beta"}
+
+    def test_audit_is_trimmed_to_the_byte_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        db = open_writable(get_db_path())
+        for index in range(30):
+            db.entities.create("alpha", [{"name": f"task/a{index}", "entityType": "task", "observations": ["o"]}])
+        db.connection.close()
+        monkeypatch.setattr(dream, "_HEAVY_DREAM_AUDIT_MAX_BYTES", 1500)
+
+        audit = dream._heavy_dream_audit(30)
+
+        assert 0 < len(audit.encode()) <= 1500
+
+
 def _pi_message(text: str, *, stop_reason: str = "stop", cost: float = 0.01) -> str:
     message = {
         "role": "assistant",
@@ -1180,12 +1305,21 @@ class TestPiBackend:
         assert (agent_dir / "auth.json").resolve() == (moved / "auth.json").resolve()
         (agent_dir / "settings.json").write_text('{"dreamModelHeavy": "mine"}')
         (agent_dir / "mcp.json").write_text(
-            '{"mcpServers": {"memory": {"type": "stdio", "command": "x", "timeout": 5}, "other": {"command": "y"}}}'
+            '{"mcpServers": {"memory": {"type": "stdio", "command": "x", "timeout": 5, "headers": {"X-Mine": "1"}},'
+            ' "other": {"command": "y"}}}'
         )
         dream._prepare_pi_agent_dir(agent_dir, user_dir, "http://h/mcp")
         assert json.loads((agent_dir / "settings.json").read_text()) == {"dreamModelHeavy": "mine"}
         servers = json.loads((agent_dir / "mcp.json").read_text())["mcpServers"]
-        assert servers == {"memory": {"type": "http", "url": "http://h/mcp", "exposure": "direct", "timeout": 5}}
+        assert servers == {
+            "memory": {
+                "type": "http",
+                "url": "http://h/mcp",
+                "exposure": "direct",
+                "timeout": 5,
+                "headers": {"X-Mine": "1", dream.DREAM_CALLER_HEADER: "1"},
+            }
+        }
 
     def test_error_stop_reason_fails_the_pass(self) -> None:
         stdout = "\n".join([_pi_message("x"), _pi_message("", stop_reason="error")])
