@@ -326,6 +326,52 @@ class TestProposePlan:
         again = self._plan(store, "proj")[0]
         assert again["arguments"]["keep_hashes"] == step["arguments"]["keep_hashes"]  # type: ignore[index]
 
+    def test_trim_keeps_user_corrections_and_lessons_past_the_ceiling(self, store: Storage) -> None:
+        protected = [
+            "Correction: remote is public",
+            "user corrected the claim",
+            "User pushed back on a guess",
+            "User decided to ship",
+            "Decision: use WAL",
+            "we decided to use WAL",
+            "User chose option B",
+            "Lesson: verify first",
+        ]
+        store.entities.create(
+            "proj",
+            [
+                {
+                    "name": "task/big",
+                    "entityType": "task",
+                    "observations": [*protected, "filler one", "filler two", "RESOLVED: done"],
+                    "status": "resolved",
+                }
+            ],
+        )
+
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "task/big"))}
+        keep = set(self._plan(store, "proj")[0]["arguments"]["keep_hashes"])  # type: ignore[index]
+        assert {by_content[text] for text in protected} <= keep
+        assert by_content["filler one"] not in keep
+
+    def test_trim_keeps_the_outcome_line_over_a_top_voted_fact(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {
+                    "name": "task/big",
+                    "entityType": "task",
+                    "observations": ["Resolved: done", "Decision: WAL", "we decided on WAL", "fact a", "fact b"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        _vote_obs(store, "task/big", "fact a", 5)
+
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "task/big"))}
+        keep = set(self._plan(store, "proj")[0]["arguments"]["keep_hashes"])  # type: ignore[index]
+        assert by_content["Resolved: done"] in keep
+
     def test_trim_uses_full_observation_list_not_budgeted(self, store: Storage) -> None:
         store.entities.create(
             "proj",
@@ -420,7 +466,7 @@ class TestProposePlan:
                 {
                     "name": "feature/f",
                     "entityType": "feature",
-                    "observations": [f"fact {i}" for i in range(11)],
+                    "observations": [f"distinct fact number {chr(97 + i)}" for i in range(11)],
                 },
             ],
         )
@@ -467,7 +513,22 @@ class TestProposePlan:
         step = next(s for s in self._plan(store, "proj") if s.get("tool") == "trim_observations_to_outcome")
         assert step["needs_review"] is True
 
-    def test_trim_dropping_only_near_duplicates_stays_auto_applied(self, store: Storage) -> None:
+    def test_trim_always_needs_review(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {
+                    "name": "task/many",
+                    "entityType": "task",
+                    "observations": ["RESOLVED: shipped", "alpha detail", "bravo detail", "charlie detail"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "trim_observations_to_outcome")
+        assert step["needs_review"] is True
+
+    def test_near_duplicates_merge_instead_of_trim(self, store: Storage) -> None:
         store.entities.create(
             "proj",
             [
@@ -484,8 +545,49 @@ class TestProposePlan:
                 }
             ],
         )
-        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "trim_observations_to_outcome")
-        assert step["needs_review"] is False
+        steps = self._plan(store, "proj")
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "task/dupes"))}
+        merges = [s for s in steps if s.get("tool") == "merge_observations"]
+        assert {m["arguments"]["sourceHash"] for m in merges} == {  # type: ignore[index]
+            by_content["shipped the graph-hygiene tools"],
+            by_content["graph-hygiene tools"],
+            by_content["hygiene tools"],
+        }
+        assert {m["arguments"]["targetHash"] for m in merges} == {  # type: ignore[index]
+            by_content["RESOLVED: shipped the graph-hygiene tools"]
+        }
+        assert all(m["needs_review"] is True for m in merges)
+        assert not any(s.get("tool") == "trim_observations_to_outcome" for s in steps)
+
+    def test_merges_come_before_the_trim_so_absorbed_sources_are_still_live(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {
+                    "name": "task/both",
+                    "entityType": "task",
+                    "observations": ["alpha detail", "alpha detail extended", "beta", "gamma", "RESOLVED: done"],
+                    "status": "resolved",
+                }
+            ],
+        )
+        tools = [s.get("tool") for s in self._plan(store, "proj")]
+        assert tools.index("merge_observations") < tools.index("trim_observations_to_outcome")
+
+    def test_observation_merge_runs_on_non_oversized_entity(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [{"name": "feature/f", "entityType": "feature", "observations": ["Uses WAL mode", "uses wal mode always"]}],
+        )
+        by_content = {o.content: o.content_hash for o in store.observations.for_entity(_entity_id(store, "feature/f"))}
+        step = next(s for s in self._plan(store, "proj") if s.get("tool") == "merge_observations")
+        assert step["arguments"] == {
+            "project": "proj",
+            "entityName": "feature/f",
+            "sourceHash": by_content["Uses WAL mode"],
+            "targetHash": by_content["uses wal mode always"],
+        }
+        assert step["needs_review"] is True
 
 
 class TestAuditCommand:
