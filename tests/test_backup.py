@@ -1,4 +1,4 @@
-"""Tests for automatic database backups and tiered retention."""
+"""Tests for automatic database backups, tiered retention and restore."""
 
 from __future__ import annotations
 
@@ -100,6 +100,13 @@ class TestPruneBackups:
         _touch(tmp_path, NOW - timedelta(days=400))
         assert _prune(tmp_path) == set()
 
+    def test_deletes_the_wal_files_of_a_pruned_backup(self, tmp_path: Path) -> None:
+        old = _touch(tmp_path, NOW - timedelta(days=400))
+        sidecar = old.with_name(old.name + "-wal")
+        sidecar.touch()
+        _prune(tmp_path)
+        assert not sidecar.exists()
+
     def test_leaves_files_outside_its_naming_untouched(self, tmp_path: Path) -> None:
         foreign = [tmp_path / "notes.txt", tmp_path / "memory-latest.db", tmp_path / "other-20200101T000000Z.db"]
         for path in foreign:
@@ -122,3 +129,39 @@ class TestBackupDatabase:
         assert created.parent == backup_dir
         assert created.exists()
         assert not stale.exists()
+
+
+class TestRestoreBackup:
+    def test_replaces_a_damaged_database_keeping_its_files(self, tmp_path: Path) -> None:
+        source = tmp_path / "source.db"
+        _make_db(source, 2)
+        snapshot = backup.create_backup(source, tmp_path / "backups", NOW)
+        db_path = tmp_path / "memory.db"
+        db_path.write_bytes(b"damaged")
+        db_path.with_name("memory.db-wal").write_bytes(b"wal")
+
+        previous = backup.restore_backup(snapshot, db_path, tmp_path / "backups")
+
+        assert previous is not None
+        assert previous.read_bytes() == b"damaged"
+        assert previous.with_name(previous.name + "-wal").read_bytes() == b"wal"
+        assert len(open_readonly(db_path).reads.all_entities("proj")["entities"]) == 2
+        assert not db_path.with_name("memory.db-wal").exists()
+
+    def test_restores_when_there_is_no_current_database(self, tmp_path: Path) -> None:
+        source = tmp_path / "source.db"
+        _make_db(source)
+        snapshot = backup.create_backup(source, tmp_path / "backups", NOW)
+        assert backup.restore_backup(snapshot, tmp_path / "fresh" / "memory.db", tmp_path / "backups") is None
+
+    def test_rejects_a_file_that_is_not_a_database_and_leaves_the_current_one(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "memory.db"
+        _make_db(db_path)
+        bogus = tmp_path / "bogus.db"
+        bogus.write_text("not a database" * 100)
+
+        with pytest.raises(sqlite3.DatabaseError):
+            backup.restore_backup(bogus, db_path, tmp_path / "backups")
+
+        assert len(open_readonly(db_path).reads.all_entities("proj")["entities"]) == 1
+        assert not list(tmp_path.glob("*.restoring"))
