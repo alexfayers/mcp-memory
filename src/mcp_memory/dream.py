@@ -1,7 +1,7 @@
 """Opt-in idle-time dream curation of the memory graph, run inside the mcp-memory server.
 
-While the server is idle, the scheduler spawns an ephemeral headless ``pi -p`` (or, without
-pi installed, ``claude -p``) agent that demotes (light tier) or merges and demotes (heavy tier) stale entities
+While the server is idle, the scheduler spawns an ephemeral headless ``pi -p`` (or ``claude -p``
+when pi is absent or has no model) agent that demotes (light tier) or merges and demotes (heavy tier) stale entities
 through the mcp-memory tools. It never deletes anything.
 """
 
@@ -850,7 +850,9 @@ async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
         return _failed_spawn("dream agent directory setup failed")
     model = _resolve_pi_model(heavy=spec.heavy, agent_dir=agent_dir, user_dir=user_dir)
     if model is None:
-        return _failed_spawn("dream unavailable: no pi model configured")
+        if claude_bin := _claude_bin():
+            return await _run_claude_pass(claude_bin, spec)
+        return _failed_spawn("dream unavailable: no pi model configured and claude CLI not found")
     command = build_pi_command(
         pi_bin=pi_bin,
         model=model,

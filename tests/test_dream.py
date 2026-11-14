@@ -1054,6 +1054,21 @@ class TestPiBackend:
         assert (metrics["cache_read_tokens"], metrics["cache_creation_tokens"]) == (200, 40)
         assert metrics["cost_usd"] == pytest.approx(0.03)
 
+    def test_falls_back_to_claude_when_no_pi_model_resolves(
+        self, monkeypatch: pytest.MonkeyPatch, pi_dirs: tuple[Path, Path]
+    ) -> None:
+        monkeypatch.setattr(dream, "_pi_bin", lambda: "/usr/bin/pi")
+        monkeypatch.setattr(dream, "_claude_bin", lambda: "/usr/bin/claude")
+        commands: list[list[str]] = []
+
+        async def fake_spawn(command: list[str], *, env: dict[str, str] | None = None, timeout: float = 0) -> str:
+            commands.append(command)
+            return _dream_payload("[p/e] - demoted")
+
+        monkeypatch.setattr(dream, "_spawn_agent", fake_spawn)
+        assert asyncio.run(dream.run_dream_pass()) == "[p/e] - demoted"
+        assert commands[0][0] == "/usr/bin/claude"
+
     def test_model_comes_from_env_then_agent_settings_then_user_default(
         self, monkeypatch: pytest.MonkeyPatch, pi_dirs: tuple[Path, Path]
     ) -> None:
