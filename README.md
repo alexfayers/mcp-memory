@@ -33,7 +33,7 @@
 | src/mcp\_memory/payload.py                           |       12 |        0 |    100% |           |
 | src/mcp\_memory/plan\_apply.py                       |       39 |        1 |     97% |        40 |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      606 |       44 |     93% |71-72, 494, 504, 540, 553, 609-611, 615, 689-690, 720-721, 729, 737, 749-750, 812-813, 827-828, 1021-1022, 1042, 1063-1068, 1160, 1203-1204, 1258-1259, 1502-1503, 1534-1538, 1542 |
+| src/mcp\_memory/server.py                            |      612 |       44 |     93% |74-75, 497, 507, 543, 556, 612-614, 618, 692-693, 723-724, 732, 740, 752-753, 815-816, 830-831, 1024-1025, 1045, 1066-1071, 1163, 1206-1207, 1261-1262, 1508-1509, 1540-1544, 1548 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
@@ -106,15 +106,15 @@
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
 | tests/test\_server.py                                |      963 |        1 |     99% |      1643 |
-| tests/test\_server\_http.py                          |      110 |        0 |    100% |           |
-| tests/test\_telemetry.py                             |      413 |        1 |     99% |       662 |
+| tests/test\_server\_http.py                          |      121 |        0 |    100% |           |
+| tests/test\_telemetry.py                             |      421 |        1 |     99% |       675 |
 | tests/test\_telemetry\_contract.py                   |       11 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       17 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      656 |        0 |    100% |           |
-| **TOTAL**                                            | **16544** |  **489** | **97%** |           |
+| **TOTAL**                                            | **16569** |  **489** | **97%** |           |
 
 
 ## Setup coverage badge
