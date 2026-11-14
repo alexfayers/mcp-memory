@@ -1542,6 +1542,21 @@ class TestRelations:
         result = store.reads.get_entity_with_relations("proj", "a")
         assert len(result["relations"]) == 1
 
+    def test_delete_relation_accepts_underscored_type(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
+                {"name": "b", "entityType": "feature", "observations": ["y"]},
+                {"name": "c", "entityType": "project", "observations": ["z"]},
+            ],
+        )
+        store.relations.create("proj", [Relation(source="a", target="b", relation_type="depends-on")])
+        store.relations.create("proj", [Relation(source="a", target="c", relation_type="belongs-to")])
+        store.relations.create("proj", [Relation(source="b", target="c", relation_type="belongs-to")])
+        store.relations.delete("proj", "a", "b", "depends_on")
+        assert len(store.reads.get_entity_with_relations("proj", "a")["relations"]) == 1
+
     def test_task_to_project_belongs_to_rejected(self, store: Storage) -> None:
         store.entities.create(
             "proj",
