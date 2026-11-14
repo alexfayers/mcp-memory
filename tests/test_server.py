@@ -111,6 +111,15 @@ class TestValidateEntityTypes:
                 ],
             )
 
+    @pytest.mark.parametrize(
+        ("entity_type", "hint"),
+        [("task", r"'implements'.*same call"), ("feature", r"part-of.*project/<project>")],
+    )
+    def test_relation_error_says_what_to_link_to(self, entity_type: str, hint: str) -> None:
+        entity = {"name": f"{entity_type}/x", "entityType": entity_type, "observations": []}
+        with pytest.raises(ValueError, match=hint):
+            _validate_and_extract_relations("proj", [entity])
+
     def test_pattern_requires_relation(self) -> None:
         with pytest.raises(ValueError, match=r"requires at least one relation.*inline"):
             _validate_and_extract_relations(
@@ -315,6 +324,15 @@ class TestRelationTypeWarnings:
         server_db.relations.create("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
         result = tools.get_entity_with_relations("proj", "a")
         assert "relationTypeWarnings" not in result
+
+
+class TestCreateRelationsDescription:
+    def test_links_a_feature_part_of_its_project_and_a_task_implements_its_feature(self) -> None:
+        tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "create_relations")
+        description = tool.description or ""
+        assert "task implements feature" in description
+        assert "feature part-of project" in description
+        assert "belongs-to" not in description
 
 
 class TestGetEntityWithRelationsFilters:

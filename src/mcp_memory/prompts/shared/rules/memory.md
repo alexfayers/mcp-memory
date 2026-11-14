@@ -17,6 +17,7 @@ Unless a `Startup block: recent memory` is present, `read_graph`. Then `search_n
 - MUST write silently as you go, never batched: discoveries, decisions, feedback, facts; failures and insights to `global`.
 - MUST record only what code and git can't show: a decision and why, a gotcha, a preference, where something lives, an external outcome (merge, deploy, close). MUST NOT narrate implementation steps or that tests pass. Memory holds the why: for what changed or how it works, MUST read the code and `git log`/`git blame`.
 - Each piece of work and user follow-up MUST be its own related `task/` entity, created before code.
+- A `task/` MUST link to the `feature/` it changes with `implements`. A `feature/` MUST link to its `project/` with `part-of`. MUST create a missing `feature/` in the same `create_entities` call, with its relations passed inline.
 - New information that replaces or contradicts an observation: MUST `search_nodes` for it first, then `edit_observation` it in place. MUST edit or delete a contradicted observation in the same step.
 - MUST record a confirmed external change (merge, deploy, close) in the same response; plans MUST include memory updates.
 - Subagents MUST NOT write; main writes after a fresh read.
