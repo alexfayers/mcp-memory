@@ -104,8 +104,8 @@
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
-| tests/test\_visualise.py                             |      624 |        0 |    100% |           |
-| **TOTAL**                                            | **14801** |  **479** | **97%** |           |
+| tests/test\_visualise.py                             |      630 |        0 |    100% |           |
+| **TOTAL**                                            | **14807** |  **479** | **97%** |           |
 
 
 ## Setup coverage badge
