@@ -635,12 +635,11 @@ def _record_progress(line: str) -> None:
             dream_status.record_progress(tool, _short_args(tool_input), mutating=tool in MUTATING_TOOLS)
 
 
-async def _read_stream(proc: asyncio.subprocess.Process) -> tuple[str, bytes]:
-    """Read the agent's stdout line by line, recording progress, and return stdout plus stderr."""
+async def _read_stream(proc: asyncio.subprocess.Process, lines: list[str]) -> tuple[str, bytes]:
+    """Read the agent's stdout line by line into ``lines``, recording progress, and return stdout plus stderr."""
     assert proc.stdout is not None
     assert proc.stderr is not None
     stderr = asyncio.ensure_future(proc.stderr.read())
-    lines: list[str] = []
     try:
         async for raw in proc.stdout:
             line = raw.decode(errors="replace")
@@ -671,11 +670,14 @@ async def _spawn_agent(
     *,
     env: dict[str, str] | None = None,
     timeout: float,
+    transcript: list[str] | None = None,
 ) -> str:
     """Spawn the dream agent, recording its memory tool calls as it streams, and return its stdout.
 
-    Kills the agent on timeout.
+    Kills the agent on timeout. Every stdout line is appended to ``transcript`` as it arrives,
+    so the caller keeps the partial output of a failed run.
     """
+    lines = transcript if transcript is not None else []
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.DEVNULL,
@@ -685,7 +687,7 @@ async def _spawn_agent(
         limit=_STREAM_LINE_LIMIT_BYTES,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(_read_stream(proc), timeout=timeout)
+        stdout, stderr = await asyncio.wait_for(_read_stream(proc, lines), timeout=timeout)
     except TimeoutError as exc:
         proc.kill()
         await proc.wait()
@@ -747,13 +749,25 @@ async def _spawn_with_auth_fallback(
     *,
     env: dict[str, str],
     timeout: float,
+    transcript: list[str],
 ) -> str:
     """Spawn the ``--bare`` agent, retrying once without ``--bare`` if it fails to authenticate."""
     try:
-        return await _spawn_agent(build_command(True), env=env, timeout=timeout)
+        return await _spawn_agent(build_command(True), env=env, timeout=timeout, transcript=transcript)
     except DreamAuthError:
         logger.warning("dream --bare run failed to authenticate, retrying without --bare")
-        return await _spawn_agent(build_command(False), env=env, timeout=timeout)
+        transcript.clear()
+        return await _spawn_agent(build_command(False), env=env, timeout=timeout, transcript=transcript)
+
+
+async def _save_transcript(spec: PassSpec, transcript: list[str]) -> None:
+    """Save the pass's prompt and agent output beside the backups when backups are enabled, logging a failure."""
+    if not get_backup_enabled():
+        return
+    try:
+        await asyncio.to_thread(backup.save_transcript, spec.tier, spec.prompt, "".join(transcript))
+    except OSError:
+        logger.exception("dream transcript save failed")
 
 
 async def _run_isolated_agent(
@@ -761,7 +775,7 @@ async def _run_isolated_agent(
     *,
     claude_bin: str,
     model: str,
-    timeout: float,
+    spec: PassSpec,
 ) -> SpawnResult:
     """Spawn a hermetic headless claude agent and return its parsed result.
 
@@ -770,12 +784,14 @@ async def _run_isolated_agent(
     hooks). ``build_command`` receives the claude binary and mcp-config
     path and whether to run ``--bare``. A ``--bare`` run that fails to authenticate is retried
     once without it. All failures surface as an ``ok=False`` result whose message is in
-    ``text``; the tempdir is always cleaned up.
+    ``text``; the tempdir is always cleaned up. The prompt and the agent's output, partial on failure,
+    are saved as a transcript of the pass's tier.
     """
     work_dir = tempfile.mkdtemp(prefix="mcp-memory-dream-")
     work_path = Path(work_dir)
     config_path = work_path / "mcp-config.json"
     isolated_config_dir = work_path / "config"
+    transcript: list[str] = []
     try:
         config_path.write_text(json.dumps(build_mcp_config(get_memory_url())), encoding="utf-8")
         isolated_config_dir.mkdir()
@@ -783,13 +799,15 @@ async def _run_isolated_agent(
         stdout = await _spawn_with_auth_fallback(
             lambda bare: build_command(claude_bin, str(config_path), bare),
             env=build_spawn_env(str(isolated_config_dir)),
-            timeout=timeout,
+            timeout=spec.timeout,
+            transcript=transcript,
         )
         return _parse_logging_rejection(lambda out: parse_dream_result(out, expected_model=model), stdout)
     except RuntimeError as exc:
         return _failed_spawn(str(exc))
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+        await _save_transcript(spec, transcript)
 
 
 @dataclass(frozen=True)
@@ -799,6 +817,11 @@ class PassSpec:
     heavy: bool
     limit: int
     timeout: float
+
+    @property
+    def tier(self) -> str:
+        """The tier's name."""
+        return "heavy" if self.heavy else "light"
 
     @property
     def prompt(self) -> str:
@@ -837,7 +860,7 @@ async def _run_claude_pass(claude_bin: str, spec: PassSpec) -> SpawnResult:
             bare=bare,
         )
 
-    return await _run_isolated_agent(build_command, claude_bin=claude_bin, model=model, timeout=spec.timeout)
+    return await _run_isolated_agent(build_command, claude_bin=claude_bin, model=model, spec=spec)
 
 
 async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
@@ -862,15 +885,21 @@ async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
         rules=load_dream_rules(user_dir),
     )
     started = time.monotonic()
+    transcript: list[str] = []
     try:
         stdout = await _spawn_agent(
-            command, env={**os.environ, "PI_CODING_AGENT_DIR": str(agent_dir)}, timeout=spec.timeout
+            command,
+            env={**os.environ, "PI_CODING_AGENT_DIR": str(agent_dir)},
+            timeout=spec.timeout,
+            transcript=transcript,
         )
         return _parse_logging_rejection(
             lambda out: parse_pi_result(out, duration_ms=round((time.monotonic() - started) * 1000)), stdout
         )
     except RuntimeError as exc:
         return _failed_spawn(str(exc))
+    finally:
+        await _save_transcript(spec, transcript)
 
 
 @dataclass(frozen=True)

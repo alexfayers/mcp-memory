@@ -23,7 +23,7 @@ Environment variables. The server reads the first table. The hook plugin reads t
 | `MCP_MEMORY_CALL_METRICS_RETENTION_DAYS` | Days to keep call metrics | `90` |
 | `MCP_MEMORY_SURFACED_RETENTION_DAYS` | Days to keep retrieval telemetry. Negative means forever. The ranking eval needs its `used_at` labels | `-1` |
 | `MCP_MEMORY_EVAL_CACHE_TTL_SECONDS` | How long a computed ranking-quality report is cached | `300` |
-| `MCP_MEMORY_BACKUP_ENABLED` | Back up the database on server start, every interval, and before each heavy dream pass | `true` |
+| `MCP_MEMORY_BACKUP_ENABLED` | Back up the database on server start, every interval, and before each heavy dream pass. Also saves each dream agent's prompt and output as `dream-<tier>-<UTC timestamp>.jsonl` beside the backups, pruned with the same retention windows | `true` |
 | `MCP_MEMORY_BACKUP_DIR` | Directory holding timestamped database backups | `backups` beside the database |
 | `MCP_MEMORY_BACKUP_INTERVAL_SECONDS` | How often the server backs up the database | `21600` |
 | `MCP_MEMORY_BACKUP_KEEP_DAILY` | Days that keep their newest backup after the last 24 hours. Every backup from the last 24 hours is kept | `7` |
