@@ -54,7 +54,7 @@
 | src/mcp\_memory/storage/services/integrity.py        |       24 |        0 |    100% |           |
 | src/mcp\_memory/tool\_names.py                       |        3 |        0 |    100% |           |
 | src/mcp\_memory/usefulness.py                        |       72 |        2 |     97% |     50-51 |
-| src/mcp\_memory/visualise.py                         |      160 |        5 |     97% |136, 195-196, 269, 273 |
+| src/mcp\_memory/visualise.py                         |      174 |        5 |     97% |148, 217-218, 291, 295 |
 | tests/\_\_init\_\_.py                                |       43 |        1 |     98% |        85 |
 | tests/conftest.py                                    |       40 |        0 |    100% |           |
 | tests/eval/\_\_init\_\_.py                           |        0 |        0 |    100% |           |
@@ -100,8 +100,8 @@
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
-| tests/test\_visualise.py                             |      559 |        0 |    100% |           |
-| **TOTAL**                                            | **13495** |  **453** | **97%** |           |
+| tests/test\_visualise.py                             |      574 |        0 |    100% |           |
+| **TOTAL**                                            | **13524** |  **453** | **97%** |           |
 
 
 ## Setup coverage badge
