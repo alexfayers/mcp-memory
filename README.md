@@ -19,7 +19,7 @@
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       69 |        4 |     94% |52-53, 88, 90 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
-| src/mcp\_memory/hooks/plugin.py                      |      441 |       23 |     95% |216, 364, 593-594, 599-607, 629, 672, 711, 714-716, 726, 733-737, 789 |
+| src/mcp\_memory/hooks/plugin.py                      |      466 |       25 |     95% |222, 224, 252, 400, 629-630, 635-643, 665, 708, 747, 750-752, 762, 769-773, 825 |
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
 | src/mcp\_memory/hooks/tracker.py                     |      111 |        1 |     99% |       130 |
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
@@ -31,7 +31,7 @@
 | src/mcp\_memory/path\_resolver.py                    |       22 |        1 |     95% |        15 |
 | src/mcp\_memory/payload.py                           |       12 |        0 |    100% |           |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      553 |       43 |     92% |58-59, 479, 489, 525, 538, 594-596, 600, 674-675, 705-706, 714, 722, 734-735, 797-798, 812-813, 1006-1007, 1027, 1045-1050, 1089-1096, 1135-1136, 1186-1187, 1414, 1418 |
+| src/mcp\_memory/server.py                            |      555 |       43 |     92% |61-62, 484, 494, 530, 543, 599-601, 605, 679-680, 710-711, 719, 727, 739-740, 802-803, 817-818, 1011-1012, 1032, 1050-1055, 1094-1101, 1140-1141, 1191-1192, 1419, 1423 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
@@ -89,21 +89,21 @@
 | tests/test\_dream.py                                 |      586 |        4 |     99% |446-447, 544, 904 |
 | tests/test\_dream\_status.py                         |      236 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      271 |        0 |    100% |           |
-| tests/test\_hooks\_plugin.py                         |     1030 |       66 |     94% |1658-1663, 1668-1671, 1676-1684, 1695-1698, 1727-1730, 1772-1775, 1779-1782, 1786-1790, 1794-1796, 1801-1803, 1808-1813, 1817-1818, 1822-1824, 1829-1837 |
+| tests/test\_hooks\_plugin.py                         |     1067 |       66 |     94% |1670-1675, 1680-1683, 1688-1696, 1707-1710, 1739-1742, 1784-1787, 1791-1794, 1798-1802, 1806-1808, 1813-1815, 1820-1825, 1829-1830, 1834-1836, 1841-1849 |
 | tests/test\_metrics.py                               |      183 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_path\_resolver.py                        |       41 |        2 |     95% |     56-57 |
 | tests/test\_payload.py                               |       68 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
-| tests/test\_server.py                                |      912 |        1 |     99% |      1568 |
-| tests/test\_server\_http.py                          |       59 |        0 |    100% |           |
+| tests/test\_server.py                                |      915 |        1 |     99% |      1573 |
+| tests/test\_server\_http.py                          |       73 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       17 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      574 |        0 |    100% |           |
-| **TOTAL**                                            | **14039** |  **444** | **97%** |           |
+| **TOTAL**                                            | **14120** |  **446** | **97%** |           |
 
 
 ## Setup coverage badge
