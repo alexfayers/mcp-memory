@@ -49,17 +49,27 @@ class Maintenance:
                 )
 
     def _purge_soft_deleted(self, grace_days: int) -> int:
-        """Hard-delete entities soft-deleted longer than the grace window, returning the count."""
+        """Hard-delete entities, observations and relations soft-deleted longer than the grace window.
+
+        Returns the total number of rows removed.
+        """
+        cutoff = (days_ago(grace_days),)
         rows = self._conn.query_all(
             "SELECT e.id, e.name, p.name AS project FROM entities e "
             "JOIN projects p ON e.project_id = p.id "
             "WHERE e.deleted_at IS NOT NULL AND e.deleted_at < datetime('now', ?)",
-            (days_ago(grace_days),),
+            cutoff,
         )
         with self._conn.transaction():
             for row in rows:
                 self._entities.hard_delete_row(row["id"], row["project"], row["name"])
-        return len(rows)
+            observations = self._conn.write(
+                "DELETE FROM observations WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?)", cutoff
+            )
+            relations = self._conn.write(
+                "DELETE FROM relations WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?)", cutoff
+            )
+        return len(rows) + observations.rowcount + relations.rowcount
 
     def _gc_downvoted_orphans(self, threshold: int = GC_DOWNVOTE_FLOOR) -> int:
         """Soft-delete downvoted orphan entities, returning the number reaped.
@@ -79,7 +89,7 @@ class Maintenance:
                 f"AND NOT EXISTS ("
                 f"SELECT 1 FROM relations r "
                 f"JOIN entities src ON r.source_id = src.id "
-                f"WHERE r.target_id = entities.id AND src.deleted_at IS NULL)",
+                f"WHERE r.target_id = entities.id AND r.deleted_at IS NULL AND src.deleted_at IS NULL)",
                 (threshold, *STRUCTURAL_ENTITY_TYPES),
             )
         return cursor.rowcount

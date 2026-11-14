@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 from mcp_memory.migrations.runner import schema_version
 from mcp_memory.models import normalize_relation_type
 from mcp_memory.storage.pure.rows import build_entity
+from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT
 from mcp_memory.storage.services.ids import (
     get_entity_id,
     get_entity_type_name,
@@ -196,7 +197,9 @@ class Transfer:
         """
         existing = {
             row["content_hash"]
-            for row in self._conn.query_all("SELECT content_hash FROM observations WHERE entity_id = ?", (entity_id,))
+            for row in self._conn.query_all(
+                "SELECT content_hash FROM observations WHERE entity_id = ? AND deleted_at IS NULL", (entity_id,)
+            )
         }
         new_count = 0
         duplicate_count = 0
@@ -239,7 +242,8 @@ class Transfer:
                 self._conn, normalize_relation_type(relation.relation_type)
             )
             exists = self._conn.query_one(
-                "SELECT 1 FROM relations WHERE source_id = ? AND target_id = ? AND relation_type_id = ?",
+                "SELECT 1 FROM relations "
+                "WHERE source_id = ? AND target_id = ? AND relation_type_id = ? AND deleted_at IS NULL",
                 (source_id, target_id, relation_type_id),
             )
             if exists:
@@ -247,7 +251,8 @@ class Transfer:
                 continue
             new_count += 1
             self._conn.write(
-                "INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)",
+                "INSERT INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?) "
+                + REVIVE_RELATION_ON_CONFLICT,
                 (source_id, target_id, relation_type_id),
             )
         return new_count, duplicate_count

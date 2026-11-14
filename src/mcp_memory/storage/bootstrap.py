@@ -26,7 +26,7 @@ class Storage:
         self.entities = EntityRepository(connection)
         self.observations = ObservationRepository(connection)
         self.relations = RelationRepository(connection)
-        self.projects = ProjectRepository(connection)
+        self.projects = ProjectRepository(connection, self.entities)
         self.telemetry = TelemetryRepository(connection)
         self.maintenance = Maintenance(connection, self.entities, self.telemetry)
         self.reads = Reads(connection, self.observations, self.relations)

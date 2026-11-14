@@ -710,6 +710,7 @@ class TestDeleteObservationsTool:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
         result = tools.delete_observations("proj", "e1", observations=["a"])
         assert result["count"] == 1
+        assert result["hashes"] == [hash_observation("a")]
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["b"]
 
     def test_delete_by_hash(self, server_db: Storage) -> None:
@@ -719,11 +720,47 @@ class TestDeleteObservationsTool:
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["b"]
 
 
+class TestRestoreObservationsTool:
+    def test_restores_deleted_observations_by_hash_and_content(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
+        deleted = tools.delete_observations("proj", "e1", observations=["a", "b"])["hashes"]
+        by_hash = tools.restore_observations("proj", "e1", observationHashes=[deleted[0]])
+        assert by_hash["count"] == 1
+        assert by_hash["hashes"] == [deleted[0]]
+        by_content = tools.restore_observations("proj", "e1", observations=["b"])
+        assert by_content["hashes"] == [deleted[1]]
+        assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a", "b"]
+
+    def test_missing_entity_returns_error(self, server_db: Storage) -> None:
+        assert "error" in tools.restore_observations("proj", "nope", observationHashes=["x"])
+
+
+class TestRestoreRelationTool:
+    def test_restore_makes_deleted_relation_visible(self, server_db: Storage) -> None:
+        server_db.entities.create(
+            "proj",
+            [
+                {"name": "a", "entityType": "feature", "observations": ["x"]},
+                {"name": "b", "entityType": "project", "observations": ["y"]},
+            ],
+        )
+        server_db.relations.create("proj", [Relation(source="a", target="b", relation_type="belongs-to")])
+        tools.delete_relation("proj", "a", "b", "belongs-to")
+        result = tools.restore_relation("proj", "a", "b", "belongs-to")
+        assert result == {"message": "Restored relation 'a' -> 'b' (belongs-to) in project 'proj'."}
+        assert len(server_db.reads.get_entity_with_relations("proj", "a")["relations"]) == 1
+
+    def test_unknown_relation_returns_error(self, server_db: Storage) -> None:
+        assert "error" in tools.restore_relation("proj", "a", "b", "belongs-to")
+
+
 class TestTrimObservationsToOutcomeTool:
     def test_trim_returns_deleted_count(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b", "c"]}])
         result = tools.trim_observations_to_outcome("proj", "e1", [hash_observation("a")])
-        assert result == {"message": "Trimmed 2 observation(s) from 'e1'.", "deleted": 2}
+        assert result["message"] == "Trimmed 2 observation(s) from 'e1'."
+        assert result["deleted"] == 2
+        assert sorted(result["hashes"]) == sorted([hash_observation("b"), hash_observation("c")])
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["a"]
 
     def test_empty_keep_hashes_returns_error(self, server_db: Storage) -> None:
@@ -989,6 +1026,7 @@ class TestMergeObservationsTool:
         result = tools.merge_observations("proj", "e1", hashes["source"], hashes["target"])
         assert result["message"] == "Merged observation into target in 'e1'."
         assert result["merged"] == 1
+        assert result["hashes"] == [hashes["source"]]
         assert obs_contents(server_db.reads.get_entity("proj", "e1")) == ["target"]
 
     def test_unknown_hash_returns_error(self, server_db: Storage) -> None:
