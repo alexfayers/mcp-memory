@@ -215,6 +215,12 @@ class TestVisualisePage:
         assert 'svg.style("--link-px", `${linkPx()}px`)' in resp.text
 
     @pytest.mark.anyio
+    async def test_keeps_unconnected_components_apart(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert 'force("collision", forceCollideApart(COMPONENT_GAP)' in resp.text
+        assert ".components(nodes, links)" in resp.text
+
+    @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert "applyDemotedRings" in resp.text
