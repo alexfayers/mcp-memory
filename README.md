@@ -100,14 +100,14 @@
 | tests/test\_plan\_apply.py                           |       27 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      111 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
-| tests/test\_server.py                                |      947 |        1 |     99% |      1619 |
+| tests/test\_server.py                                |      950 |        1 |     99% |      1623 |
 | tests/test\_server\_http.py                          |       73 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       17 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      656 |        0 |    100% |           |
-| **TOTAL**                                            | **15401** |  **476** | **97%** |           |
+| **TOTAL**                                            | **15404** |  **476** | **97%** |           |
 
 
 ## Setup coverage badge
