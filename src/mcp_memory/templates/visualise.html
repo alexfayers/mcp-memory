@@ -251,8 +251,8 @@ const linkLayer = g.append("g");
 const labelLayer = g.append("g");
 const nodeLayer = g.append("g");
 
-let lastUserInteract = 0;
-const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, ZOOM_MIN = 0.2, ZOOM_MAX = 4, ZOOM_FIT_MARGIN = 0.9, ZOOM_FLOOR = 0.01;
+let lastUserInteract = 0, refitView = false, refitTicks = 0;
+const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, FIT_MS = 600, REFIT_TICKS = 10, ZOOM_MIN = 0.2, ZOOM_MAX = 4, ZOOM_FIT_MARGIN = 0.9, ZOOM_FLOOR = 0.01;
 const LINK_COLOUR = "#6e7681", LINK_OPACITY = 0.55, LINK_SCREEN_PX = 1.25;
 let zoomMin = ZOOM_MIN, viewTransform = d3.zoomIdentity;
 const linkPx = () => LINK_SCREEN_PX / viewTransform.k;
@@ -261,7 +261,7 @@ const zoom = d3.zoom().scaleExtent([zoomMin, ZOOM_MAX]).on("zoom", e => {
   viewTransform = e.transform;
   g.attr("transform", e.transform);
   updateLinkPx();
-  if (e.sourceEvent) lastUserInteract = Date.now();
+  if (e.sourceEvent) { lastUserInteract = Date.now(); refitView = false; }
 });
 svg.call(zoom);
 updateLinkPx();
@@ -488,11 +488,11 @@ function render(data) {
     return n;
   });
   // Only swap in the freshly-built (unresolved source/target string) link array when topology
-  // actually changed - it only gets resolved into real node object refs once handed to the force
-  // simulation below. Reusing it on a no-topology-change render (e.g. a vote/observation update)
+  // changed or the simulation restarted - it only gets resolved into real node object refs once
+  // handed to the force simulation below. Reusing it on a no-topology-change render (e.g. a vote/observation update)
   // would rebind linkSel/labelSel to unresolved links, making d.source.x/d.target.x undefined -
   // NaN link-label positions and vanished lines.
-  if (topologyChanged) links = newLinks;
+  if (topologyChanged || !simulation) links = newLinks;
 
   linkSel = linkLayer.selectAll(".link").data(links, d => d.source.id || d.source + "-" + (d.target.id || d.target) + "-" + d.type)
     .join("line").attr("class", "link").attr("stroke", LINK_COLOUR).attr("stroke-opacity", LINK_OPACITY);
@@ -533,7 +533,7 @@ function render(data) {
       .force("y", d3.forceY(height() / 2).strength(GRAVITY))
       .force("collision", forceCollideApart(COMPONENT_GAP).radius(d => 5 + nodeRadius(d)))
       .on("tick", ticked)
-      .on("end", updateZoomExtent);
+      .on("end", settled);
     simulation.force("collision").components(nodes, links);
   } else if (topologyChanged) {
     simulation.nodes(nodes);
@@ -543,18 +543,25 @@ function render(data) {
   }
 
   updateZoomExtent();
+  if (refitView) fitView(nodes, 0);
   applySearchRings();  // nodeSel was just rebuilt; reapply persistent search rings
   applyDemotedRings();  // flag nodes the dream (or a manual vote) demoted
 }
 
+function settled() {
+  updateZoomExtent();
+  if (refitView) { refitView = false; fitView(nodes, FIT_MS); }
+}
+
 function ticked() {
+  if (refitView && ++refitTicks % REFIT_TICKS === 0) fitView(nodes, 0);
   linkSel.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
     .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
   labelSel.attr("x", d => (d.source.x + d.target.x) / 2).attr("y", d => (d.source.y + d.target.y) / 2);
   nodeSel.attr("transform", d => `translate(${d.x},${d.y})`);
 }
 
-function dragStart(e, d) { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
+function dragStart(e, d) { refitView = false; svg.interrupt(); if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
 function dragged(e, d) { d.fx = e.x; d.fy = e.y; }
 function dragEnd(e, d) { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
 
@@ -653,7 +660,7 @@ function updateSelection() {
   if (nodeSel) nodeSel.attr("class", d => "node" + (orphans.has(d.id) ? " orphan" : "") + (d.id === selectedNode ? " selected" : ""));
 }
 
-document.getElementById("project").onchange = () => { currentData = null; if (simulation) { simulation.stop(); simulation = null; } updateControlsPath(); fetchGraph(); runSearch(); };
+document.getElementById("project").onchange = () => { refitView = true; currentData = null; if (simulation) { simulation.stop(); simulation = null; } updateControlsPath(); fetchGraph(); runSearch(); };
 document.getElementById("refresh").onclick = fetchGraph;
 
 let timer = setInterval(fetchGraph, 2000);
@@ -697,18 +704,23 @@ function focusOn(events) {
   if (Date.now() - lastUserInteract < FOLLOW_COOLDOWN) return;
   const hits = nodes.filter(d => Number.isFinite(d.x) && Number.isFinite(d.y)
     && events.some(ev => ev.entities.some(name => eventMatchesNode(d, ev, name))));
-  if (!hits.length) return;
+  if (hits.length) fitView(hits, FIT_MS);
+}
+
+function fitView(ds, duration) {
+  if (!ds.length) return;
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  hits.forEach(d => {
+  ds.forEach(d => {
     const r = nodeRadius(d) + 30;
     minX = Math.min(minX, d.x - r); maxX = Math.max(maxX, d.x + r);
     minY = Math.min(minY, d.y - r); maxY = Math.max(maxY, d.y + r);
   });
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   const fit = Math.min(width() / Math.max(maxX - minX, 1), height() / Math.max(maxY - minY, 1));
-  const k = Math.max(ZOOM_MIN, Math.min(FOLLOW_SCALE, fit));
+  const k = Math.max(zoomMin, Math.min(FOLLOW_SCALE, fit));
   const t = d3.zoomIdentity.translate(width() / 2, height() / 2).scale(k).translate(-cx, -cy);
-  svg.transition().duration(600).ease(d3.easeCubicOut).call(zoom.transform, t);
+  if (duration) svg.transition().duration(duration).ease(d3.easeCubicOut).call(zoom.transform, t);
+  else svg.call(zoom.transform, t);
 }
 
 const feed = document.getElementById("feed");
