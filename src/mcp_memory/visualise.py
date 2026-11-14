@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from mcp.server.mcpserver import MCPServer
 
-    from .models import Entity, Observation
+    from .models import Entity, Observation, Relation
     from .storage import NodeList, Storage
 
 _VISUALISE_HTML = importlib.resources.files("mcp_memory").joinpath("templates/visualise.html").read_text()
@@ -83,6 +83,24 @@ def _serialise_entity(entity: Entity, rank: int | None = None, *, observations: 
     return {"rank": rank, **serialised}
 
 
+def _serialise_relations(result: NodeList) -> list[dict[str, object]]:
+    by_project = result.get("relations_by_project")
+    if by_project is None:
+        return [_serialise_relation(r) for r in result["relations"]]
+    return [_serialise_relation(r, project) for project, group in by_project.items() for r in group]
+
+
+def _serialise_relation(relation: Relation, project: str | None = None) -> dict[str, object]:
+    serialised: dict[str, object] = {
+        "source": relation.source,
+        "target": relation.target,
+        "relation_type": relation.relation_type,
+    }
+    if project is not None:
+        serialised["project"] = project
+    return serialised
+
+
 def _serialise_graph(
     result: NodeList, *, ranked: bool = False, observations: bool = True
 ) -> dict[str, list[dict[str, object]]]:
@@ -91,9 +109,7 @@ def _serialise_graph(
             _serialise_entity(entity, position if ranked else None, observations=observations)
             for position, entity in enumerate(result["entities"], start=1)
         ],
-        "relations": [
-            {"source": r.source, "target": r.target, "relation_type": r.relation_type} for r in result["relations"]
-        ],
+        "relations": _serialise_relations(result),
     }
 
 

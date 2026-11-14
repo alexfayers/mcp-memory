@@ -343,15 +343,14 @@ class Reads:
 
         entities: list[Entity] = []
         entity_ids: list[int] = []
-        project_ids: set[int] = set()
         for row in rows:
             observations, omitted = ([], 0) if compact else self._observations.budgeted(row["id"], -1)
             entities.append(build_entity(row, observations, omitted, project_name=row["project_name"]))
             entity_ids.append(row["id"])
-            project_ids.add(row["project_id"])
 
-        relations: list[Relation] = []
-        for pid in project_ids:
-            relations.extend(self._relations.for_entities(pid, entity_ids))
-
-        return {"entities": entities, "relations": relations}
+        by_project = self._relations.for_entity_ids(entity_ids)
+        return {
+            "entities": entities,
+            "relations": [rel for group in by_project.values() for rel in group],
+            "relations_by_project": by_project,
+        }

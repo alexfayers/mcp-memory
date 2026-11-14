@@ -262,6 +262,8 @@ svg.call(zoom);
 let simulation = null, linkSel, nodeSel, labelSel, currentData = null, selectedNode = null, panelDatum = null, orphans = new Set();
 let mergeSource = null;
 let nodes = [], links = [], relCount = new Map();
+const nodeKey = (project, name) => project + "\u0000" + name;
+const connectedIds = relations => new Set(relations.flatMap(r => [nodeKey(r.project, r.source), nodeKey(r.project, r.target)]));
 
 const panel = document.getElementById("panel");
 document.getElementById("panel-close").onclick = () => { panel.classList.remove("open"); selectedNode = null; updateSelection(); };
@@ -280,7 +282,7 @@ async function castVote(vote) {
     const data = await postVote("/api/vote", { project, name, vote });
     if (!data) return;
     panelDatum.vote_score = data.vote_score;
-    const live = nodes.find(n => n.id === name && n.project === project);
+    const live = nodes.find(n => n.id === nodeKey(project, name));
     if (live) live.vote_score = data.vote_score;
     renderVotes(data.vote_score);
   } catch (e) { /* transient; leave display unchanged */ }
@@ -368,9 +370,8 @@ async function fetchGraph() {
     const res = await fetch(url);
     const data = await res.json();
     document.getElementById("status").textContent = `${data.entities.length} nodes, ${data.relations.length} edges`;
-    const connected = new Set();
-    data.relations.forEach(r => { connected.add(r.source); connected.add(r.target); });
-    const orphanCount = data.entities.filter(e => !connected.has(e.name) && e.entity_type !== "project").length;
+    const connected = connectedIds(data.relations);
+    const orphanCount = data.entities.filter(e => !connected.has(nodeKey(e.project, e.name)) && e.entity_type !== "project").length;
     if (orphanCount) document.getElementById("status").textContent += `, ${orphanCount} orphan${orphanCount > 1 ? "s" : ""}`;
     const demotedCount = data.entities.filter(e => (e.vote_score || 0) < 0).length;
     if (demotedCount) document.getElementById("status").textContent += `, ${demotedCount} demoted`;
@@ -381,19 +382,19 @@ async function fetchGraph() {
 const nodeRadius = d => 5 + Math.min((relCount.get(d.id) || 0) * 2, 25);
 
 function render(data) {
-  const incoming = data.entities.map(e => ({ id: e.name, ...e }));
+  const incoming = data.entities.map(e => ({ ...e, id: nodeKey(e.project, e.name) }));
   const nodeSet = new Set(incoming.map(n => n.id));
-  const newLinks = data.relations.filter(r => nodeSet.has(r.source) && nodeSet.has(r.target))
-    .map(r => ({ source: r.source, target: r.target, type: r.relation_type }));
+  const newLinks = data.relations.map(r => ({ source: nodeKey(r.project, r.source), target: nodeKey(r.project, r.target), type: r.relation_type }))
+    .filter(l => nodeSet.has(l.source) && nodeSet.has(l.target));
 
-  const connected = new Set();
-  data.relations.forEach(r => { connected.add(r.source); connected.add(r.target); });
+  const connected = connectedIds(data.relations);
   orphans = new Set(incoming.filter(n => !connected.has(n.id) && n.entity_type !== "project").map(n => n.id));
 
   relCount = new Map(incoming.map(n => [n.id, 0]));
   data.relations.forEach(r => {
-    if (relCount.has(r.source)) relCount.set(r.source, relCount.get(r.source) + 1);
-    if (relCount.has(r.target)) relCount.set(r.target, relCount.get(r.target) + 1);
+    const source = nodeKey(r.project, r.source), target = nodeKey(r.project, r.target);
+    if (relCount.has(source)) relCount.set(source, relCount.get(source) + 1);
+    if (relCount.has(target)) relCount.set(target, relCount.get(target) + 1);
   });
 
   const oldNodeIds = new Set(nodes.map(n => n.id));
@@ -588,7 +589,7 @@ function renderTally() {
 renderTally();
 
 function eventMatchesNode(d, ev, name) {
-  if (d.id !== name) return false;
+  if (d.name !== name) return false;
   if (ev.project && d.project) return d.project === ev.project;
   return true;
 }
@@ -707,13 +708,13 @@ function applyDemotedRings() {
 
 function renderResults(hits) {
   searchHits = hits;
-  searchRankByName = new Map(hits.map(h => [h.name, h.rank]));
+  searchRankByName = new Map(hits.map(h => [nodeKey(h.project, h.name), h.rank]));
   document.getElementById("results-count").textContent = hits.length + (hits.length === 1 ? " match" : " matches");
   document.getElementById("results-list").innerHTML = hits.map(h => {
     const snip = ((h.observations[0] && h.observations[0].content) || "").replace(/</g, "&lt;");
     const votes = h.vote_score ? `${h.vote_score > 0 ? "+" : ""}${h.vote_score} votes` : null;
     const sub = [h.entity_type, h.project, h.status, votes].filter(Boolean).join(" · ");
-    return `<div class="hit" data-name="${h.name.replace(/"/g, "&quot;")}">`
+    return `<div class="hit" data-project="${h.project.replace(/"/g, "&quot;")}" data-name="${h.name.replace(/"/g, "&quot;")}">`
       + `<span class="rank">${h.rank}</span>`
       + `<span class="meta"><span class="nm">${h.name.replace(/</g, "&lt;")}</span>`
       + `<span class="sub"> ${sub}</span><span class="snip">${snip}</span></span></div>`;
@@ -738,9 +739,9 @@ document.getElementById("search-all").onchange = runSearch;
 document.getElementById("results-list").onclick = (e) => {
   const row = e.target.closest(".hit");
   if (!row) return;
-  const node = nodes.find(n => n.id === row.dataset.name);
+  const node = nodes.find(n => n.id === nodeKey(row.dataset.project, row.dataset.name));
   if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
-  else { showPanel(searchHits.find(h => h.name === row.dataset.name)); }
+  else { showPanel(searchHits.find(h => h.project === row.dataset.project && h.name === row.dataset.name)); }
   document.getElementById("results").classList.remove("open");
 };
 
@@ -853,7 +854,7 @@ async function fetchDream() {
 document.getElementById("dream-body").onclick = (e) => {
   const row = e.target.closest(".dm");
   if (!row) return;
-  const node = nodes.find(n => n.id === row.dataset.name && n.project === row.dataset.project);
+  const node = nodes.find(n => n.id === nodeKey(row.dataset.project, row.dataset.name));
   if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
 };
 

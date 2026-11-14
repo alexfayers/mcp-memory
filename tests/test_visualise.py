@@ -100,7 +100,21 @@ class TestGetAllGraphData:
             "source": "e1",
             "target": "e2",
             "relation_type": "relates-to",
+            "project": "proj",
         }
+
+    def test_all_projects_tag_same_named_relations_with_their_project(self, store: Storage) -> None:
+        for project in ("p1", "p2"):
+            store.entities.create(
+                project,
+                [
+                    {"name": "a", "entityType": "pattern", "observations": ["o"]},
+                    {"name": "b", "entityType": "pattern", "observations": ["o"]},
+                ],
+            )
+            store.relations.create(project, [Relation(source="a", target="b", relation_type="related-to")])
+        result = get_all_graph_data(store)
+        assert sorted(r["project"] for r in result["relations"]) == ["p1", "p2"]
 
     def test_project_isolation(self, store: Storage) -> None:
         store.entities.create("p1", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
@@ -164,6 +178,15 @@ class TestVisualisePage:
         assert resp.text.count("touchObservations(d)") == 3
         assert resp.text.count("const d = panelDatum, { project, name } = d;") == 2
         assert "if (panelDatum === d) renderObservations(d);" in resp.text
+
+    @pytest.mark.anyio
+    async def test_keys_nodes_and_links_by_project_and_name(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "const incoming = data.entities.map(e => ({ ...e, id: nodeKey(e.project, e.name) }));" in resp.text
+        assert "source: nodeKey(r.project, r.source), target: nodeKey(r.project, r.target)" in resp.text
+        assert "searchRankByName = new Map(hits.map(h => [nodeKey(h.project, h.name), h.rank]));" in resp.text
+        assert "nodes.find(n => n.id === nodeKey(row.dataset.project, row.dataset.name))" in resp.text
+        assert "if (d.name !== name) return false;" in resp.text
 
     @pytest.mark.anyio
     async def test_flags_demoted_nodes(self, client: httpx.AsyncClient) -> None:
