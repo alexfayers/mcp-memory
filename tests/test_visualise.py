@@ -235,7 +235,38 @@ class TestVisualisePage:
         assert 'getElementById("project").onchange = () => { refitView = true;' in resp.text
         assert "if (refitView) { refitView = false; fitView(nodes, FIT_MS); }" in resp.text
         assert "{ lastUserInteract = Date.now(); refitView = false; }" in resp.text
-        assert "function dragStart(e, d) { refitView = false; svg.interrupt();" in resp.text
+        assert "function dragStart(e) {\n  refitView = false; svg.interrupt();" in resp.text
+
+    @pytest.mark.anyio
+    async def test_draws_large_graphs_on_a_canvas(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert '<canvas id="graph-canvas"' in resp.text
+        assert "useCanvas = nodes.length > LARGE_GRAPH_NODES" in resp.text
+
+    @pytest.mark.anyio
+    async def test_hit_tests_nodes_so_dragging_and_clicking_work_on_the_canvas(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert ".subject(e => nodeAt(e.x, e.y))" in resp.text
+        assert "d3.pointer(e.changedTouches ? e.changedTouches[0] : e, g.node())" in resp.text
+        assert 'svg.on("click.canvas"' in resp.text
+
+    @pytest.mark.anyio
+    async def test_settles_large_graphs_after_a_drag_with_time_sliced_ticks(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "if (!tickLoop) simulation.restart()" in resp.text
+        assert "start - tickAt >= tickCost / DRAG_TICK_SHARE" in resp.text
+
+    @pytest.mark.anyio
+    async def test_project_change_cancels_the_drag_animation_loop(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "stopTickLoop(); canvasPulses = [];" in resp.text
+        assert "cancelAnimationFrame(tickFrameId)" in resp.text
+
+    @pytest.mark.anyio
+    async def test_pulses_activity_on_the_canvas_for_large_graphs(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "canvasPulses.push" in resp.text
+        assert "drawCanvasPulses" in resp.text
 
     @pytest.mark.anyio
     async def test_rebuilds_links_whenever_the_simulation_restarts(self, client: httpx.AsyncClient) -> None:
