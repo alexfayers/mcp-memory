@@ -54,7 +54,7 @@ def memory_workspace_markers(self) -> frozenset[str]:
 
 ## Dreaming
 
-Dreaming lets the server curate memory while it is idle. It runs a headless `claude -p` session that connects back to the server, so the `claude` CLI must be on `PATH`. Both tiers are off by default. Set the variables, then run `mcp-memory setup-service` so the service picks them up.
+Dreaming lets the server curate memory while it is idle. It runs a headless `pi -p` session when the `pi` CLI is on `PATH`, else a headless `claude -p` session, and the session connects back to the server. Both tiers are off by default. Set the variables, then run `mcp-memory setup-service` so the service picks them up.
 
 - Light (`MCP_DREAM_ENABLED`): downvotes stale, superseded or duplicated entities and observations. It never deletes.
 - Heavy (`MCP_DREAM_HEAVY_ENABLED`): does the same, and also merges duplicate entities (reversible soft-delete) and duplicate observations in one entity (not reversible).
@@ -79,3 +79,9 @@ A running pass records each memory change it makes, and a finished pass records 
 | `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id. A bare alias maps to Opus | the light model |
 | `MCP_DREAM_HEAVY_TIMEOUT` | Timeout per pass, seconds | `600` |
 | `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges and demotions per pass | `10` |
+| `MCP_DREAM_PI_MODEL_LIGHT` | Pi model for the light tier, as `provider/id` | see below |
+| `MCP_DREAM_PI_MODEL_HEAVY` | Pi model for the heavy tier, as `provider/id` | see below |
+| `MCP_DREAM_PI_EXTENSIONS` | Comma-separated pi extension paths to load, for a model provider that an extension supplies | none |
+| `MCP_DREAM_AGENT_DIR` | The pi dream agent directory | `$XDG_CONFIG_HOME/mcp-memory/dream-agent` |
+
+The claude model variables above apply to `claude -p` only. Pi runs from its own dream agent directory. The server creates it on first use with an `mcp.json` that holds only the memory server, an empty `settings.json`, and links to your pi `auth.json` and `models.json`. Edit `settings.json` freely, the server never overwrites it. The server rewrites only the memory server's `url` and `exposure` in `mcp.json`. The pi model for a tier is the first of: its `MCP_DREAM_PI_MODEL_*` variable, the `dreamModelLight` or `dreamModelHeavy` key in the dream agent `settings.json`, then your pi default model. A pass fails when none is set.
