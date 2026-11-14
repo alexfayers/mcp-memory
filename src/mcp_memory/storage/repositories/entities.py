@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from mcp_memory.config import get_strict_policy_enabled
-from mcp_memory.models import VALID_STATUSES, validate_vote
+from mcp_memory.models import STRUCTURAL_RELATION_TYPES, VALID_STATUSES, validate_vote
 from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_today_date_prefix
-from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT
+from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_entity_type_id, get_or_create_project_id
 from mcp_memory.storage.services.integrity import orphaned_neighbors_if_entity_deleted
@@ -205,7 +205,10 @@ class EntityRepository:
         return int(row["vote_score"])
 
     def delete(self, project: str, name: str) -> None:
-        """Soft-delete an entity, hiding its outgoing relations but blocking on live incoming ones."""
+        """Soft-delete an entity, hiding its outgoing relations but blocking on live incoming ones.
+
+        Also blocks while the entity has a live outgoing implements or depends-on relation to a live entity.
+        """
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, name, project_id)
         if entity_id is None:
@@ -221,6 +224,8 @@ class EntityRepository:
             sources = [row["name"] for row in incoming]
             raise ValueError(f"Cannot delete '{name}': {len(sources)} incoming relation(s) from: " + ", ".join(sources))
 
+        self._raise_on_structural_edges(entity_id, name)
+
         orphaned = orphaned_neighbors_if_entity_deleted(self._conn, entity_id)
         if orphaned:
             raise ValueError(
@@ -230,6 +235,20 @@ class EntityRepository:
 
         with self._conn.transaction():
             self._conn.write("UPDATE entities SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?", (entity_id,))
+
+    def _raise_on_structural_edges(self, entity_id: int, name: str) -> None:
+        """Raise when the entity has a live outgoing implements or depends-on relation to a live entity."""
+        edges = self._conn.query_all(
+            "SELECT rt.name AS relation_type, e.name AS target FROM relations r "
+            "JOIN relation_types rt ON r.relation_type_id = rt.id "
+            "JOIN entities e ON r.target_id = e.id "
+            "WHERE r.source_id = ? AND r.target_id != ? AND r.deleted_at IS NULL AND e.deleted_at IS NULL "
+            f"AND rt.name IN ({placeholders(len(STRUCTURAL_RELATION_TYPES))})",
+            (entity_id, entity_id, *STRUCTURAL_RELATION_TYPES),
+        )
+        if edges:
+            listed = ", ".join(f"{row['relation_type']} -> {row['target']}" for row in edges)
+            raise ValueError(f"Cannot delete '{name}': it has live structural relation(s): {listed}")
 
     def hard_delete_row(self, entity_id: int, project: str, name: str) -> None:
         """Hard-delete an entity and its observations, outgoing relations and telemetry.

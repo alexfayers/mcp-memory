@@ -1602,6 +1602,22 @@ class TestRelations:
             store.relations.create("proj", [Relation(source="a", target="a", relation_type="x")])
 
 
+class TestDeleteEntityStructuralEdges:
+    @pytest.mark.parametrize("relation_type", ["implements", "depends-on"])
+    def test_delete_blocked_by_outgoing_structural_edge(self, store: Storage, relation_type: str) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "task/t", "entityType": "task", "observations": ["y"]},
+                {"name": "feature/f", "entityType": "feature", "observations": ["x"]},
+            ],
+        )
+        store.relations.create("proj", [Relation(source="task/t", target="feature/f", relation_type=relation_type)])
+        with pytest.raises(ValueError, match=rf"Cannot delete 'task/t'.*{relation_type} -> feature/f"):
+            store.entities.delete("proj", "task/t")
+        assert store.reads.get_entity("proj", "task/t") is not None
+
+
 class TestDeleteEntity:
     def test_delete_entity(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
@@ -2025,6 +2041,22 @@ class TestGcDownvotedOrphans:
         self._downvote(store, "proj", "keeper", 10)
         assert store.maintenance._gc_downvoted_orphans() == 0
         assert obs_contents(store.reads.get_entity("proj", "keeper")) == ["k"]
+
+    @pytest.mark.parametrize("relation_type", ["implements", "depends-on"])
+    def test_floored_entity_with_live_outgoing_structural_edge_is_spared(
+        self, store: Storage, relation_type: str
+    ) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "subject", "entityType": "task", "observations": ["s"]},
+                {"name": "anchor", "entityType": "feature", "observations": ["a"]},
+            ],
+        )
+        store.relations.create("proj", [Relation(source="subject", target="anchor", relation_type=relation_type)])
+        self._downvote(store, "proj", "subject", 10)
+        assert store.maintenance._gc_downvoted_orphans() == 0
+        assert obs_contents(store.reads.get_entity("proj", "subject")) == ["s"]
 
     def test_floored_orphan_whose_only_source_is_soft_deleted_is_reaped(self, store: Storage) -> None:
         store.entities.create(

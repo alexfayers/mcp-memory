@@ -217,8 +217,8 @@ CREATE_RELATIONS_DESC = (
 DELETE_ENTITY_DESC = (
     "Soft-delete an entity with its observations and relations (restorable with restore_entity until a "
     "grace-window purge). Use sparingly for stale, incorrect or misleading memory - prefer marking it deprecated "
-    "or a downvote unless it would mislead. Refused while it has live incoming relations - delete or retarget "
-    "those first, then retry."
+    "or a downvote unless it would mislead. Refused while it has live incoming relations or live implements or "
+    "depends-on relations - delete or retarget those first, then retry."
 )
 DELETE_RELATION_DESC = (
     "Soft-delete a relation (restorable with restore_relation until a grace-window purge). "
@@ -1048,7 +1048,7 @@ def delete_entity(
 ) -> dict[str, str]:
     """Soft-delete an entity, hiding it and its observations and relations.
 
-    Refused while the entity has live incoming relations.
+    Refused while the entity has live incoming relations or live implements or depends-on relations.
     """
     try:
         db = _get_db()
