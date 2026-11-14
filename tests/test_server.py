@@ -734,6 +734,10 @@ class TestRestoreObservationsTool:
     def test_missing_entity_returns_error(self, server_db: Storage) -> None:
         assert "error" in tools.restore_observations("proj", "nope", observationHashes=["x"])
 
+    def test_empty_request_error_names_tool_parameter(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        assert "observationHashes" in tools.restore_observations("proj", "e1")["error"]
+
 
 class TestRestoreRelationTool:
     def test_restore_makes_deleted_relation_visible(self, server_db: Storage) -> None:

@@ -85,7 +85,7 @@ class ObservationRepository:
     ) -> list[str]:
         """Soft-delete observations by exact content match and/or by content_hash, returning their hashes."""
         if not observations and not hashes:
-            raise ValueError("Provide at least one of 'observations' or 'hashes'")
+            raise ValueError("Provide at least one of 'observations' or 'observationHashes'")
 
         entity_id = self._require_entity_id(project, entity_name)
         conditions: list[str] = []
@@ -113,7 +113,7 @@ class ObservationRepository:
         """
         wanted = [*(hashes or []), *(hash_observation(obs) for obs in observations or [])]
         if not wanted:
-            raise ValueError("Provide at least one of 'observations' or 'hashes'")
+            raise ValueError("Provide at least one of 'observations' or 'observationHashes'")
 
         entity_id = self._require_entity_id(project, entity_name)
         with self._conn.transaction():
