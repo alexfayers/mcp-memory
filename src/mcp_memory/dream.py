@@ -560,15 +560,15 @@ def build_spawn_env(config_dir: str, *, base_env: dict[str, str] | None = None) 
 
 
 def _model_token(model_id: str) -> str:
-    """Reduce a model id to a stable family token (e.g. claude-haiku-4-5)."""
-    match = re.search(r"claude-[a-z]+-\d+-\d+", model_id.lower())
+    """Reduce a model id to a stable family and version token (e.g. claude-haiku-4-5)."""
+    match = re.search(r"claude-[a-z]+-\d+(?:-\d{1,2})?(?!\d)", model_id.lower())
     return match.group(0) if match else model_id.lower()
 
 
 def _model_matches(model_id: str, usage_keys: list[str]) -> bool:
-    """Return True if any reported model-usage key is the expected model family."""
+    """Return True if any reported model-usage key is the expected model family and version."""
     token = _model_token(model_id)
-    return any(token in key.lower() for key in usage_keys)
+    return any(_model_token(key) == token for key in usage_keys)
 
 
 def parse_dream_result(stdout: str, *, expected_model: str) -> SpawnResult:
