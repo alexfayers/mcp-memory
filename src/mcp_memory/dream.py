@@ -80,6 +80,7 @@ class SpawnResult(TypedDict):
     output_tokens: int | None
     cache_read_tokens: int | None
     cache_creation_tokens: int | None
+    error_type: str | None
 
 
 # --strict-mcp-config isolates MCP servers but not built-ins. Deny the write/exec
@@ -604,6 +605,7 @@ def parse_dream_result(stdout: str, *, expected_model: str) -> SpawnResult:
         "output_tokens": _as_int(totals.get("output_tokens")),
         "cache_read_tokens": _as_int(totals.get("cache_read_input_tokens")),
         "cache_creation_tokens": _as_int(totals.get("cache_creation_input_tokens")),
+        "error_type": None,
     }
 
 
@@ -691,6 +693,7 @@ def parse_pi_result(stdout: str, *, duration_ms: int) -> SpawnResult:
         "output_tokens": _as_int(_sum_usage(usages, "output")),
         "cache_read_tokens": _as_int(_sum_usage(usages, "cacheRead")),
         "cache_creation_tokens": _as_int(_sum_usage(usages, "cacheWrite")),
+        "error_type": None,
     }
 
 
@@ -777,12 +780,28 @@ def _is_auth_failure(stdout: str, stderr: str) -> bool:
     return any(_AUTH_FAILURE.search(error) for error in errors)
 
 
-class DreamAuthError(RuntimeError):
+class DreamAgentError(RuntimeError):
+    """The dream agent run failed, with a stable ``error_type`` code for telemetry."""
+
+    error_type = "agent_exit"
+
+
+class DreamAuthError(DreamAgentError):
     """The dream agent exited because it could not authenticate."""
 
+    error_type = "auth_failed"
 
-class DreamModelNotFoundError(RuntimeError):
+
+class DreamModelNotFoundError(DreamAgentError):
     """The dream agent exited because it could not find the configured model."""
+
+    error_type = "model_not_found"
+
+
+class DreamTimeoutError(DreamAgentError):
+    """The dream agent ran past its timeout and was killed."""
+
+    error_type = "timeout"
 
 
 async def _spawn_agent(
@@ -811,7 +830,7 @@ async def _spawn_agent(
     except TimeoutError as exc:
         proc.kill()
         await proc.wait()
-        raise RuntimeError("dream timed out") from exc
+        raise DreamTimeoutError("dream timed out") from exc
     if proc.returncode != 0:
         logger.error(
             "dream agent exited %s\nstderr: %s\nstdout: %s",
@@ -823,12 +842,12 @@ async def _spawn_agent(
             raise DreamAuthError("dream agent failed to authenticate")
         if _MODEL_NOT_FOUND.search(stderr.decode(errors="replace")):
             raise DreamModelNotFoundError("dream agent could not find the model")
-        raise RuntimeError("dream agent exited with an error")
+        raise DreamAgentError("dream agent exited with an error")
     return stdout
 
 
-def _failed_spawn(message: str) -> SpawnResult:
-    """Build a failed SpawnResult carrying the handled-failure message in ``text``."""
+def _failed_spawn(message: str, error_type: str) -> SpawnResult:
+    """Build a failed SpawnResult carrying the handled-failure message in ``text`` and its code in ``error_type``."""
     return {
         "text": message,
         "ok": False,
@@ -839,12 +858,14 @@ def _failed_spawn(message: str) -> SpawnResult:
         "output_tokens": None,
         "cache_read_tokens": None,
         "cache_creation_tokens": None,
+        "error_type": error_type,
     }
 
 
 def _remember_metrics(result: SpawnResult) -> str:
     """Stash the spawn's metrics for the pass being run and return its audit text."""
-    global _pass_metrics  # ruff: ignore[global-statement]
+    global _pass_metrics, _pass_error_type  # ruff: ignore[global-statement]
+    _pass_error_type = result["error_type"]
     _pass_metrics = {
         "duration_ms": result["duration_ms"],
         "num_turns": result["num_turns"],
@@ -857,13 +878,20 @@ def _remember_metrics(result: SpawnResult) -> str:
     return result["text"]
 
 
+def _record_failure(audit: str, error_type: str) -> str:
+    """Stash the handled failure's code for the pass being run and return its audit text."""
+    global _pass_error_type  # ruff: ignore[global-statement]
+    _pass_error_type = error_type
+    return audit
+
+
 def _parse_logging_rejection(parse: Callable[[str], SpawnResult], stdout: str) -> SpawnResult:
-    """Parse the agent transcript, logging its captured output before re-raising a rejection."""
+    """Parse the agent transcript, logging its captured output and returning a failed result on a rejection."""
     try:
         return parse(stdout)
-    except RuntimeError:
+    except RuntimeError as exc:
         logger.exception("dream agent output rejected\nstdout: %s", stdout[-_LOGGED_OUTPUT_BYTES:])
-        raise
+        return _failed_spawn(str(exc), "output_rejected")
 
 
 async def _spawn_with_auth_fallback(
@@ -925,8 +953,8 @@ async def _run_isolated_agent(
             transcript=transcript,
         )
         return _parse_logging_rejection(lambda out: parse_dream_result(out, expected_model=model), stdout)
-    except RuntimeError as exc:
-        return _failed_spawn(str(exc))
+    except DreamAgentError as exc:
+        return _failed_spawn(str(exc), exc.error_type)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
         await _save_transcript(spec, transcript)
@@ -987,11 +1015,11 @@ async def _run_claude_pass(claude_bin: str, spec: PassSpec) -> SpawnResult:
     return await _run_isolated_agent(build_command, claude_bin=claude_bin, model=model, spec=spec)
 
 
-async def _run_claude_fallback(spec: PassSpec, reason: str) -> SpawnResult:
+async def _run_claude_fallback(spec: PassSpec, reason: str, error_type: str) -> SpawnResult:
     """Run one pass through ``claude -p`` in place of pi, as an ``ok=False`` result if claude is not installed."""
     if claude_bin := _claude_bin():
         return await _run_claude_pass(claude_bin, spec)
-    return _failed_spawn(f"dream unavailable: {reason} and claude CLI not found")
+    return _failed_spawn(f"dream unavailable: {reason} and claude CLI not found", error_type)
 
 
 async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
@@ -1001,10 +1029,10 @@ async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
         _prepare_pi_agent_dir(agent_dir, user_dir, get_memory_url())
     except OSError:
         logger.exception("dream agent directory setup failed: %s", agent_dir)
-        return _failed_spawn("dream agent directory setup failed")
+        return _failed_spawn("dream agent directory setup failed", "setup_failed")
     model = _resolve_pi_model(heavy=spec.heavy, agent_dir=agent_dir, user_dir=user_dir)
     if model is None:
-        return await _run_claude_fallback(spec, "no pi model configured")
+        return await _run_claude_fallback(spec, "no pi model configured", "no_backend")
     command = build_pi_command(
         pi_bin=pi_bin,
         model=model,
@@ -1027,9 +1055,9 @@ async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
         )
     except DreamModelNotFoundError:
         logger.warning("pi could not find dream model %s, add its provider extension to MCP_DREAM_PI_EXTENSIONS", model)
-        return await _run_claude_fallback(spec, "pi model not found")
-    except RuntimeError as exc:
-        return _failed_spawn(str(exc))
+        return await _run_claude_fallback(spec, "pi model not found", "model_not_found")
+    except DreamAgentError as exc:
+        return _failed_spawn(str(exc), exc.error_type)
     finally:
         await _save_transcript(spec, transcript)
 
@@ -1058,7 +1086,7 @@ async def _run_pass(spec: PassSpec) -> SpawnResult:
     """Run one dream pass through the selected backend, as an ``ok=False`` result if none is installed."""
     backend = _select_backend()
     if backend is None:
-        return _failed_spawn(f"dream unavailable: {_NO_BACKEND}")
+        return _failed_spawn(f"dream unavailable: {_NO_BACKEND}", "no_backend")
     return await backend.run(backend.binary, spec)
 
 
@@ -1084,18 +1112,18 @@ async def run_heavy_dream_pass() -> str:
             await asyncio.to_thread(backup.backup_database)
     except (OSError, sqlite3.Error):
         logger.exception("heavy dream backup failed")
-        return "dream backup failed"
+        return _record_failure("dream backup failed", "backup_failed")
     try:
         prepass = await asyncio.to_thread(_dream_prepass)
     except (OSError, sqlite3.Error):
         logger.exception("heavy dream prepass failed")
-        return "dream prepass failed"
+        return _record_failure("dream prepass failed", "prepass_failed")
     try:
         audit = await asyncio.to_thread(_heavy_dream_audit, max_ops)
         result = await _run_pass(PassSpec(heavy=True, limit=max_ops, timeout=get_dream_heavy_timeout(), audit=audit))
     except Exception as exc:
         logger.exception("heavy dream failed")
-        return _with_prepass(f"dream failed: {type(exc).__name__}", prepass)
+        return _with_prepass(_record_failure(f"dream failed: {type(exc).__name__}", type(exc).__name__), prepass)
     return _with_prepass(_remember_metrics(result), prepass)
 
 
@@ -1172,6 +1200,7 @@ def _claim_dream() -> bool:
 
 
 _pass_metrics: dream_status.PassMetrics = {}
+_pass_error_type: str | None = None
 
 
 async def _run_claimed(spec: TierSpec) -> None:
@@ -1183,9 +1212,10 @@ async def _run_claimed(spec: TierSpec) -> None:
     here - the single chokepoint shared by the scheduled and manual paths - is what
     lets the coordinator tell the dream's own marker reset from real user activity.
     """
-    global _dream_running, _pass_metrics  # ruff: ignore[global-statement]
+    global _dream_running, _pass_metrics, _pass_error_type  # ruff: ignore[global-statement]
     dream_status.record_pass_start(spec.name)
     _pass_metrics = {}
+    _pass_error_type = None
     started = time.monotonic()
     audit = ""
     error_type: str | None = None
@@ -1203,7 +1233,7 @@ async def _run_claimed(spec: TierSpec) -> None:
             spec.name,
             ok=error_type is None and _pass_succeeded(audit),
             duration_ms=round((time.monotonic() - started) * 1000),
-            error_type=error_type,
+            error_type=error_type or _pass_error_type,
             operations=Counter(op["action"] for op in dream_status.parse_operations(audit)),
         )
         _dream_running = False
