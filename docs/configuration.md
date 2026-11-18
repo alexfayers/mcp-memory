@@ -42,6 +42,8 @@ Environment variables. The server reads the first table. The hook plugin reads t
 | `MCP_MEMORY_WRAPPER_TOOLS` | Extra tools that run other tool calls. Counted as one call, unless their input names a memory write tool | `codemode` |
 | `MCP_MEMORY_UNCOUNTED_TOOLS` | Extra bookkeeping tools that are not counted toward the gate | the frontend's bookkeeping, skill and message tools |
 
+Stopping needs a `task/` write only after wide work: a `git commit`, edits to more than one file, a presented plan or a writer delegation. Stop is blocked once per piece of work.
+
 Another cline-hooks plugin can add workspace markers by implementing the `memory_workspace_markers` hook. It returns a `frozenset[str]` of directory names:
 
 ```python

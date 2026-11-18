@@ -6,21 +6,25 @@ import ast
 from collections.abc import Callable
 import contextlib
 from datetime import UTC, datetime
+import itertools
 import json
 import os
 from pathlib import Path
 import random
 import re
+import shlex
 import socket
 from urllib.parse import urlparse
 
-from cline_hooks.core.parameters import FileEditParameters, ReadParameters
+from cline_hooks.core.parameters import FileEditParameters, ReadParameters, ShellParameters
 from cline_hooks.core.plugin import HookResult, HooksPlugin, collect_contributions, hookimpl, hookspec, is_subagent
 from cline_hooks.core.vocabulary import (
+    AGENT_SPAWN_TOOLS,
     BOOKKEEPING_TOOLS,
     FILE_EDIT_TOOLS,
     FILE_READ_TOOLS,
     MESSAGE_TOOLS,
+    PLAN_EXIT_TOOLS,
     SHELL_TOOLS,
     SKILL_TOOLS,
     CanonicalTool,
@@ -35,16 +39,20 @@ from mcp_memory.hooks.review_tracker import (
     should_nudge,
 )
 from mcp_memory.hooks.tracker import (
+    claim_edit_path,
     clear,
     get_reminder_chance,
     get_scope,
     get_window,
     has_edited,
+    has_flag,
     has_scope_blocked,
     increment,
     mark_edited,
+    mark_flag,
     mark_scope_blocked,
     reset,
+    reset_work,
     set_reminder_chance,
     set_scope,
     should_block,
@@ -85,6 +93,13 @@ _MEMORY_COMPLETION_REMINDER = (
     "REQUIRED before completing:\n- MUST write one observation per lasting fact.\n"
     "- MUST NOT narrate implementation steps."
 )
+_TASKS_REQUIRED_BLOCK = (
+    "Before finishing, record this work's `task/` entities: create missing ones, add decisions, make each open "
+    "follow-up its own `planned` `task/`, and set each finished one `resolved`."
+)
+_WIDE_WORK = "wide_work"
+_WROTE_TASK = "wrote_task"
+_STOP_BLOCKED = "stop_blocked"
 _MEMORY_COMPACT_WARNING = "MUST save lasting decisions and gotchas to memory NOW."
 _MEMORY_REVIEW_NUDGE = (
     "MEMORY REVIEW DUE: many memory writes have accumulated since the last review. "
@@ -140,6 +155,81 @@ def _read_only_agent_types() -> frozenset[str]:
 def _is_exempt_agent(agent_type: str) -> bool:
     """Return True if a read-only subagent type is exempt from the memory gate."""
     return bool(agent_type) and agent_type in _read_only_agent_types()
+
+
+_SHELL_OPERATORS = ";&|()\n"
+_GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"})
+_SPAWN_TOOLS = AGENT_SPAWN_TOOLS | {"fork"}
+_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_GIT_COMMIT = re.compile(r"(?:^|[;&|(\n])\s*git\b[^;&|\n]*?\scommit\b")
+_SPAWNED_AGENT_KEYS = ("subagent_type", "definition", "agent_type", "agent")
+_ENTITY_NAME_KEYS = {
+    "add_observations": "entityName",
+    "edit_observation": "entityName",
+    "set_entity_status": "name",
+}
+
+
+def _git_subcommand(words: list[str]) -> str:
+    """Return the subcommand of a `git` command's words, or "" for any other command."""
+    words = list(itertools.dropwhile(_ENV_ASSIGNMENT.match, words))
+    if not words or Path(words[0]).name != "git":
+        return ""
+    rest = iter(words[1:])
+    for word in rest:
+        if not word.startswith("-"):
+            return word
+        if word in _GIT_VALUE_OPTIONS:
+            next(rest, None)
+    return ""
+
+
+def _runs_git_commit(command: str) -> bool:
+    """Return True if one of the shell command's simple commands is `git commit`."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_OPERATORS)
+    lexer.whitespace = " \t\r"
+    lexer.commenters = ""
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return _GIT_COMMIT.search(command) is not None
+    words: list[str] = []
+    for token in [*tokens, ";"]:
+        if token.strip(_SHELL_OPERATORS):
+            words.append(token)
+        elif _git_subcommand(words) == "commit":
+            return True
+        else:
+            words = []
+    return False
+
+
+def _is_wide_work(task_id: str, tool_name: str, parameters: dict[str, object]) -> bool:
+    """Return True if the call commits, presents a plan, delegates work or edits a second file."""
+    if tool_name == "fork":
+        return parameters.get("role") == "writer"
+    if tool_name in _SPAWN_TOOLS:
+        return not any(_is_exempt_agent(str(parameters.get(key, ""))) for key in _SPAWNED_AGENT_KEYS)
+    if tool_name in SHELL_TOOLS:
+        return _runs_git_commit(ShellParameters.build(parameters).command)
+    if _is_file_edit(tool_name):
+        return not claim_edit_path(task_id, FileEditParameters.build(parameters).path)
+    return tool_name in PLAN_EXIT_TOOLS
+
+
+def _writes_task(project_scope: str, tool_name: str, parameters: dict[str, object]) -> bool:
+    """Return True if a memory write fills in a `task/` entity in the work's project."""
+    args = _parse_mcp_arguments(tool_name, parameters)
+    name = _resolve_memory_tool(tool_name, parameters)
+    entities = args.get("entities") if name == "create_entities" else None
+    names = (
+        [entity.get("name") for entity in entities if isinstance(entity, dict)]
+        if isinstance(entities, list)
+        else [args.get(_ENTITY_NAME_KEYS.get(name, ""))]
+    )
+    project_matches = project_scope in {"unknown", str(args.get("project", ""))}
+    return project_matches and any(str(entity).startswith("task/") for entity in names)
 
 
 def _is_wrapper_tool(tool_name: str) -> bool:
@@ -688,6 +778,7 @@ class MemoryPlugin(HooksPlugin):
             "PostToolUse": self._on_post_tool_use,
             "UserPromptSubmit": self._on_user_prompt_submit,
             "AttemptCompletion": lambda **_: _counted_nudge(NudgeKind.COMPLETION, _MEMORY_COMPLETION_REMINDER),
+            "Stop": self._on_stop,
             "PreCompact": lambda **_: _counted_nudge(NudgeKind.COMPACT, _MEMORY_COMPACT_WARNING),
         }
 
@@ -749,6 +840,21 @@ class MemoryPlugin(HooksPlugin):
         if project is None:
             return _AUTO_REGISTER_UNKNOWN_NOTE.format(anchor=anchor)
         return _AUTO_REGISTERED_NOTE.format(project=project, anchor=anchor)
+
+    def _on_stop(self, **kwargs: object) -> HookResult | None:
+        """Block finishing wide work once without a `task/`, then start the next piece of work."""
+        task_id = str(kwargs.get("task_id", ""))
+        if (
+            _is_exempt_agent(str(kwargs.get("agent_type", "")))
+            or is_subagent(kwargs)
+            or not has_flag(task_id, _WIDE_WORK)
+            or any(has_flag(task_id, name) for name in (_WROTE_TASK, _STOP_BLOCKED))
+            or not _is_memory_server_reachable()
+        ):
+            reset_work(task_id, (_WIDE_WORK, _WROTE_TASK, _STOP_BLOCKED))
+            return None
+        mark_flag(task_id, _STOP_BLOCKED)
+        return HookResult(block=_TASKS_REQUIRED_BLOCK)
 
     def _on_task_end(self, **kwargs: object) -> None:
         clear(str(kwargs.get("task_id", "")))
@@ -844,9 +950,13 @@ class MemoryPlugin(HooksPlugin):
 
         if _is_file_edit(tool_name):
             mark_edited(task_id)
+        if _is_wide_work(task_id, tool_name, parameters):
+            mark_flag(task_id, _WIDE_WORK)
 
         if _is_memory_write(tool_name, parameters):
             if not _is_error_result(kwargs.get("tool_result")):
+                if _writes_task(_task_scope(task_id, workspace_roots), tool_name, parameters):
+                    mark_flag(task_id, _WROTE_TASK)
                 reset(task_id)
                 set_reminder_chance(task_id, 0.0)
                 record_write()
