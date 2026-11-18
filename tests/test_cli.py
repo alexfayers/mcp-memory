@@ -467,6 +467,71 @@ class TestInstallPiRemovesRetiredAgent:
         assert mcp_path.read_text(encoding="utf-8") == after_first
 
 
+class TestInstallOpencode:
+    def test_adds_remote_memory_server_keeping_other_keys(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        monkeypatch.setattr(cli, "resolve_port", lambda: "8000")
+        config_path = tmp_path / "opencode" / "opencode.jsonc"
+        config_path.parent.mkdir()
+        config_path.write_text('{\n  // c\n  "theme": "x",\n  "mcp": {"memory-agent": {}, "other": {}}\n}')
+
+        cli._cmd_install_opencode()
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+
+        assert data["theme"] == "x"
+        assert data["mcp"] == {
+            "other": {},
+            "memory": {"type": "remote", "url": "http://localhost:8000/mcp", "enabled": True},
+        }
+
+    def test_creates_opencode_json_when_no_config_exists(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        monkeypatch.setattr(cli, "resolve_port", lambda: "8000")
+
+        cli._cmd_install_opencode()
+
+        data = json.loads((tmp_path / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+        assert data["mcp"]["memory"]["url"] == "http://localhost:8000/mcp"
+
+    def test_keeps_an_existing_memory_entry(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        config_path = tmp_path / "opencode" / "opencode.json"
+        config_path.parent.mkdir()
+        config_path.write_text('{"mcp": {"memory": {"type": "remote", "url": "http://custom/mcp"}}}')
+        before = config_path.read_text(encoding="utf-8")
+
+        cli._cmd_install_opencode()
+
+        assert config_path.read_text(encoding="utf-8") == before
+
+    def test_non_object_mcp_exits_with_an_error(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        config_path = tmp_path / "opencode" / "opencode.json"
+        config_path.parent.mkdir()
+        config_path.write_text('{"mcp": []}')
+
+        with pytest.raises(SystemExit) as exc:
+            cli._cmd_install_opencode()
+
+        assert exc.value.code == 1
+        assert "non-object 'mcp'" in capsys.readouterr().err
+
+    def test_install_command_dispatches_to_opencode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cli, "_remove_legacy_agent_service", lambda: None)
+        calls: list[str] = []
+        monkeypatch.setattr(cli, "_cmd_install_opencode", lambda: calls.append("opencode"))
+
+        cli._cmd_install(cli._build_parser().parse_args(["install", "opencode"]), cli._build_parser())
+
+        assert calls == ["opencode"]
+
+
 class TestInstallRemovesRetiredAgentService:
     def test_install_deletes_the_service_even_when_memory_is_already_registered(
         self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch

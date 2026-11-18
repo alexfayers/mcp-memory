@@ -27,6 +27,7 @@
 | `codex` | runs `codex mcp add` |
 | `antigravity` | runs `agy mcp add` |
 | `pi` | patches `mcp.json` in `~/.pi/agent` (or `$PI_CODING_AGENT_DIR`) |
+| `opencode` | patches `opencode.jsonc` (or `opencode.json`) in `~/.config/opencode` (or `$XDG_CONFIG_HOME/opencode`) |
 | `kiro <agent-config.json>` | patches the given Kiro agent JSON |
 
 ## Service
