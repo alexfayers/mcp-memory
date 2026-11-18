@@ -10,7 +10,7 @@ import urllib.error
 
 import pytest
 
-from mcp_memory import api_client, cli, server
+from mcp_memory import api_client, cli, dream, server
 from mcp_memory.api_client import ApiError, call
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage import open_writable
@@ -49,6 +49,18 @@ class TestRoute:
             api_client.call("nope")
         with pytest.raises(ApiError, match="anchor"):
             api_client.call("register-workspace", {"basename": "x"})
+
+    @pytest.mark.parametrize(
+        ("value", "backend", "expected"),
+        [("true", "/usr/bin/pi", True), ("false", "/usr/bin/pi", False), ("true", None, False)],
+    )
+    def test_dream_heavy_reports_whether_the_heavy_tier_can_run(
+        self, value: str, backend: str | None, expected: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MCP_DREAM_HEAVY_ENABLED", value)
+        monkeypatch.setattr(dream, "_pi_bin", lambda: backend)
+        monkeypatch.setattr(dream, "_claude_bin", lambda: None)
+        assert api_client.call("dream-heavy") is expected
 
     def test_registering_a_workspace_is_visible_in_project_paths(
         self, tmp_path: Path, store: Storage, monkeypatch: pytest.MonkeyPatch

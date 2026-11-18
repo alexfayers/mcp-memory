@@ -575,6 +575,14 @@ def _is_memory_server_reachable() -> bool:
         return False
 
 
+def _server_runs_heavy_dreams() -> bool:
+    """Return True if the memory server runs heavy dreams, False when it does not or cannot be reached."""
+    try:
+        return bool(api_client.call("dream-heavy", timeout=_LIVENESS_TIMEOUT_SECONDS))
+    except api_client.ApiError:
+        return False
+
+
 def _check_block(task_id: str, project_scope: str) -> HookResult | None:
     """Return a block result if the task has exceeded the memory update threshold."""
     if not should_block(task_id):
@@ -867,7 +875,7 @@ class MemoryPlugin(HooksPlugin):
     def _on_user_prompt_submit(self, **kwargs: object) -> HookResult | None:
         """Nudge on a memory-review backlog or on a profanity/shouting frustration signal."""
         notes: list[str] = []
-        if should_nudge():
+        if should_nudge() and not _server_runs_heavy_dreams():
             reset_review()
             nudge_count.record(NudgeKind.REVIEW)
             notes.append(_MEMORY_REVIEW_NUDGE)

@@ -1695,6 +1695,21 @@ class TestMemoryReviewNudge:
         assert "user" in note.lower()
         mock_reset.assert_called_once_with()
 
+    def test_user_prompt_skips_nudge_when_the_server_runs_heavy_dreams(self, api: FakeApi) -> None:
+        api.results["dream-heavy"] = True
+        with (
+            patch("mcp_memory.hooks.plugin.should_nudge", return_value=True),
+            patch("mcp_memory.hooks.plugin.reset_review") as mock_reset,
+        ):
+            result = MemoryPlugin().on_hook("UserPromptSubmit", task_id="t1")
+        assert result is None
+        mock_reset.assert_not_called()
+
+    def test_user_prompt_does_not_ask_the_server_when_not_due(self, api: FakeApi) -> None:
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            MemoryPlugin().on_hook("UserPromptSubmit", task_id="t1")
+        assert ("dream-heavy", None) not in api.calls
+
     def test_user_prompt_no_nudge_when_not_due(self) -> None:
         with (
             patch("mcp_memory.hooks.plugin.should_nudge", return_value=False),
