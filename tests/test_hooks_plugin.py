@@ -759,22 +759,20 @@ class TestBuildTaskStartContext:
         parts = _build_task_start_context([str(repo)])
         assert any("project/acme" in part for part in parts)
 
-    def test_includes_numbered_instructions(self, tmp_path: Path) -> None:
+    def test_points_to_the_memory_rule_start_section(self, tmp_path: Path) -> None:
         repo = tmp_path / "acme"
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
         instructions = next(part for part in parts if "Session-start guidance" in part)
-        assert instructions.startswith("Session-start guidance:\n")
-        for step in ("1. ", "2. ", "3. ", "4. "):
-            assert step in instructions
+        assert "memory rule's Start section" in instructions
 
-    def test_task_scan_step_is_conditional_on_outstanding_work_ask(self, tmp_path: Path) -> None:
+    def test_task_scan_is_conditional_on_outstanding_work_ask(self, tmp_path: Path) -> None:
         repo = tmp_path / "acme"
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
         instructions = next(part for part in parts if "Session-start guidance" in part)
-        assert "REQUIRED before starting" not in instructions
-        assert "Only if the opening message asks about outstanding work" in instructions
+        assert "only if the opening message asks about outstanding work" in instructions
+        assert "only if the user explicitly asks for the full picture" in instructions
 
     def test_project_list_reflects_resolved_scopes(self, tmp_path: Path, api: FakeApi) -> None:
         api.results["group-members"] = ["cline-hooks"]
@@ -783,6 +781,7 @@ class TestBuildTaskStartContext:
         parts = _build_task_start_context([str(repo)])
         instructions = next(part for part in parts if "Session-start guidance" in part)
         assert "`global`, `llm-prompts`, `cline-hooks`" in instructions
+        assert "projects=['global', 'llm-prompts', 'cline-hooks'])`" in instructions
 
 
 class TestIsMemoryServerReachable:

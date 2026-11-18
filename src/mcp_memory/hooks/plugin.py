@@ -436,18 +436,10 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     projects = _resolved_project_set(workspace_roots)
     project_list = ", ".join(f"`{project}`" for project in projects)
     parts.append(
-        "Session-start guidance:\n"
-        "1. Unless a `Startup block: recent memory` note is present, "
-        "`read_graph` on BOTH `global` and `<repo-name>` projects\n"
-        "2. Only if the opening message asks about outstanding work, "
-        f"scan for open tasks across {project_list}: "
-        "`search_all_projects(query='task', entityType='task', "
-        "status=['in-progress','planned'], ...)` "
-        "(use unrestricted `search_all_projects`, no `projects` filter, only on explicit "
-        "request for the full picture). Otherwise skip this scan - targeted searches for "
-        "the ask still surface anything relevant\n"
-        "3. `search_nodes` for task keywords in `<repo-name>` project\n"
-        "4. `get_entity_with_relations` on any relevant result"
+        "Session-start guidance: follow the memory rule's Start section. "
+        f"Scan for outstanding work across {project_list} only if the opening message asks about outstanding work, "
+        "with `search_all_projects(query='task', entityType='task', status=['in-progress','planned'], "
+        f"projects={projects})`. Drop the `projects` filter only if the user explicitly asks for the full picture."
     )
     return parts
 
