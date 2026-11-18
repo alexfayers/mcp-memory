@@ -741,9 +741,26 @@ def _tool_calls(event: dict[str, object]) -> list[tuple[object, object]]:
     return [(b.get("name"), b.get("input")) for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
 
 
+_turn_message_id: object = None
+
+
+def _starts_turn(event: dict[str, object]) -> bool:
+    """Return whether one event starts an agent turn: a pi turn start, or a claude message with a new id."""
+    global _turn_message_id  # ruff: ignore[global-statement]
+    if event.get("type") == "turn_start":
+        return True
+    message = event.get("message")
+    if event.get("type") != "assistant" or not isinstance(message, dict) or message.get("id") == _turn_message_id:
+        return False
+    _turn_message_id = message.get("id")
+    return True
+
+
 def _record_progress(line: str) -> None:
-    """Record every memory tool call in one agent output line on the dream status."""
+    """Record every agent turn and memory tool call in one agent output line on the dream status."""
     event = _parse_event(line)
+    if event and _starts_turn(event):
+        dream_status.record_turn()
     for name, tool_input in _tool_calls(event) if event else []:
         if isinstance(name, str) and name.startswith(_MEMORY_TOOL_PREFIX):
             tool = name.removeprefix(_MEMORY_TOOL_PREFIX)
