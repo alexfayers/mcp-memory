@@ -962,6 +962,42 @@ def _cmd_install_pi() -> None:
         sys.exit(1)
 
 
+def _opencode_config_path() -> Path:
+    """Return opencode's global config, preferring an existing `opencode.jsonc`."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    config_dir = (Path(xdg).expanduser() if xdg else Path.home() / ".config") / "opencode"
+    jsonc = config_dir / "opencode.jsonc"
+    return jsonc if jsonc.exists() else config_dir / "opencode.json"
+
+
+def _register_opencode_server(config_path: Path, name: str, url: str) -> None:
+    """Add one remote MCP server entry to opencode's config if missing."""
+    exists = config_path.exists() and config_path.stat().st_size > 0
+    config: dict[str, object] = load_jsonc_object(config_path) if exists else {}
+    servers_obj = config.setdefault("mcp", {})
+    if not isinstance(servers_obj, dict):
+        msg = f"error: {config_path} has non-object 'mcp'"
+        raise TypeError(msg)
+    if name in servers_obj:
+        print(f"{name} MCP server already configured in opencode.")
+        return
+    servers_obj[name] = {"type": "remote", "url": url, "enabled": True}
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(f"Added {name} MCP server to opencode (url: {url}).")
+
+
+def _cmd_install_opencode() -> None:
+    """Register the memory data server in opencode's global config."""
+    config_path = _opencode_config_path()
+    try:
+        _remove_mcp_servers(config_path, "mcp")
+        _register_opencode_server(config_path, "memory", f"http://localhost:{resolve_port()}/mcp")
+    except (OSError, TypeError, ValueError) as exc:
+        print(f"error: failed to update {config_path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _add_utils_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Add the `utils` command group of maintenance and diagnostic subcommands."""
     utils = sub.add_parser("utils", help="Maintenance and diagnostic commands")
@@ -1081,7 +1117,7 @@ def _build_parser() -> argparse.ArgumentParser:
     install = sub.add_parser("install", help="Patch agent config with memory MCP server")
     install.add_argument(
         "target",
-        choices=["kiro", "claude-code", "codex", "antigravity", "pi"],
+        choices=["kiro", "claude-code", "codex", "antigravity", "pi", "opencode"],
         help="Agent to install for.",
     )
     install.add_argument(
@@ -1120,6 +1156,8 @@ def _cmd_install(args: argparse.Namespace, parser: argparse.ArgumentParser) -> N
         _cmd_install_antigravity()
     elif args.target == "pi":
         _cmd_install_pi()
+    elif args.target == "opencode":
+        _cmd_install_opencode()
     else:
         if not args.agent_config:
             parser.error("agent_config is required for kiro")
