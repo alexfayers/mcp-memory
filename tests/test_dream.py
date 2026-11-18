@@ -1261,6 +1261,7 @@ class TestPiBackend:
     ) -> None:
         monkeypatch.setattr(dream, "_pi_bin", lambda: "/usr/bin/pi")
         monkeypatch.setattr(dream, "_claude_bin", lambda: "/usr/bin/claude")
+        monkeypatch.setattr(dream, "get_dream_model", lambda: _MODEL)
         commands: list[list[str]] = []
 
         async def fake_spawn(
