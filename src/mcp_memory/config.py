@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
 import re
 
 _DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
 _DEFAULT_PORT = "8000"
-_DEFAULT_DREAM_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+_DEFAULT_DREAM_MODEL = "claude-sonnet-5-5"
+_DEFAULT_DREAM_HEAVY_MODEL = "claude-opus-5-5"
 _DEFAULT_AUTO_VOTE_WINDOW_SECONDS = "1800"
 _DEFAULT_AUTO_VOTE_MAX_PER_DAY = "3"
 _DEFAULT_DREAM_IDLE_SECONDS = "1800"
@@ -118,9 +120,18 @@ def get_dream_poll_seconds() -> float:
     return float(os.environ.get("MCP_DREAM_POLL_SECONDS", _DEFAULT_DREAM_POLL_SECONDS))
 
 
+def _resolve_model(name: str) -> str:
+    """Return the id this Claude Code install requests for a model name, else the name."""
+    try:
+        claude_models = importlib.import_module("llm_prompts.claude_models")
+    except ImportError:
+        return name
+    return str(claude_models.resolve_model(name))
+
+
 def get_dream_model() -> str:
     """Return the model id used for dream spawns."""
-    return os.environ.get("MCP_DREAM_MODEL") or _DEFAULT_DREAM_MODEL
+    return os.environ.get("MCP_DREAM_MODEL") or _resolve_model(_DEFAULT_DREAM_MODEL)
 
 
 def get_dream_pi_model(*, heavy: bool) -> str | None:
@@ -193,13 +204,12 @@ def get_dream_heavy_poll_seconds() -> float:
 
 
 def get_dream_heavy_model() -> str:
-    """Return the model id for heavy dream spawns, defaulting to the light dream model.
+    """Return the model id for heavy dream spawns, defaulting to Opus.
 
-    Structural curation (merges) benefits from a stronger model, so set
-    MCP_DREAM_HEAVY_MODEL to a fully-qualified id (e.g. a Sonnet id); a bare alias
-    silently remaps to Opus. The light-model default is only a safe fallback.
+    Structural curation (merges) benefits from a stronger model than the light pass.
+    MCP_DREAM_HEAVY_MODEL overrides it with a model id.
     """
-    return os.environ.get("MCP_DREAM_HEAVY_MODEL") or get_dream_model()
+    return os.environ.get("MCP_DREAM_HEAVY_MODEL") or _resolve_model(_DEFAULT_DREAM_HEAVY_MODEL)
 
 
 def get_dream_heavy_timeout() -> float:

@@ -60,7 +60,8 @@ class TestDreamConfig:
 
     def test_model_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_MODEL", raising=False)
-        assert config.get_dream_model() == config._DEFAULT_DREAM_MODEL
+        monkeypatch.setattr("llm_prompts.claude_models.resolve_model", lambda name: f"global.anthropic.{name}")
+        assert config.get_dream_model() == "global.anthropic.claude-sonnet-5-5"
         monkeypatch.setenv("MCP_DREAM_MODEL", "some-model")
         assert config.get_dream_model() == "some-model"
 
@@ -104,9 +105,11 @@ class TestDreamHeavyConfig:
         monkeypatch.setenv("MCP_DREAM_HEAVY_POLL_SECONDS", "5")
         assert config.get_dream_heavy_poll_seconds() == 5.0
 
-    def test_model_defaults_to_dream_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_model_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("MCP_DREAM_HEAVY_MODEL", raising=False)
-        assert config.get_dream_heavy_model() == config.get_dream_model()
+        monkeypatch.setenv("MCP_DREAM_MODEL", "some-light-model")
+        monkeypatch.setattr("llm_prompts.claude_models.resolve_model", lambda name: f"global.anthropic.{name}")
+        assert config.get_dream_heavy_model() == "global.anthropic.claude-opus-5-5"
         monkeypatch.setenv("MCP_DREAM_HEAVY_MODEL", "some-heavy-model")
         assert config.get_dream_heavy_model() == "some-heavy-model"
 

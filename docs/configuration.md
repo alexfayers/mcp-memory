@@ -70,13 +70,13 @@ A running pass records each memory change it makes, and a finished pass records 
 | `MCP_DREAM_ENABLED` | Enable the light tier | off |
 | `MCP_DREAM_IDLE_SECONDS` | Idle time before the light pass fires | `1800` |
 | `MCP_DREAM_POLL_SECONDS` | How often to check whether it is due | `300` |
-| `MCP_DREAM_MODEL` | Fully-qualified model id | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `MCP_DREAM_MODEL` | Full `claude-<family>-<version>` model id, not an alias | `claude-sonnet-5-5` (the Bedrock id from `~/.claude/settings.json` `modelOverrides`, when llm-prompts is installed) |
 | `MCP_DREAM_TIMEOUT` | Timeout per pass, seconds | `300` |
 | `MCP_DREAM_MAX_VOTES` | Advisory cap on entities and observations demoted per pass | `15` |
 | `MCP_DREAM_HEAVY_ENABLED` | Enable the heavy tier | off |
 | `MCP_DREAM_HEAVY_IDLE_SECONDS` | Idle time before the heavy pass fires | `5400` |
 | `MCP_DREAM_HEAVY_POLL_SECONDS` | How often to check whether it is due | `900` |
-| `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id. A bare alias maps to Opus | the light model |
+| `MCP_DREAM_HEAVY_MODEL` | Full `claude-<family>-<version>` model id, not an alias | `claude-opus-5-5` (the Bedrock id from `~/.claude/settings.json` `modelOverrides`, when llm-prompts is installed) |
 | `MCP_DREAM_HEAVY_TIMEOUT` | Timeout per pass, seconds | `600` |
 | `MCP_DREAM_HEAVY_MAX_OPS` | Advisory cap on merges, demotions, deletes, renames, links and trims per pass | `10` |
 | `MCP_DREAM_PI_MODEL_LIGHT` | Pi model for the light tier, as `provider/id` | see below |
