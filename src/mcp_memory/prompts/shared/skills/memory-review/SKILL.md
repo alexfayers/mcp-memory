@@ -54,6 +54,7 @@ MUST look for:
 - `user-preferences` entities scattered across project scopes - MUST extract useful observations into the main global preferences, then delete the project-scoped copy
 - **Near-duplicate observations** within the same entity (same fact phrased two ways) - MUST keep the more precise one
 - **Observations that contradict each other** - MUST resolve the contradiction, keep the correct one
+- MUST keep `user` observations (`from` is `user`) when trimming unless a later `user` observation supersedes them (pass its hash as `superseded_by`). SHOULD demote or delete `inferred` observations contradicted by an `observed` one first.
 
 ## 3. Trim bloated entities
 

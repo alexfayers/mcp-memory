@@ -22,9 +22,12 @@ Unless a `Startup block: recent memory` is present, `read_graph`. Then `search_n
 - MUST record a confirmed external change (merge, deploy, close) in the same response; plans MUST include memory updates.
 - Subagents MUST NOT write; main writes after a fresh read.
 - A memory hook block MUST get a real memory write on the NEXT tool call, never a placeholder shell command.
+- Every observation write MUST pass `provenance`: `user` for what the user said, asked, decided or corrected, `observed` for what you read or ran, `inferred` for your own unchecked conclusion.
+- MUST put facts of different provenance in separate observations. A delegate's claim keeps its observed or inferred tag, and an untagged one is `inferred`.
+- `edit_observation` MUST pass `provenance` when the edit changes the claim's origin.
 - MUST render a presented `vote_score` as stars (e.g. ★3), not the raw number.
 - Before you {{TOOL_COMPLETE}}: MUST record lasting facts only. MUST record reusable lessons in `global`. MUST set the task `resolved`.
 
 ## Recommending
 
-Memory is a snapshot: except `user-preferences`, MUST re-check lists, measurements and source-pointing facts live before quoting, on pushback, or before costly action; surface conflicts rather than pick a side.
+Memory is a snapshot: except `user-preferences`, MUST re-check lists, measurements and source-pointing facts live before quoting, on pushback, or before costly action; surface conflicts rather than pick a side. MUST verify an `inferred` observation before quoting it as fact.
