@@ -139,6 +139,12 @@ class TestGetAllGraphData:
             ("b", 0),
         ]
 
+    def test_observations_include_provenance(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        store.observations.add("proj", "e1", ["b"], provenance="user")
+        provenance = {o["content"]: o["provenance"] for o in get_entity_observations(store, "proj", "e1")}
+        assert provenance == {"a": None, "b": "user"}
+
 
 class TestVisualisePage:
     @pytest.mark.anyio
@@ -659,6 +665,7 @@ class TestSearchGraph:
                     "content_hash": hash_observation("deployment pipeline"),
                     "vote_score": 0,
                     "created_at": entity["observations"][0]["created_at"],
+                    "provenance": None,
                 }
             ],
         }
