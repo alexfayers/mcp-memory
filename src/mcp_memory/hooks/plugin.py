@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
-import random
 import re
 import socket
 from urllib.parse import urlparse
@@ -23,7 +22,6 @@ from cline_hooks.core.vocabulary import (
     MESSAGE_TOOLS,
     SHELL_TOOLS,
     SKILL_TOOLS,
-    CanonicalTool,
 )
 from cline_hooks.plugins.startup_blocks import StartupBlock
 
@@ -36,7 +34,6 @@ from mcp_memory.hooks.review_tracker import (
 )
 from mcp_memory.hooks.tracker import (
     clear,
-    get_reminder_chance,
     get_scope,
     get_window,
     has_edited,
@@ -45,7 +42,6 @@ from mcp_memory.hooks.tracker import (
     mark_edited,
     mark_scope_blocked,
     reset,
-    set_reminder_chance,
     set_scope,
     should_block,
     should_warn,
@@ -62,8 +58,6 @@ _MEMORY_WRITE_CALL = re.compile(rf"_(?:{'|'.join(map(re.escape, MUTATING_TOOLS))
 
 _MEMORY_READ_TOOL_NAMES = frozenset(READ_ONLY_TOOLS)
 
-_MEMORY_REMINDER_TOOLS = FILE_EDIT_TOOLS | SHELL_TOOLS | {CanonicalTool.PLAN_MODE_RESPOND}
-
 _MEMORY_REPLACE_CLAUSE = (
     "If this replaces or contradicts an observation, search_nodes then edit_observation it instead of appending."
 )
@@ -71,8 +65,6 @@ _MEMORY_REMINDER_TEMPLATE = (
     "MEMORY CHECK: MUST record any new lasting fact (a decision and why, gotcha, preference, where something lives)"
     " in `{project}` or `global` now. MUST NOT narrate implementation steps. " + _MEMORY_REPLACE_CLAUSE
 )
-_MEMORY_REMINDER_CHANCE = 0.6
-_MEMORY_COOLDOWN_STEPS = 5
 _MEMORY_BLOCK_TEMPLATE = (
     "MEMORY UPDATE REQUIRED: MUST record any lasting fact in `{project}` or `global` before continuing, "
     "or set the task's status if there is none. " + _MEMORY_REPLACE_CLAUSE
@@ -172,17 +164,6 @@ def _file_edit_tool_names() -> frozenset[str]:
 def _is_file_edit(tool_name: str) -> bool:
     """Return True if a tool call is a reduced-weight file-edit operation."""
     return _extract_mcp_suffix(tool_name) in _file_edit_tool_names()
-
-
-def _reminder_due(task_id: str) -> bool:
-    """Step the task's reminder chance, roll it, and reset the chance when a reminder is due."""
-    chance = min(
-        _MEMORY_REMINDER_CHANCE,
-        get_reminder_chance(task_id, _MEMORY_REMINDER_CHANCE) + _MEMORY_REMINDER_CHANCE / _MEMORY_COOLDOWN_STEPS,
-    )
-    due = random.random() < chance
-    set_reminder_chance(task_id, 0.0 if due else chance)
-    return due
 
 
 def _counted_nudge(kind: NudgeKind, note: str) -> HookResult:
@@ -719,7 +700,6 @@ class MemoryPlugin(HooksPlugin):
         task_id = str(kwargs.get("task_id", ""))
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
         clear(task_id)
-        set_reminder_chance(task_id, 0.0)
         auto_note = self._maybe_auto_register(workspace_roots)
         if workspace_roots:
             set_scope(task_id, _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name)
@@ -848,7 +828,6 @@ class MemoryPlugin(HooksPlugin):
         if _is_memory_write(tool_name, parameters):
             if not _is_error_result(kwargs.get("tool_result")):
                 reset(task_id)
-                set_reminder_chance(task_id, 0.0)
                 record_write()
             return None
 
@@ -865,9 +844,7 @@ class MemoryPlugin(HooksPlugin):
             increment(task_id)
         _record_scope_from_parameters(task_id, tool_name, parameters)
 
-        if should_warn(task_id) or (
-            tool_name in _MEMORY_REMINDER_TOOLS and has_edited(task_id) and _reminder_due(task_id)
-        ):
+        if should_warn(task_id):
             reminder = _MEMORY_REMINDER_TEMPLATE.format(
                 project=_task_scope(task_id, workspace_roots),
             )
