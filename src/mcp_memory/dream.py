@@ -164,6 +164,7 @@ _RULES_PRECEDENCE = (
 )
 # A ``--bare`` run reads Anthropic credentials only from ANTHROPIC_API_KEY.
 _AUTH_FAILURE = re.compile(r"not logged in|invalid api key", re.IGNORECASE)
+_MODEL_NOT_FOUND = re.compile(r'Model "[^"]*" not found\. Use --list-models')
 
 DREAM_RITUAL = (
     "You are a memory curation agent grooming a knowledge graph while it is idle, "
@@ -780,6 +781,10 @@ class DreamAuthError(RuntimeError):
     """The dream agent exited because it could not authenticate."""
 
 
+class DreamModelNotFoundError(RuntimeError):
+    """The dream agent exited because it could not find the configured model."""
+
+
 async def _spawn_agent(
     command: list[str],
     *,
@@ -816,6 +821,8 @@ async def _spawn_agent(
         )
         if _is_auth_failure(stdout, stderr.decode(errors="replace")):
             raise DreamAuthError("dream agent failed to authenticate")
+        if _MODEL_NOT_FOUND.search(stderr.decode(errors="replace")):
+            raise DreamModelNotFoundError("dream agent could not find the model")
         raise RuntimeError("dream agent exited with an error")
     return stdout
 
@@ -980,6 +987,13 @@ async def _run_claude_pass(claude_bin: str, spec: PassSpec) -> SpawnResult:
     return await _run_isolated_agent(build_command, claude_bin=claude_bin, model=model, spec=spec)
 
 
+async def _run_claude_fallback(spec: PassSpec, reason: str) -> SpawnResult:
+    """Run one pass through ``claude -p`` in place of pi, as an ``ok=False`` result if claude is not installed."""
+    if claude_bin := _claude_bin():
+        return await _run_claude_pass(claude_bin, spec)
+    return _failed_spawn(f"dream unavailable: {reason} and claude CLI not found")
+
+
 async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
     """Run one pass through ``pi -p`` in the persistent dream agent directory."""
     agent_dir, user_dir = get_dream_agent_dir(), get_pi_agent_dir()
@@ -990,9 +1004,7 @@ async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
         return _failed_spawn("dream agent directory setup failed")
     model = _resolve_pi_model(heavy=spec.heavy, agent_dir=agent_dir, user_dir=user_dir)
     if model is None:
-        if claude_bin := _claude_bin():
-            return await _run_claude_pass(claude_bin, spec)
-        return _failed_spawn("dream unavailable: no pi model configured and claude CLI not found")
+        return await _run_claude_fallback(spec, "no pi model configured")
     command = build_pi_command(
         pi_bin=pi_bin,
         model=model,
@@ -1013,6 +1025,9 @@ async def _run_pi_pass(pi_bin: str, spec: PassSpec) -> SpawnResult:
         return _parse_logging_rejection(
             lambda out: parse_pi_result(out, duration_ms=round((time.monotonic() - started) * 1000)), stdout
         )
+    except DreamModelNotFoundError:
+        logger.warning("pi could not find dream model %s, add its provider extension to MCP_DREAM_PI_EXTENSIONS", model)
+        return await _run_claude_fallback(spec, "pi model not found")
     except RuntimeError as exc:
         return _failed_spawn(str(exc))
     finally:
