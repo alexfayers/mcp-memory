@@ -77,14 +77,6 @@ class TestScope:
         assert tracker.get_scope("t2") is None
 
 
-class TestReminderChance:
-    def test_reminder_chance_round_trips_per_task(self) -> None:
-        assert tracker.get_reminder_chance("t1", 0.6) == 0.6
-        tracker.set_reminder_chance("t1", 0.2)
-        assert tracker.get_reminder_chance("t1", 0.6) == 0.2
-        assert tracker.get_reminder_chance("t2", 0.6) == 0.6
-
-
 class TestClear:
     def test_clear_removes_scope_blocked_entry(self) -> None:
         tracker.mark_scope_blocked("t1", "some-project")

@@ -44,6 +44,8 @@ Environment variables. The server reads the first table. The hook plugin reads t
 
 Stopping needs a `task/` write only after wide work: a `git commit`, edits to more than one file, a presented plan or a writer delegation. Stop is blocked once per piece of work.
 
+The `MEMORY CHECK` reminder comes after a weighted count of 8 since the first file edit, with a block at 10.
+
 Another cline-hooks plugin can add workspace markers by implementing the `memory_workspace_markers` hook. It returns a `frozenset[str]` of directory names:
 
 ```python
