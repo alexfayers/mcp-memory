@@ -11,11 +11,14 @@ from typing import TYPE_CHECKING, Any
 from starlette.responses import JSONResponse
 
 from .audit import audit_graph, propose_plan
+from .backup import backup_database
+from .config import get_backup_dir
 from .eval import evaluate_cached_async
 from .export_import import export_database, import_projects, validate_export
 from .metrics import usage_report
 from .path_resolver import normalize_path
 from .plan_apply import apply_safe_steps, archive_stale
+from .provenance_backfill import apply_backfill, plan_backfill, revert_backfill
 from .visualise import get_project_paths
 
 if TYPE_CHECKING:
@@ -129,6 +132,23 @@ def _audit(db: Storage, args: dict[str, Any]) -> object:
     return {"steps": propose_plan(db, report)} if args["plan"] else report
 
 
+def _backfill_provenance(db: Storage, args: dict[str, Any]) -> dict[str, Any]:
+    if args["revert"]:
+        return {"reverted": revert_backfill(db, get_backup_dir())}
+    if args["apply"]:
+        backup = backup_database()
+        applied, revert_file = apply_backfill(db, get_backup_dir(), args["skip"])
+        return {"applied": applied, "backup": str(backup), "revert_file": str(revert_file)}
+    plan = plan_backfill(db, args["skip"])
+    return {
+        "total": sum(rule.count for rule in plan),
+        "rules": [
+            {"rule": rule.name, "provenance": rule.provenance, "count": rule.count, "samples": rule.samples}
+            for rule in plan
+        ],
+    }
+
+
 def _import(db: Storage, args: dict[str, Any]) -> dict[str, Any]:
     summary = import_projects(db, validate_export(args["data"]), args["projects"], dry_run=args["dry_run"])
     return asdict(summary)
@@ -144,6 +164,7 @@ _OPERATIONS: dict[str, Callable[[Storage, dict[str, Any]], Any]] = {
     "recent-memory": lambda db, args: _recent_memory(db, args["project"], args["left"]),
     "register-workspace": _register_workspace,
     "audit": _audit,
+    "backfill-provenance": _backfill_provenance,
     "eval": _eval,
     "metrics": lambda db, args: asdict(usage_report(db, args["since"])),
     "export": lambda db, _args: export_database(db),

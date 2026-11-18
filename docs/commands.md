@@ -2,7 +2,7 @@
 
 `mcp-memory` with no arguments runs the server in the foreground. Run `mcp-memory <command> --help` for flags.
 
-`utils audit`, `utils eval`, `utils metrics`, `export` and `import` call the running server at `MCP_MEMORY_URL` and fail when it is not reachable. `utils migrate-db` and `utils restore` work on the database file directly.
+`utils audit`, `utils eval`, `utils metrics`, `utils backfill-provenance`, `export` and `import` call the running server at `MCP_MEMORY_URL` and fail when it is not reachable. `utils migrate-db` and `utils restore` work on the database file directly.
 
 | Command | What it does |
 |---|---|
@@ -13,6 +13,7 @@
 | `utils audit` | Hygiene report on the graph |
 | `utils eval` | Search ranking quality |
 | `utils metrics` | Tool usage report |
+| `utils backfill-provenance` | Tag observations that have no provenance |
 | `export` / `import` | Back up or merge projects |
 | `utils restore` | Replace the database with a backup |
 | `utils migrate-db` | Move the database to the default path |
@@ -72,6 +73,16 @@ mcp-memory utils metrics [--since 7d]
 ```
 
 Prints JSON with, per tool, the call count, mean and median input and output bytes, and how often each option value is used. It also totals bytes and gives an input/output ratio (`null` if no output was recorded). Byte sizes are a proxy for token cost, not real token counts.
+
+## utils backfill-provenance
+
+```bash
+mcp-memory utils backfill-provenance [--apply | --revert] [--skip <rule>]...
+```
+
+Tags observations that have no provenance from their wording: `inferred` for `INFERRED`, `Inferred`, `UNVERIFIED` or `Likely` leads and any `hypothesis:` (rule `inferred-marker`), `observed` for `VERIFIED`, `OBSERVED`, `Verified`, `Source-verified` or `Confirmed` leads (`observed-marker`), `user` for `User ...` or `The user ...` leads (`user-lead`) and quoted user asks (`user-quote`). The first matching rule wins, and unmatched observations stay unknown. `--skip <rule>` leaves that rule's observations untagged.
+
+By default it is a dry run that prints the count per rule and up to 5 sample observations per rule as JSON. `--apply` backs up the database first, then writes the values and records the changed rows beside the backups. `--revert` undoes the last `--apply`, skipping rows whose provenance changed since.
 
 ## export and import
 

@@ -38,6 +38,7 @@ from .config import (
     resolve_port,
 )
 from .jsonc import load_jsonc_object
+from .provenance_backfill import RULE_NAMES
 from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
 
 if TYPE_CHECKING:
@@ -594,6 +595,15 @@ def _cmd_audit(args: argparse.Namespace) -> None:
     print(json.dumps(_api("audit", {"project": project, "plan": args.propose_plan, "apply": args.apply}), indent=2))
 
 
+def _cmd_backfill_provenance(args: argparse.Namespace) -> None:
+    """Report, apply or revert the wording-based provenance backfill."""
+    print(
+        json.dumps(
+            _api("backfill-provenance", {"apply": args.apply, "revert": args.revert, "skip": args.skip}), indent=2
+        )
+    )
+
+
 def _cmd_eval(args: argparse.Namespace) -> None:
     """Report search-ranking quality over recorded retrieval telemetry (read-only)."""
     from .eval import EvalReport
@@ -1029,6 +1039,17 @@ def _add_utils_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         ),
     )
 
+    backfill = utils_sub.add_parser(
+        "backfill-provenance",
+        help="Tag untagged observations with a provenance from their wording (dry run unless --apply or --revert)",
+    )
+    mode = backfill.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="Back up the database, then write the provenance values")
+    mode.add_argument("--revert", action="store_true", help="Undo the last --apply")
+    backfill.add_argument(
+        "--skip", action="append", default=[], choices=RULE_NAMES, help="Leave this rule's observations untagged"
+    )
+
     metrics_cmd = utils_sub.add_parser(
         "metrics", help="Report per-tool usage metrics (byte-size proxies and option frequency)."
     )
@@ -1135,6 +1156,7 @@ def _cmd_utils(args: argparse.Namespace) -> None:
         "eval": _cmd_eval,
         "metrics": _cmd_metrics,
         "telemetry-flush": _cmd_telemetry_flush,
+        "backfill-provenance": _cmd_backfill_provenance,
     }
     handlers[args.utils_command](args)
 
