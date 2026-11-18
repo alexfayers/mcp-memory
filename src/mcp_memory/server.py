@@ -18,7 +18,7 @@ from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 from pydantic import WithJsonSchema
 from starlette.responses import Response
 
-from . import activity, backup, dream, metrics, telemetry, usefulness
+from . import activity, backup, dream, metrics, provenance_backfill, telemetry, usefulness
 from .activity import record_tool
 from .api import register_api_routes
 from .config import get_backup_enabled, get_backup_interval_seconds, get_db_path, get_sweep_interval_seconds
@@ -1536,6 +1536,14 @@ async def _backup_loop() -> None:
         await asyncio.sleep(get_backup_interval_seconds())
 
 
+def _backfill_provenance_once() -> None:
+    """Run the one-time provenance backfill, logging a failure without stopping the server."""
+    try:
+        provenance_backfill.backfill_once(_get_db())
+    except Exception:
+        logger.exception("Provenance backfill failed")
+
+
 _usage: telemetry.UsageTelemetry | None = None
 
 
@@ -1582,6 +1590,7 @@ async def _serve() -> None:
     spawned and cancelled per client session rather than once globally, which is wrong
     for a singleton periodic job. Cancelled cleanly on shutdown.
     """
+    await asyncio.to_thread(_backfill_provenance_once)
     sweeper = asyncio.create_task(_sweep_loop())
     backer = asyncio.create_task(_backup_loop()) if get_backup_enabled() else None
     reporter = asyncio.create_task(_telemetry_loop())
