@@ -163,6 +163,42 @@ def mark_edited(task_id: str) -> None:
         _write(data)
 
 
+def has_flag(task_id: str, name: str) -> bool:
+    """Return True if the task's flag with this name is set."""
+    with _locked():
+        return _read().get(f"{task_id}:{name}") is True
+
+
+def mark_flag(task_id: str, name: str) -> None:
+    """Set the task's flag with this name."""
+    with _locked():
+        data = _read()
+        data[f"{task_id}:{name}"] = True
+        _write(data)
+
+
+def claim_edit_path(task_id: str, path: str) -> bool:
+    """Return True if this path is the task's first edited file or was already claimed as it."""
+    with _locked():
+        data = _read()
+        key = f"{task_id}:edit_path"
+        if key not in data:
+            data[key] = path
+            _write(data)
+        return data[key] == path
+
+
+def reset_work(task_id: str, names: tuple[str, ...]) -> None:
+    """Forget the task's current piece of work: its edited path and these flags."""
+    with _locked():
+        data = _read()
+        keys = [key for name in ("edit_path", *names) if (key := f"{task_id}:{name}") in data]
+        for key in keys:
+            del data[key]
+        if keys:
+            _write(data)
+
+
 def get_reminder_chance(task_id: str, default: float) -> float:
     """Return the memory-reminder probability recorded for a task, or the default."""
     with _locked():

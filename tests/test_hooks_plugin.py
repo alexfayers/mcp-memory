@@ -2217,3 +2217,45 @@ class TestFailedMemoryWriteKeepsTheGate:
         blocked = self._next_command(live_plugin)
         assert blocked is not None
         assert blocked.block is not None
+
+
+class TestStopNeedsTaskAfterWideWork:
+    @staticmethod
+    def _post(plugin: MemoryPlugin, tool_name: str, **parameters: object) -> None:
+        plugin.on_hook("PostToolUse", task_id="t1", tool_name=tool_name, parameters=parameters)
+
+    @pytest.mark.parametrize(
+        "calls",
+        [
+            pytest.param([("execute_command", {"command": "git add . && git commit -m x"})], id="commit"),
+            pytest.param([("replace_in_file", {"path": "a.py"}), ("replace_in_file", {"path": "b.py"})], id="files"),
+            pytest.param([("plan_mode_respond", {})], id="plan"),
+            pytest.param([("spawn_agent", {"subagent_type": "general"})], id="delegation"),
+            pytest.param([("fork", {"role": "writer"})], id="fork"),
+            pytest.param([("execute_command", {"command": "git commit -F - <<'EOF'\nit's\nEOF"})], id="heredoc"),
+            pytest.param([("execute_command", {"command": "echo a#b; git commit"})], id="hash-in-word"),
+            pytest.param([("execute_command", {"command": "# note\ngit commit"})], id="after-comment"),
+            pytest.param([("execute_command", {"command": "GIT_EDITOR=true /usr/bin/git commit"})], id="env-path"),
+        ],
+    )
+    def test_wide_work_blocks_stop_once_until_a_task_is_written(
+        self, live_plugin: MemoryPlugin, calls: list[tuple[str, dict[str, object]]]
+    ) -> None:
+        for tool_name, parameters in calls:
+            self._post(live_plugin, tool_name, **parameters)
+        blocked = live_plugin.on_hook("Stop", task_id="t1")
+        assert blocked is not None
+        assert "task/" in (blocked.block or "")
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    def test_a_task_write_lets_wide_work_stop(self, live_plugin: MemoryPlugin) -> None:
+        self._post(live_plugin, "plan_mode_respond")
+        entity = {"name": "task/x", "entityType": "task", "observations": ["x"]}
+        self._post(live_plugin, "mcp__memory__create_entities", project="proj", entities=[entity])
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    def test_a_small_fix_stops_without_a_task(self, live_plugin: MemoryPlugin) -> None:
+        self._post(live_plugin, "replace_in_file", path="a.py")
+        self._post(live_plugin, "execute_command", command="git -P log --grep commit")
+        self._post(live_plugin, "fork", role="reader")
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
