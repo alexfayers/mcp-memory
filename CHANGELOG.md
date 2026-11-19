@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.3](https://github.com/alexfayers/mcp-memory/compare/v0.1.2...v0.1.3) (2026-11-19)
+
+
+### Bug Fixes
+
+* **dream:** fall back to claude when pi cannot find the model (+1 more) ([#203](https://github.com/alexfayers/mcp-memory/issues/203)) ([f1a6cd8](https://github.com/alexfayers/mcp-memory/commit/f1a6cd8c1df7665eaaca6797e6b103980929dd43))
+
+
+### Miscellaneous Chores
+
+* sync shared files from llm-prompts-ci ([#201](https://github.com/alexfayers/mcp-memory/issues/201)) ([abaf602](https://github.com/alexfayers/mcp-memory/commit/abaf60258f81eb5d5ff7447da1ec5bc14877789a))
+
 ## [0.1.2](https://github.com/alexfayers/mcp-memory/compare/v0.1.1...v0.1.2) (2026-11-17)
 
 
