@@ -923,16 +923,16 @@ def _pi_mcp_config_path() -> Path:
     return (Path(agent_dir).expanduser() if agent_dir else Path.home() / ".pi" / "agent") / "mcp.json"
 
 
-def _register_pi_server(mcp_path: Path, name: str, url: str) -> None:
-    """Add one HTTP MCP server entry to pi's mcp.json if missing.
+def _register_mcp_server(path: Path, servers_key: str, name: str, entry: dict[str, object], label: str) -> None:
+    """Add one MCP server entry under `servers_key` in a JSON config if missing.
 
-    An existing entry keeps its settings; only the legacy `directTools` and
+    An existing entry keeps its settings; only pi's legacy `directTools` and
     `toolPrefix` keys are dropped.
     """
-    config: dict[str, object] = load_jsonc_object(mcp_path) if mcp_path.exists() and mcp_path.stat().st_size > 0 else {}
-    servers_obj = config.setdefault("mcpServers", {})
+    config: dict[str, object] = load_jsonc_object(path) if path.exists() and path.stat().st_size > 0 else {}
+    servers_obj = config.setdefault(servers_key, {})
     if not isinstance(servers_obj, dict):
-        msg = f"error: {mcp_path} has non-object 'mcpServers'"
+        msg = f"error: {path} has non-object '{servers_key}'"
         raise TypeError(msg)
 
     servers: dict[str, object] = servers_obj
@@ -941,58 +941,53 @@ def _register_pi_server(mcp_path: Path, name: str, url: str) -> None:
         if isinstance(existing, dict) and ({"directTools", "toolPrefix"} & existing.keys()):
             existing.pop("directTools", None)
             existing.pop("toolPrefix", None)
-            mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-        print(f"{name} MCP server already configured in Pi.")
+            path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        print(f"{name} MCP server already configured in {label}.")
         return
 
-    servers[name] = {"url": url}
-    mcp_path.parent.mkdir(parents=True, exist_ok=True)
-    mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    print(f"Added {name} MCP server to Pi (url: {url}).")
+    servers[name] = entry
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(f"Added {name} MCP server to {label} (url: {entry['url']}).")
 
 
 def _cmd_install_pi() -> None:
     """Register memory servers in pi's global MCP config."""
     mcp_path = _pi_mcp_config_path()
+    url = f"http://localhost:{resolve_port()}/mcp"
     try:
         _remove_mcp_servers(mcp_path, "mcpServers")
-        _register_pi_server(mcp_path, "memory", f"http://localhost:{resolve_port()}/mcp")
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        _register_mcp_server(mcp_path, "mcpServers", "memory", {"url": url}, "Pi")
+    except (OSError, TypeError, ValueError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
-def _opencode_config_path() -> Path:
-    """Return opencode's global config, preferring an existing `opencode.jsonc`."""
+def _opencode_config_dir() -> Path:
+    """Return opencode's global config dir: `$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`."""
+    if config_dir := os.environ.get("OPENCODE_CONFIG_DIR"):
+        return Path(config_dir).expanduser()
     xdg = os.environ.get("XDG_CONFIG_HOME")
-    config_dir = (Path(xdg).expanduser() if xdg else Path.home() / ".config") / "opencode"
-    jsonc = config_dir / "opencode.jsonc"
-    return jsonc if jsonc.exists() else config_dir / "opencode.json"
-
-
-def _register_opencode_server(config_path: Path, name: str, url: str) -> None:
-    """Add one remote MCP server entry to opencode's config if missing."""
-    exists = config_path.exists() and config_path.stat().st_size > 0
-    config: dict[str, object] = load_jsonc_object(config_path) if exists else {}
-    servers_obj = config.setdefault("mcp", {})
-    if not isinstance(servers_obj, dict):
-        msg = f"error: {config_path} has non-object 'mcp'"
-        raise TypeError(msg)
-    if name in servers_obj:
-        print(f"{name} MCP server already configured in opencode.")
-        return
-    servers_obj[name] = {"type": "remote", "url": url, "enabled": True}
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    print(f"Added {name} MCP server to opencode (url: {url}).")
+    return (Path(xdg).expanduser() if xdg else Path.home() / ".config") / "opencode"
 
 
 def _cmd_install_opencode() -> None:
-    """Register the memory data server in opencode's global config."""
-    config_path = _opencode_config_path()
+    """Register the memory server in opencode's global `opencode.json`.
+
+    opencode merges `opencode.json` and `opencode.jsonc`, so a commented
+    `opencode.jsonc` is only read, never rewritten.
+    """
+    config_dir = _opencode_config_dir()
+    jsonc = config_dir / "opencode.jsonc"
+    config_path = config_dir / "opencode.json"
+    entry: dict[str, object] = {"type": "remote", "url": f"http://localhost:{resolve_port()}/mcp", "enabled": True}
     try:
-        _remove_mcp_servers(config_path, "mcp")
-        _register_opencode_server(config_path, "memory", f"http://localhost:{resolve_port()}/mcp")
+        if jsonc.exists() and jsonc.stat().st_size > 0:
+            servers = load_jsonc_object(jsonc).get("mcp")
+            if isinstance(servers, dict) and "memory" in servers:
+                print("memory MCP server already configured in opencode.")
+                return
+        _register_mcp_server(config_path, "mcp", "memory", entry, "opencode")
     except (OSError, TypeError, ValueError) as exc:
         print(f"error: failed to update {config_path}: {exc}", file=sys.stderr)
         sys.exit(1)
