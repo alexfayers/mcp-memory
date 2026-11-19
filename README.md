@@ -19,9 +19,9 @@
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       69 |        4 |     94% |52-53, 88, 90 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
-| src/mcp\_memory/hooks/plugin.py                      |      471 |       25 |     95% |229, 231, 259, 407, 636-637, 642-650, 672, 715, 754, 757-759, 770, 777-781, 833 |
+| src/mcp\_memory/hooks/plugin.py                      |      540 |       27 |     95% |183-184, 319, 321, 349, 497, 726-727, 732-740, 762, 806, 860, 863-865, 876, 883-887, 939 |
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
-| src/mcp\_memory/hooks/tracker.py                     |      111 |        1 |     99% |       130 |
+| src/mcp\_memory/hooks/tracker.py                     |      135 |        1 |     99% |       130 |
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
 | src/mcp\_memory/metrics.py                           |       86 |        0 |    100% |           |
 | src/mcp\_memory/migrations/\_\_init\_\_.py           |        0 |        0 |    100% |           |
@@ -96,7 +96,7 @@
 | tests/test\_dream.py                                 |      885 |        5 |     99% |506-507, 604, 1052, 1111 |
 | tests/test\_dream\_status.py                         |      239 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      271 |        0 |    100% |           |
-| tests/test\_hooks\_plugin.py                         |     1091 |       66 |     94% |1712-1717, 1722-1725, 1730-1738, 1749-1752, 1781-1784, 1826-1829, 1833-1836, 1840-1844, 1848-1850, 1855-1857, 1862-1867, 1871-1872, 1876-1878, 1883-1891 |
+| tests/test\_hooks\_plugin.py                         |     1113 |       66 |     94% |1712-1717, 1722-1725, 1730-1738, 1749-1752, 1781-1784, 1826-1829, 1833-1836, 1840-1844, 1848-1850, 1855-1857, 1862-1867, 1871-1872, 1876-1878, 1883-1891 |
 | tests/test\_metrics.py                               |      183 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_nudge\_count.py                          |       12 |        0 |    100% |           |
@@ -114,7 +114,7 @@
 | tests/test\_tracker.py                               |       74 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      656 |        0 |    100% |           |
-| **TOTAL**                                            | **16683** |  **478** | **97%** |           |
+| **TOTAL**                                            | **16798** |  **480** | **97%** |           |
 
 
 ## Setup coverage badge
