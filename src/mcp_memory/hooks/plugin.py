@@ -10,7 +10,6 @@ import itertools
 import json
 import os
 from pathlib import Path
-import random
 import re
 import shlex
 import socket
@@ -27,7 +26,6 @@ from cline_hooks.core.vocabulary import (
     PLAN_EXIT_TOOLS,
     SHELL_TOOLS,
     SKILL_TOOLS,
-    CanonicalTool,
 )
 from cline_hooks.plugins.startup_blocks import StartupBlock
 
@@ -41,7 +39,6 @@ from mcp_memory.hooks.review_tracker import (
 from mcp_memory.hooks.tracker import (
     claim_edit_path,
     clear,
-    get_reminder_chance,
     get_scope,
     get_window,
     has_edited,
@@ -53,7 +50,6 @@ from mcp_memory.hooks.tracker import (
     mark_scope_blocked,
     reset,
     reset_work,
-    set_reminder_chance,
     set_scope,
     should_block,
     should_warn,
@@ -70,8 +66,6 @@ _MEMORY_WRITE_CALL = re.compile(rf"_(?:{'|'.join(map(re.escape, MUTATING_TOOLS))
 
 _MEMORY_READ_TOOL_NAMES = frozenset(READ_ONLY_TOOLS)
 
-_MEMORY_REMINDER_TOOLS = FILE_EDIT_TOOLS | SHELL_TOOLS | {CanonicalTool.PLAN_MODE_RESPOND}
-
 _MEMORY_REPLACE_CLAUSE = (
     "If this replaces or contradicts an observation, search_nodes then edit_observation it instead of appending."
 )
@@ -79,8 +73,6 @@ _MEMORY_REMINDER_TEMPLATE = (
     "MEMORY CHECK: MUST record any new lasting fact (a decision and why, gotcha, preference, where something lives)"
     " in `{project}` or `global` now. MUST NOT narrate implementation steps. " + _MEMORY_REPLACE_CLAUSE
 )
-_MEMORY_REMINDER_CHANCE = 0.6
-_MEMORY_COOLDOWN_STEPS = 5
 _MEMORY_BLOCK_TEMPLATE = (
     "MEMORY UPDATE REQUIRED: MUST record any lasting fact in `{project}` or `global` before continuing, "
     "or set the task's status if there is none. " + _MEMORY_REPLACE_CLAUSE
@@ -262,17 +254,6 @@ def _file_edit_tool_names() -> frozenset[str]:
 def _is_file_edit(tool_name: str) -> bool:
     """Return True if a tool call is a reduced-weight file-edit operation."""
     return _extract_mcp_suffix(tool_name) in _file_edit_tool_names()
-
-
-def _reminder_due(task_id: str) -> bool:
-    """Step the task's reminder chance, roll it, and reset the chance when a reminder is due."""
-    chance = min(
-        _MEMORY_REMINDER_CHANCE,
-        get_reminder_chance(task_id, _MEMORY_REMINDER_CHANCE) + _MEMORY_REMINDER_CHANCE / _MEMORY_COOLDOWN_STEPS,
-    )
-    due = random.random() < chance
-    set_reminder_chance(task_id, 0.0 if due else chance)
-    return due
 
 
 def _counted_nudge(kind: NudgeKind, note: str) -> HookResult:
@@ -545,18 +526,10 @@ def _build_task_start_context(workspace_roots: list[str]) -> list[str]:
     projects = _resolved_project_set(workspace_roots)
     project_list = ", ".join(f"`{project}`" for project in projects)
     parts.append(
-        "Session-start guidance:\n"
-        "1. Unless a `Startup block: recent memory` note is present, "
-        "`read_graph` on BOTH `global` and `<repo-name>` projects\n"
-        "2. Only if the opening message asks about outstanding work, "
-        f"scan for open tasks across {project_list}: "
-        "`search_all_projects(query='task', entityType='task', "
-        "status=['in-progress','planned'], ...)` "
-        "(use unrestricted `search_all_projects`, no `projects` filter, only on explicit "
-        "request for the full picture). Otherwise skip this scan - targeted searches for "
-        "the ask still surface anything relevant\n"
-        "3. `search_nodes` for task keywords in `<repo-name>` project\n"
-        "4. `get_entity_with_relations` on any relevant result"
+        "Session-start guidance: follow the memory rule's Start section. "
+        f"Scan for outstanding work across {project_list} only if the opening message asks about outstanding work, "
+        "with `search_all_projects(query='task', entityType='task', status=['in-progress','planned'], "
+        f"projects={projects})`. Drop the `projects` filter only if the user explicitly asks for the full picture."
     )
     return parts
 
@@ -572,6 +545,14 @@ def _is_memory_server_reachable() -> bool:
         with socket.create_connection((host, port), timeout=_LIVENESS_TIMEOUT_SECONDS):
             return True
     except OSError:
+        return False
+
+
+def _server_runs_heavy_dreams() -> bool:
+    """Return True if the memory server runs heavy dreams, False when it does not or cannot be reached."""
+    try:
+        return bool(api_client.call("dream-heavy", timeout=_LIVENESS_TIMEOUT_SECONDS))
+    except api_client.ApiError:
         return False
 
 
@@ -810,7 +791,6 @@ class MemoryPlugin(HooksPlugin):
         task_id = str(kwargs.get("task_id", ""))
         workspace_roots = _str_list(kwargs.get("workspace_roots", []))
         clear(task_id)
-        set_reminder_chance(task_id, 0.0)
         auto_note = self._maybe_auto_register(workspace_roots)
         if workspace_roots:
             set_scope(task_id, _resolve_project(workspace_roots[0]) or Path(workspace_roots[0]).name)
@@ -867,7 +847,7 @@ class MemoryPlugin(HooksPlugin):
     def _on_user_prompt_submit(self, **kwargs: object) -> HookResult | None:
         """Nudge on a memory-review backlog or on a profanity/shouting frustration signal."""
         notes: list[str] = []
-        if should_nudge():
+        if should_nudge() and not _server_runs_heavy_dreams():
             reset_review()
             nudge_count.record(NudgeKind.REVIEW)
             notes.append(_MEMORY_REVIEW_NUDGE)
@@ -958,7 +938,6 @@ class MemoryPlugin(HooksPlugin):
                 if _writes_task(_task_scope(task_id, workspace_roots), tool_name, parameters):
                     mark_flag(task_id, _WROTE_TASK)
                 reset(task_id)
-                set_reminder_chance(task_id, 0.0)
                 record_write()
             return None
 
@@ -975,9 +954,7 @@ class MemoryPlugin(HooksPlugin):
             increment(task_id)
         _record_scope_from_parameters(task_id, tool_name, parameters)
 
-        if should_warn(task_id) or (
-            tool_name in _MEMORY_REMINDER_TOOLS and has_edited(task_id) and _reminder_due(task_id)
-        ):
+        if should_warn(task_id):
             reminder = _MEMORY_REMINDER_TEMPLATE.format(
                 project=_task_scope(task_id, workspace_roots),
             )
