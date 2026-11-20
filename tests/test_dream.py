@@ -727,6 +727,8 @@ class TestParseDreamResult:
         stdout = _dream_payload("- finding", model="global.anthropic.claude-opus-4-8-v1:0")
         with pytest.raises(RuntimeError, match="unexpected model"):
             dream.parse_dream_result(stdout, expected_model=_MODEL)
+        with pytest.raises(RuntimeError, match="unexpected model"):
+            dream.parse_dream_result(_dream_payload("x", model="claude-opus-5-5"), expected_model="claude-opus-5")
 
     def test_rejects_error_payload(self) -> None:
         stdout = _dream_payload("boom", is_error=True)
@@ -1246,6 +1248,7 @@ class TestPiBackend:
     ) -> None:
         monkeypatch.setattr(dream, "_pi_bin", lambda: "/usr/bin/pi")
         monkeypatch.setattr(dream, "_claude_bin", lambda: "/usr/bin/claude")
+        monkeypatch.setattr(dream, "get_dream_model", lambda: _MODEL)
         commands: list[list[str]] = []
 
         async def fake_spawn(
