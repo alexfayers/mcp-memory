@@ -372,6 +372,11 @@ class TestProposePlan:
         keep = set(self._plan(store, "proj")[0]["arguments"]["keep_hashes"])  # type: ignore[index]
         assert by_content["Resolved: done"] in keep
 
+    def test_no_trim_is_proposed_when_every_observation_has_user_provenance(self, store: Storage) -> None:
+        entity = {"name": "task/big", "entityType": "task", "observations": list("abcd"), "status": "resolved"}
+        store.entities.create("proj", [entity | {"provenance": "user"}])
+        assert [s for s in self._plan(store, "proj") if s["tool"] == "trim_observations_to_outcome"] == []
+
     def test_trim_uses_full_observation_list_not_budgeted(self, store: Storage) -> None:
         store.entities.create(
             "proj",

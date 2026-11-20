@@ -18,12 +18,13 @@ from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 from pydantic import WithJsonSchema
 from starlette.responses import Response
 
-from . import activity, backup, dream, metrics, telemetry, usefulness
+from . import activity, backup, dream, metrics, provenance_backfill, telemetry, usefulness
 from .activity import record_tool
 from .api import register_api_routes
 from .config import get_backup_enabled, get_backup_interval_seconds, get_db_path, get_sweep_interval_seconds
 from .dedupe import dedupe_read
 from .models import (
+    VALID_PROVENANCES,
     VALID_RELATION_TYPES,
     Entity,
     Relation,
@@ -145,6 +146,7 @@ _ENTITY_INPUTS = Annotated[
                 **dict.fromkeys(["name", "entityType", "status"], _STRING_SCHEMA),
                 "observations": {"type": "array", "items": _STRING_SCHEMA},
                 "relations": {"type": "array", "items": _object_schema(["target", "type"], ["target", "type"])},
+                "provenance": {"type": "string", "enum": list(VALID_PROVENANCES)},
             },
             "required": ["name", "entityType", "observations"],
         },
@@ -205,7 +207,7 @@ CREATE_ENTITIES_DESC = (
     "for its ticket, not its symptom), user-preferences/<alias>-<topic>, pattern/<short-noun>. "
     "Unless entityType is project, pass non-empty relations inline (see create_relations for "
     "which type to pick) - without them nothing is created. "
-    "Observation wording and what not to store: see add_observations. "
+    "Observation wording, provenance and what not to store: see add_observations. "
     "Set `status` via the `status` argument, never as a `STATUS:` observation. "
     "The server records each observation's timestamp; do NOT embed a date/timestamp in the text."
 )
@@ -268,8 +270,7 @@ GET_ENTITY_WITH_RELATIONS_DESC = (
 )
 ADD_OBSERVATIONS_DESC = (
     "Append observations to an existing entity, skipping duplicates. "
-    "Throws if the entity does not exist. Returns content hashes of added "
-    "observations, usable with vote/delete_observations/merge_observations. "
+    "Throws if the entity does not exist. Returns the added content hashes. "
     "To reorder by usefulness instead of adding, see vote. "
     "If this replaces or contradicts an observation, search_nodes then edit_observation instead. "
     "One atomic fact per observation, on the entity it concerns - create one rather than "
@@ -280,20 +281,22 @@ ADD_OBSERVATIONS_DESC = (
     "workarounds. Rationale goes in its own observation. "
     "Memory holds the why: for what changed or how it works, read the code and git log/git blame. "
     "Past ~30 observations, extract focused pattern/ entities. "
-    "The server timestamps each observation; do NOT embed a date in the text."
+    "The server timestamps each observation; do NOT embed a date in the text. "
+    "provenance: user (the user said, asked, decided or corrected it), observed (you read or ran it) or "
+    "inferred (unchecked). One provenance per call."
 )
 DELETE_OBSERVATIONS_DESC = (
     "Soft-delete observations by exact content (observations) and/or content_hash (observationHashes - cheaper). "
     "Returns the count and hashes deleted (restorable with restore_observations until a grace-window purge). "
     "Throws if the entity does not exist. "
-    "For a stale but not wrong observation, prefer vote (downvote). "
-    "Use this, not a downvote, for an outright wrong one. To correct one, use edit_observation."
+    "Downvote a stale observation instead. Delete only an outright wrong one. To correct one, use edit_observation."
 )
 EDIT_OBSERVATION_DESC = (
     "Edit one observation in place by content_hash, keeping its votes and timestamp. "
     "Prefer oldText: its single exact match is replaced with newText; without oldText, newText "
     "replaces the whole content. Returns the new content_hash. Raises if nothing matches, "
-    "oldText matches more than once, or the result duplicates another observation."
+    "oldText matches more than once, or the result duplicates another observation. "
+    "Pass provenance only if the origin changes."
 )
 TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
     "Soft-delete all observations on an entity except those in keep_hashes (content_hash). "
@@ -329,15 +332,12 @@ SET_ENTITY_STATUS_DESC = (
 VOTE_DESC = (
     "Record a usefulness vote as you retrieve a memory: a positive vote for one that proved "
     "useful, a negative vote for one that was stale or unhelpful. The vote's magnitude sets its "
-    "strength, so cast a stronger vote in one call instead of looping. Omit both observation and "
-    "observationHash to vote on the whole entity named by name. Supply exactly one of observation "
-    "(exact content) or observationHash (the content_hash from read output - preferred, saves "
-    "tokens) to vote on that single observation of the entity instead. Votes nudge ranking (useful "
-    "memories surface higher, unhelpful ones sink but remain findable) and do not change content "
-    "or updated_at. An entity vote is a light alternative to delete_entity; an observation vote is "
-    "a light alternative to delete_observations - neither is wrong enough to remove outright. vote "
+    "strength, so cast a stronger vote in one call instead of looping. Omit observation and "
+    "observationHash to vote on the entity, or pass exactly one (observationHash, from "
+    "read output, saves tokens) to vote on that observation. Votes nudge ranking (unhelpful memories "
+    "sink but stay findable) without changing content or updated_at. A vote is a light alternative to "
+    "delete_entity/delete_observations for memory not wrong enough to remove. vote "
     "must be a nonzero integer from -3 to 3; returns the new net vote_score. "
-    "Vote as you retrieve - up for a helpful observation, down for a stale or misleading one. "
     "Prefer a downvote over deleting an entity. "
     "Show vote_score to the user as stars (e.g. \u26053), not the raw number."
 )
@@ -389,7 +389,7 @@ MERGE_OBSERVATIONS_DESC = (
     "Fold a duplicate observation (source) into another (target) WITHIN THE SAME ENTITY, by content_hash. "
     "The target keeps the higher vote score and its own timestamp. The source is soft-deleted (its hash is "
     "returned, restorable with restore_observations until a grace-window purge, without lowering the target's "
-    "vote score). Never merges across entities. Raises if either hash matches no observation or the hashes are "
+    "vote score). Raises if either hash matches no observation or the hashes are "
     "equal. Only for genuine duplicates: for a merely more useful one, use `vote`."
 )
 
@@ -463,6 +463,7 @@ def _wire_entity(entity: Entity) -> dict[str, object]:
             {"content": obs.content}
             | ({"content_hash": obs.content_hash} if obs.content_hash else {})
             | ({"vote_score": obs.vote_score} if obs.vote_score else {})
+            | ({"from": obs.provenance} if obs.provenance else {})
             | ({"at": obs.created_at[:10]} if obs.created_at and obs.created_at[:10] != entity_date else {})
             for obs in entity.observations
         ]
@@ -676,9 +677,12 @@ def _create_entities(
 def create_entities(
     project: str,
     entities: _ENTITY_INPUTS,
+    ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Create or update entities with observations, enforcing relation requirements."""
+    """Create or update entities with observations, enforcing relation requirements; a dream's provenance is dropped."""
     try:
+        if dream.is_dream_request(ctx):
+            entities = [{k: v for k, v in e.items() if k != "provenance"} for e in entities]
         return _create_entities(project, entities)
     except Exception as e:
         return {"error": str(e)}
@@ -893,10 +897,12 @@ def move_project_entities(source: str, target: str) -> dict[str, object]:
     title="Merge entities",
 )
 @_track
-def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
+def merge_entities(project: str, source: str, target: str, ctx: Context | None = None) -> dict[str, object]:
     """Fold a duplicate entity into its canonical twin, then soft-delete the source."""
     try:
         db = _get_db()
+        if dream.is_dream_request(ctx):
+            db.observations.refuse_user_loss(project, source)
         result = db.entities.merge(project, source, target)
         return {
             "message": f"Merged '{source}' into '{target}' in project '{project}'.",
@@ -914,10 +920,14 @@ def merge_entities(project: str, source: str, target: str) -> dict[str, object]:
     title="Merge observations",
 )
 @_track
-def merge_observations(project: str, entityName: str, sourceHash: str, targetHash: str) -> dict[str, object]:
-    """Fold one observation into another within an entity, addressed by content_hash."""
+def merge_observations(
+    project: str, entityName: str, sourceHash: str, targetHash: str, ctx: Context | None = None
+) -> dict[str, object]:
+    """Fold one observation into another within an entity; a dream may not merge away a user observation."""
     try:
         db = _get_db()
+        if dream.is_dream_request(ctx):
+            db.observations.refuse_user_loss(project, entityName, [sourceHash])
         result = db.observations.merge(project, entityName, sourceHash, targetHash)
         return {
             "message": f"Merged observation into target in '{entityName}'.",
@@ -1097,13 +1107,17 @@ def create_relations(
 def delete_entity(
     project: str,
     name: str,
+    ctx: Context | None = None,
 ) -> dict[str, str]:
     """Soft-delete an entity, hiding it and its observations and relations.
 
-    Refused while the entity has live incoming relations or live implements or depends-on relations.
+    Refused while the entity has live incoming relations or live implements or depends-on relations,
+    and for a dream while it holds a user observation.
     """
     try:
         db = _get_db()
+        if dream.is_dream_request(ctx):
+            db.observations.refuse_user_loss(project, name)
         db.entities.delete(project, name)
         return {"message": f"Deleted entity '{name}' from project '{project}'."}
     except Exception as e:
@@ -1259,12 +1273,15 @@ def add_observations(
     project: str,
     entityName: str,
     observations: list[str],
+    provenance: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, object]:
-    """Append deduplicated observations to an existing entity."""
+    """Append deduplicated observations to an existing entity; a dream's provenance is dropped."""
     try:
         _reject_status_observations(observations)
         db = _get_db()
-        hashes = db.observations.add(project, entityName, observations)
+        provenance = None if dream.is_dream_request(ctx) else provenance
+        hashes = db.observations.add(project, entityName, observations, provenance)
         return {
             "message": f"Added {len(hashes)} observations to '{entityName}'.",
             "count": len(hashes),
@@ -1287,10 +1304,13 @@ def delete_observations(
     entityName: str,
     observations: list[str] | None = None,
     observationHashes: list[str] | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, str | int | list[str]]:
-    """Soft-delete observations by exact content match and/or by content_hash."""
+    """Soft-delete observations by exact content match and/or by content_hash; a dream may not delete user ones."""
     try:
         db = _get_db()
+        if dream.is_dream_request(ctx):
+            db.observations.refuse_user_loss(project, entityName, observationHashes or (), observations or ())
         hashes = db.observations.delete(project, entityName, observations=observations, hashes=observationHashes)
         return {
             "message": f"Deleted {len(hashes)} observations from '{entityName}'.",
@@ -1315,11 +1335,13 @@ def edit_observation(
     observationHash: str,
     newText: str,
     oldText: str | None = None,
+    *,
+    provenance: str | None = None,
 ) -> dict[str, object]:
     """Edit one observation in place, addressed by content_hash."""
     try:
         db = _get_db()
-        new_hash = db.observations.edit(project, entityName, observationHash, newText, oldText)
+        new_hash = db.observations.edit(project, entityName, observationHash, newText, oldText, provenance=provenance)
         return {"message": f"Edited observation on '{entityName}'.", "hash": new_hash}
     except Exception as e:
         return {"error": str(e)}
@@ -1339,7 +1361,7 @@ def trim_observations_to_outcome(
 ) -> dict[str, object]:
     """Soft-delete all observations on an entity except those in keep_hashes.
 
-    A dream-spawned call also keeps user corrections, decisions and lessons.
+    A dream-spawned call also keeps user corrections, decisions, lessons and user observations.
     """
     try:
         db = _get_db()
@@ -1461,10 +1483,14 @@ def vote(
     vote: int,
     observation: str | None = None,
     observationHash: str | None = None,
+    *,
+    ctx: Context | None = None,
 ) -> dict[str, object]:
-    """Apply a usefulness vote to an entity or one of its observations."""
+    """Apply a usefulness vote to an entity or one of its observations; a dream may not downvote a user one."""
     try:
         db = _get_db()
+        if vote < 0 and dream.is_dream_request(ctx):
+            db.observations.refuse_user_loss(project, name, [observationHash or ""], [observation or ""])
         if observation is None and observationHash is None:
             return {
                 "name": name,
@@ -1508,6 +1534,14 @@ async def _backup_loop() -> None:
         except Exception:
             logger.exception("Database backup failed")
         await asyncio.sleep(get_backup_interval_seconds())
+
+
+def _backfill_provenance_once() -> None:
+    """Run the one-time provenance backfill, logging a failure without stopping the server."""
+    try:
+        provenance_backfill.backfill_once(_get_db())
+    except Exception:
+        logger.exception("Provenance backfill failed")
 
 
 _usage: telemetry.UsageTelemetry | None = None
@@ -1556,6 +1590,7 @@ async def _serve() -> None:
     spawned and cancelled per client session rather than once globally, which is wrong
     for a singleton periodic job. Cancelled cleanly on shutdown.
     """
+    await asyncio.to_thread(_backfill_provenance_once)
     sweeper = asyncio.create_task(_sweep_loop())
     backer = asyncio.create_task(_backup_loop()) if get_backup_enabled() else None
     reporter = asyncio.create_task(_telemetry_loop())

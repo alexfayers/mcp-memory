@@ -210,18 +210,19 @@ class Transfer:
                 continue
             existing.add(content_hash)
             new_count += 1
-            created_at = obs.get("created_at")
+            created_at, provenance = obs.get("created_at"), obs.get("provenance")
             if created_at is None:
                 self._conn.write(
-                    "INSERT INTO observations (entity_id, content, content_hash, vote_score) VALUES (?, ?, ?, ?)",
-                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0)),
+                    "INSERT INTO observations (entity_id, content, content_hash, vote_score, provenance) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), provenance),
                 )
             else:
                 self._conn.write(
                     "INSERT INTO observations "
-                    "(entity_id, content, content_hash, vote_score, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at),
+                    "(entity_id, content, content_hash, vote_score, created_at, provenance) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at, provenance),
                 )
         return new_count, duplicate_count
 

@@ -824,4 +824,11 @@ MIGRATIONS: list[Migration] = [
             END""",
         ],
     ),
+    Migration(
+        version=29,
+        statements=[
+            # user, observed or inferred, validated in Python. NULL means unknown. Not in the FTS projection.
+            "ALTER TABLE observations ADD COLUMN provenance TEXT",
+        ],
+    ),
 ]

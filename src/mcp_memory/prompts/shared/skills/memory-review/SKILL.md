@@ -34,13 +34,13 @@ The "MEMORY UPDATE REQUIRED" gate (in mcp-memory's own hook plugin, `hooks/plugi
 
 ## 1. Find orphans and naming violations
 
-`create_entities` now rejects new unprefixed names and any mis-named/second `project` entity at creation time (a name must start with `<entityType>/`, and a `project` entity must be named exactly `project/<scope>`). The checks below therefore target **legacy entities created before that enforcement** - new ones can no longer be made.
+`create_entities` now rejects new unprefixed names and any mis-named/second `project` entity at creation time (a name must start with `<entityType>/`, and a `project` entity must be named exactly `project/<scope>`). The checks below therefore target **legacy entities created before that enforcement**.
 
 The audit's `orphans`, `misused_project_type`, `unprefixed`, and `ghost_scopes` keys enumerate these deterministically:
-- **Orphan entities** (`orphans`) - nodes with zero relations (these float disconnected in the graph)
+- **Orphan entities** (`orphans`) - nodes with zero relations
 - **Misused `project` type** (`misused_project_type`) - any `project`-type entity OTHER than the single `project/<repo-name>` root. `project` is the only type exempt from the relation requirement, so a legacy work item created as `entityType: project` (e.g. an investigation named after its symptom rather than as a `task/`) slips past the server's relation check as an orphan. This is usually a modeling mistake: MUST rename_entity it to a `task/`, `feature/`, or `pattern/` name (add a relation first), or delete it if superseded.
 - **Unprefixed entities** (`unprefixed`) - names not starting with a standard prefix (`project/`, `feature/`, `task/`, `user-preferences/`, `pattern/`, `knowledge/`)
-- **Ghost project scopes** (`ghost_scopes`) - scopes that exist but contain zero entities (from auto-generated sessions, old renames)
+- **Ghost project scopes** (`ghost_scopes`) - scopes that exist but contain zero entities
 
 **Duplicate entities** - same concept stored with and without prefix (e.g. `MyProject` and `project/MyProject`) - are a judgement call the audit does not make: MUST cross-reference the `unprefixed` list against prefixed names in the same scope.
 
@@ -54,6 +54,7 @@ MUST look for:
 - `user-preferences` entities scattered across project scopes - MUST extract useful observations into the main global preferences, then delete the project-scoped copy
 - **Near-duplicate observations** within the same entity (same fact phrased two ways) - MUST keep the more precise one
 - **Observations that contradict each other** - MUST resolve the contradiction, keep the correct one
+- MUST keep `from: user` observations when trimming, unless a later `user` one supersedes them. SHOULD first demote or delete `inferred` ones an `observed` one contradicts.
 
 ## 3. Trim bloated entities
 

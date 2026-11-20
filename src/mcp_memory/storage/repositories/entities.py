@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from mcp_memory.config import get_strict_policy_enabled
-from mcp_memory.models import STRUCTURAL_RELATION_TYPES, VALID_STATUSES, validate_vote
+from mcp_memory.models import STRUCTURAL_RELATION_TYPES, VALID_STATUSES, validate_provenance, validate_vote
 from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_today_date_prefix
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
@@ -42,6 +42,7 @@ class EntityRepository:
 
         if status is not None and status not in VALID_STATUSES:
             raise ValueError(f"Invalid status '{status}' for entity '{name}'. Must be one of: {VALID_STATUSES}")
+        validate_provenance(cast("str | None", entity_data.get("provenance")))
 
         if get_strict_policy_enabled() and project != "global" and entity_type == "user-preferences":
             raise ValueError(
@@ -61,6 +62,7 @@ class EntityRepository:
                 observations = cast("list[str]", entity_data.get("observations"))
                 observations = [strip_today_date_prefix(obs) for obs in observations]
                 status = entity_data.get("status")
+                provenance = entity_data.get("provenance")
 
                 if get_entity_id(self._conn, str(name), project_id) is not None:
                     raise ValueError(
@@ -79,8 +81,8 @@ class EntityRepository:
                 entity_id = cast("int", cursor.lastrowid)
 
                 self._conn.write_many(
-                    "INSERT INTO observations (entity_id, content, content_hash) VALUES (?, ?, ?)",
-                    [(entity_id, obs, hash_observation(obs)) for obs in observations],
+                    "INSERT INTO observations (entity_id, content, content_hash, provenance) VALUES (?, ?, ?, ?)",
+                    [(entity_id, obs, hash_observation(obs), provenance) for obs in observations],
                 )
 
     def rename(self, project: str, old_name: str, new_name: str, *, entity_type: str | None = None) -> None:
@@ -308,8 +310,8 @@ class EntityRepository:
         with self._conn.transaction():
             obs = self._conn.write(
                 "INSERT INTO observations "
-                "(entity_id, content, vote_score, created_at, content_hash) "
-                "SELECT ?, content, vote_score, created_at, content_hash FROM observations "
+                "(entity_id, content, vote_score, created_at, content_hash, provenance) "
+                "SELECT ?, content, vote_score, created_at, content_hash, provenance FROM observations "
                 "WHERE entity_id = ? AND deleted_at IS NULL AND content NOT IN "
                 "(SELECT content FROM observations WHERE entity_id = ? AND deleted_at IS NULL)",
                 (target_id, source_id, target_id),
