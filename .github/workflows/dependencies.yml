@@ -5,6 +5,9 @@ on:
     types: [opened, edited, synchronize, closed, reopened]
   issues:
     types: [closed, reopened]
+  workflow_run:
+    workflows: [PR review]
+    types: [completed]
   workflow_dispatch:
   repository_dispatch:
     types: [dependencies-recheck]
