@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from starlette.responses import JSONResponse
 
 from .audit import audit_graph, propose_plan
+from .dream import heavy_dreaming_runnable
 from .eval import evaluate_cached_async
 from .export_import import export_database, import_projects, validate_export
 from .metrics import usage_report
@@ -148,6 +149,7 @@ _OPERATIONS: dict[str, Callable[[Storage, dict[str, Any]], Any]] = {
     "metrics": lambda db, args: asdict(usage_report(db, args["since"])),
     "export": lambda db, _args: export_database(db),
     "import": _import,
+    "dream-heavy": lambda _db, _args: heavy_dreaming_runnable(),
 }
 
 

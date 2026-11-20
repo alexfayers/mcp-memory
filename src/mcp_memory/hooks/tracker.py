@@ -197,18 +197,3 @@ def reset_work(task_id: str, names: tuple[str, ...]) -> None:
             del data[key]
         if keys:
             _write(data)
-
-
-def get_reminder_chance(task_id: str, default: float) -> float:
-    """Return the memory-reminder probability recorded for a task, or the default."""
-    with _locked():
-        chance = _read().get(f"{task_id}:reminder_chance")
-    return float(chance) if isinstance(chance, (int, float)) else default
-
-
-def set_reminder_chance(task_id: str, chance: float) -> None:
-    """Record the memory-reminder probability for a task."""
-    with _locked():
-        data = _read()
-        data[f"{task_id}:reminder_chance"] = chance
-        _write(data)
