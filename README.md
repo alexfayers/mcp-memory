@@ -107,7 +107,7 @@
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
 | tests/test\_server.py                                |      988 |        1 |     99% |      1691 |
 | tests/test\_server\_http.py                          |      121 |        0 |    100% |           |
-| tests/test\_telemetry.py                             |      453 |        1 |     99% |       751 |
+| tests/test\_telemetry.py                             |      453 |        1 |     99% |       758 |
 | tests/test\_telemetry\_contract.py                   |       11 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       17 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
