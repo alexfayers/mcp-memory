@@ -396,7 +396,7 @@ class TestRegisterCodexServer:
 class TestRegisterPiServer:
     def test_adds_url_only_servers(self, tmp_path: cli.Path) -> None:
         mcp_path = tmp_path / "agent" / "mcp.json"
-        cli._register_pi_server(mcp_path, "memory", "http://localhost:8000/mcp")
+        cli._register_mcp_server(mcp_path, "mcpServers", "memory", {"url": "http://localhost:8000/mcp"}, "Pi")
 
         data = json.loads(mcp_path.read_text(encoding="utf-8"))
         assert data["mcpServers"]["memory"] == {"url": "http://localhost:8000/mcp"}
@@ -412,7 +412,7 @@ class TestRegisterPiServer:
         }
         mcp_path.write_text(json.dumps({"mcpServers": {"memory": legacy}}), encoding="utf-8")
 
-        cli._register_pi_server(mcp_path, "memory", "http://localhost:8000/mcp")
+        cli._register_mcp_server(mcp_path, "mcpServers", "memory", {"url": "http://localhost:8000/mcp"}, "Pi")
         data = json.loads(mcp_path.read_text(encoding="utf-8"))
 
         assert data["mcpServers"]["memory"] == {"url": "http://custom/mcp", "headers": {"X": "1"}, "extra": 1}
@@ -422,7 +422,7 @@ class TestRegisterPiServer:
         existing = {"settings": {"toolPrefix": "server"}, "mcpServers": {"memory": {"url": "http://custom/mcp"}}}
         mcp_path.write_text(json.dumps(existing), encoding="utf-8")
 
-        cli._register_pi_server(mcp_path, "memory", "http://localhost:8000/mcp")
+        cli._register_mcp_server(mcp_path, "mcpServers", "memory", {"url": "http://localhost:8000/mcp"}, "Pi")
         data = json.loads(mcp_path.read_text(encoding="utf-8"))
 
         assert data["settings"] == existing["settings"]
@@ -465,6 +465,59 @@ class TestInstallPiRemovesRetiredAgent:
         cli._cmd_install_pi()
 
         assert mcp_path.read_text(encoding="utf-8") == after_first
+
+
+class TestInstallOpencode:
+    @pytest.fixture
+    def config_dir(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> cli.Path:
+        monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setattr(cli, "resolve_port", lambda: "8000")
+        return tmp_path
+
+    def test_writes_opencode_json_and_leaves_a_commented_jsonc_untouched(self, config_dir: cli.Path) -> None:
+        jsonc = config_dir / "opencode.jsonc"
+        jsonc.write_text('{\n  // c\n  "theme": "x",\n  "mcp": {"other": {}}\n}')
+        before = jsonc.read_text(encoding="utf-8")
+
+        cli._cmd_install_opencode()
+
+        assert jsonc.read_text(encoding="utf-8") == before
+        assert json.loads((config_dir / "opencode.json").read_text(encoding="utf-8")) == {
+            "mcp": {"memory": {"type": "remote", "url": "http://localhost:8000/mcp", "enabled": True}}
+        }
+
+    @pytest.mark.parametrize("name", ["opencode.json", "opencode.jsonc"])
+    def test_keeps_an_existing_memory_entry(self, config_dir: cli.Path, name: str) -> None:
+        (config_dir / name).write_text('{"mcp": {"memory": {"type": "remote", "url": "http://custom/mcp"}}}')
+        before = {p.name: p.read_text(encoding="utf-8") for p in config_dir.iterdir()}
+
+        cli._cmd_install_opencode()
+
+        assert {p.name: p.read_text(encoding="utf-8") for p in config_dir.iterdir()} == before
+
+    def test_non_object_mcp_exits_with_an_error(self, config_dir: cli.Path, capsys: pytest.CaptureFixture[str]) -> None:
+        (config_dir / "opencode.json").write_text('{"mcp": []}')
+
+        with pytest.raises(SystemExit) as exc:
+            cli._cmd_install_opencode()
+
+        assert exc.value.code == 1
+        assert "non-object 'mcp'" in capsys.readouterr().err
+
+    def test_install_opencode_falls_back_to_xdg_config_home(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        monkeypatch.setattr(cli, "_LEGACY_AGENT_PLIST", tmp_path / "absent.plist")
+        monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(cli.subprocess, "run", lambda *_a, **_kw: None)
+        monkeypatch.setattr(cli, "resolve_port", lambda: "8000")
+
+        cli._cmd_install(cli._build_parser().parse_args(["install", "opencode"]), cli._build_parser())
+
+        data = json.loads((tmp_path / "opencode" / "opencode.json").read_text(encoding="utf-8"))
+        assert data["mcp"]["memory"]["url"] == "http://localhost:8000/mcp"
 
 
 class TestInstallRemovesRetiredAgentService:
