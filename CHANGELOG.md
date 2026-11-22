@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/alexfayers/mcp-memory/compare/v0.3.0...v0.3.1) (2026-11-22)
+
+
+### Miscellaneous Chores
+
+* **deps:** update github actions ([#221](https://github.com/alexfayers/mcp-memory/issues/221)) ([7f2b1aa](https://github.com/alexfayers/mcp-memory/commit/7f2b1aab2958b7b93efbac211f1ebc770c61b277))
+
 ## [0.3.0](https://github.com/alexfayers/mcp-memory/compare/v0.2.0...v0.3.0) (2026-11-21)
 
 
