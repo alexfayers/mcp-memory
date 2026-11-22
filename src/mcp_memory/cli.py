@@ -954,11 +954,10 @@ def _register_mcp_server(path: Path, servers_key: str, name: str, entry: dict[st
 def _cmd_install_pi() -> None:
     """Register memory servers in pi's global MCP config."""
     mcp_path = _pi_mcp_config_path()
-    url = f"http://localhost:{resolve_port()}/mcp"
     try:
         _remove_mcp_servers(mcp_path, "mcpServers")
-        _register_mcp_server(mcp_path, "mcpServers", "memory", {"url": url}, "Pi")
-    except (OSError, TypeError, ValueError) as exc:
+        _register_mcp_server(mcp_path, "mcpServers", "memory", {"url": f"http://localhost:{resolve_port()}/mcp"}, "Pi")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
         sys.exit(1)
 
