@@ -687,8 +687,8 @@ wheels = [
 
 [[package]]
 name = "llm-prompts"
-version = "0.1.0"
-source = { git = "https://github.com/alexfayers/llm-prompts#d99d237503f5d61000a8c750fe3a6642afbc773b" }
+version = "0.6.0"
+source = { git = "https://github.com/alexfayers/llm-prompts#ac673875957ff559ae5cf42ec2ca58a41eba1609" }
 dependencies = [
     { name = "cline-hooks" },
     { name = "jinja2" },
@@ -849,7 +849,7 @@ wheels = [
 
 [[package]]
 name = "mcp-memory"
-version = "0.2.0"
+version = "0.3.1"
 source = { editable = "." }
 dependencies = [
     { name = "better-profanity" },

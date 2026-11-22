@@ -310,7 +310,7 @@ def test_report_sizes_the_store_in_buckets(store: Storage, sent: list[dict[str, 
 
 
 TOOLS = ("llm-prompts", "cline-hooks", "mcp-memory")
-ENTRY_KEYS = {"commit", "base", "local", "dirty", "ahead"}
+ENTRY_KEYS = {"commit", "base", "local", "dirty", "ahead", "release"}
 
 
 def _assert_versions(properties: dict[str, Any], tmp_path: Path) -> None:
@@ -334,7 +334,14 @@ def test_report_names_the_installed_commit_of_a_remote_install(
     usage.report()
 
     entry = sent[0]["properties"]["versions"]["mcp-memory"]
-    assert entry == {"commit": "abc123", "base": "abc123", "local": False, "dirty": False, "ahead": None}
+    assert entry == {
+        "commit": "abc123",
+        "base": "abc123",
+        "local": False,
+        "dirty": False,
+        "ahead": None,
+        "release": None,
+    }
 
 
 def test_report_names_a_local_checkout_without_its_path(

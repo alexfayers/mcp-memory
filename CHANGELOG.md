@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.1](https://github.com/alexfayers/mcp-memory/compare/v0.3.0...v0.3.1) (2026-11-22)
+
+
+### Miscellaneous Chores
+
+* **deps:** update github actions ([#221](https://github.com/alexfayers/mcp-memory/issues/221)) ([7f2b1aa](https://github.com/alexfayers/mcp-memory/commit/7f2b1aab2958b7b93efbac211f1ebc770c61b277))
+
+## [0.3.0](https://github.com/alexfayers/mcp-memory/compare/v0.2.0...v0.3.0) (2026-11-21)
+
+
+### Features
+
+* **hooks:** skip the memory-review nudge when the server runs heavy dreaming ([#205](https://github.com/alexfayers/mcp-memory/issues/205)) ([18f61cd](https://github.com/alexfayers/mcp-memory/commit/18f61cd31e1233052f9c3c3736c69ece9858a75a))
+
+
+### Bug Fixes
+
+* **deps:** lock llm-prompts with the release tag in versions ([#217](https://github.com/alexfayers/mcp-memory/issues/217)) ([3965e0e](https://github.com/alexfayers/mcp-memory/commit/3965e0e76259541b0d506356c9d735ad0260b63a))
+
+
+### Miscellaneous Chores
+
+* sync shared files from llm-prompts-ci ([#219](https://github.com/alexfayers/mcp-memory/issues/219)) ([9202f89](https://github.com/alexfayers/mcp-memory/commit/9202f89ef376d56cfa37de33d2e8e7a8ef4d3b86))
+
 ## [0.2.0](https://github.com/alexfayers/mcp-memory/compare/v0.1.3...v0.2.0) (2026-11-20)
 
 
