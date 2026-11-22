@@ -48,7 +48,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - run: just test -vv --cov=.
-      - uses: py-cov-action/python-coverage-comment-action@v4.6
+      - uses: py-cov-action/python-coverage-comment-action@v4.7
         with:
           ANNOTATE_MISSING_LINES: true
         env:
