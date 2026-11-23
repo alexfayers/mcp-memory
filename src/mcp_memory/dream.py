@@ -1085,6 +1085,11 @@ def _select_backend() -> DreamBackend | None:
     return None
 
 
+def heavy_dreaming_runnable() -> bool:
+    """Return True when the heavy tier is enabled and a pi or claude backend is installed."""
+    return get_dream_heavy_enabled() and _select_backend() is not None
+
+
 async def _run_pass(spec: PassSpec) -> SpawnResult:
     """Run one dream pass through the selected backend, as an ``ok=False`` result if none is installed."""
     backend = _select_backend()
