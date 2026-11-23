@@ -42,12 +42,13 @@ class TestMoveRow:
         assert move_row(1000, 600) == (-400, -40.0)
 
 
-class TestProbes:
-    @pytest.fixture(scope="class")
-    def measured(self, tmp_path_factory: pytest.TempPathFactory) -> SizeBaseline:
-        db = open_writable(tmp_path_factory.mktemp("probe-fixture") / "full.db")
-        return measure(_build_populated_fixture(db))
+@pytest.fixture(scope="class")
+def measured(tmp_path_factory: pytest.TempPathFactory) -> SizeBaseline:
+    db = open_writable(tmp_path_factory.mktemp("probe-fixture") / "full.db")
+    return measure(_build_populated_fixture(db))
 
+
+class TestProbes:
     def test_every_probe_measures_at_least_one_payload(self, measured: SizeBaseline) -> None:
         assert set(measured.probe_counts) == set(TOOLS)
         assert all(count > 0 for count in measured.probe_counts.values())
