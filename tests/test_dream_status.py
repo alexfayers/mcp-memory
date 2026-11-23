@@ -360,7 +360,7 @@ class TestProgress:
         dream_status.record_pass_start("heavy")
         status = dream_status.read_status()
         assert status is not None
-        assert status["progress"] == {"reads": 0, "calls": []}
+        assert status["progress"] == {"reads": 0, "calls": [], "turns": 0, "current": ""}
 
     def test_mutating_calls_are_listed_and_reads_counted(self) -> None:
         dream_status.record_pass_start("heavy")
@@ -369,7 +369,24 @@ class TestProgress:
         dream_status.record_progress("merge_entities", "proj a b", mutating=True)
         status = dream_status.read_status()
         assert status is not None
-        assert status["progress"] == {"reads": 2, "calls": ["merge_entities proj a b"]}
+        assert status["progress"]["reads"] == 2
+        assert status["progress"]["calls"] == ["merge_entities proj a b"]
+
+    def test_every_call_becomes_the_current_call(self) -> None:
+        dream_status.record_pass_start("heavy")
+        dream_status.record_progress("vote", "proj name -1", mutating=True)
+        dream_status.record_progress("search_nodes", "q", mutating=False)
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"]["current"] == "search_nodes q"
+
+    def test_turns_are_counted(self) -> None:
+        dream_status.record_pass_start("heavy")
+        dream_status.record_turn()
+        dream_status.record_turn()
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"]["turns"] == 2
 
     def test_progress_survives_the_end_of_the_pass(self) -> None:
         dream_status.record_pass_start("light")
@@ -385,4 +402,4 @@ class TestProgress:
         path.write_text(json.dumps({"schema": 3, "configs": {}, "last_pass": None}), encoding="utf-8")
         status = dream_status.read_status()
         assert status is not None
-        assert status["progress"] == {"reads": 0, "calls": []}
+        assert status["progress"] == {"reads": 0, "calls": [], "turns": 0, "current": ""}

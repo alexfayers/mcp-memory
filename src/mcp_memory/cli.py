@@ -44,7 +44,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 _DREAM_API_TIMEOUT_SECONDS = 10
-_DREAM_POLL_SECONDS = 5
+_DREAM_POLL_SECONDS = 1
+_CLEAR_LINE = "\r\x1b[K"
+_TERMINAL_ESCAPE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]")
+_CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
 _PORT_PROBE_TIMEOUT_SECONDS = 2
 _FLUSH_TIMEOUT_SECONDS = 10
 
@@ -451,6 +454,16 @@ def _progress_calls(state: dict[str, object]) -> list[str]:
     return cast("list[str]", progress["calls"]) if isinstance(progress, dict) else []
 
 
+def _status_line(state: dict[str, object], elapsed: float) -> str:
+    """Return a running pass's live status, e.g. "turn 3, 42s: search_nodes q", cut to the terminal width."""
+    progress = state.get("progress")
+    progress = progress if isinstance(progress, dict) else {}
+    line = f"turn {progress.get('turns', 0)}, {round(elapsed)}s"
+    if current := _CONTROL_CHARACTER.sub("", _TERMINAL_ESCAPE.sub("", str(progress.get("current", "")))):
+        line = f"{line}: {current}"
+    return line[: shutil.get_terminal_size().columns - 1]
+
+
 def _thousands(tokens: int) -> str:
     """Format a token count in thousands from 1000 up, e.g. 123k."""
     return f"{round(tokens / 1000)}k" if tokens >= 1000 else str(tokens)
@@ -482,22 +495,41 @@ def _action_counts(last_pass: object) -> str:
     return ", ".join(f"{action} {count}" for action, count in counts.items())
 
 
+def _wait_for_pass(*, live: bool) -> dict[str, object]:
+    """Poll the running pass until it finishes, printing each new progress line, and return its final state.
+
+    On a terminal, a live status line is redrawn in place below the progress lines.
+    """
+    started = time.monotonic() if live else 0.0
+    printed = 0
+    while True:
+        state = _dream_api("dream")
+        calls = _progress_calls(state)
+        if live:
+            print(_CLEAR_LINE, end="")
+        for line in calls[printed:]:
+            print(line, flush=True)
+        printed = len(calls)
+        if not state["running"]:
+            return state
+        if live:
+            print(_status_line(state, time.monotonic() - started), end="", flush=True)
+        time.sleep(_DREAM_POLL_SECONDS)
+
+
 def _cmd_dream(args: argparse.Namespace) -> None:
     """Trigger a dream pass on the running server, optionally waiting for it to finish."""
     _dream_api("dream/trigger", {"tier": args.tier})
     print(f"Started {args.tier} dream pass.")
     if not args.wait:
         return
-    printed = 0
-    while True:
-        state = _dream_api("dream")
-        calls = _progress_calls(state)
-        for line in calls[printed:]:
-            print(line, flush=True)
-        printed = len(calls)
-        if not state["running"]:
-            break
-        time.sleep(_DREAM_POLL_SECONDS)
+    live = sys.stdout.isatty()
+    try:
+        state = _wait_for_pass(live=live)
+    except KeyboardInterrupt:
+        if live:
+            print(_CLEAR_LINE, end="", flush=True)
+        sys.exit(130)
     print(json.dumps(state["last_pass"], indent=2))
     counts = _action_counts(state["last_pass"])
     if counts:

@@ -62,10 +62,15 @@ def _classify_action(reason: str) -> str:
     return "demote"
 
 
+def _empty_progress() -> PassProgress:
+    """Return the progress of a pass that has made no turn or call yet."""
+    return {"reads": 0, "calls": [], "turns": 0, "current": ""}
+
+
 _configs: dict[str, DreamConfig] = {}
 _last_pass: PassRecord | None = None
 _running: str | None = None
-_progress: PassProgress = {"reads": 0, "calls": []}
+_progress: PassProgress = _empty_progress()
 
 
 class Operation(TypedDict):
@@ -113,10 +118,12 @@ class PassRecord(TypedDict):
 
 
 class PassProgress(TypedDict):
-    """Memory tool calls the latest pass has made: a read count plus one line per mutating call."""
+    """The latest pass's progress: a read count, one line per mutating call, its turns and its latest call."""
 
     reads: int
     calls: list[str]
+    turns: int
+    current: str
 
 
 class DreamConfig(TypedDict):
@@ -198,16 +205,23 @@ def record_pass_start(tier: str) -> None:
     """Mark a curation pass of ``tier`` as in flight, for the visualiser's live indicator."""
     global _running, _progress  # ruff: ignore[global-statement]
     _running = tier
-    _progress = {"reads": 0, "calls": []}
+    _progress = _empty_progress()
     _write()
 
 
 def record_progress(tool: str, args: str, *, mutating: bool) -> None:
-    """Record one memory tool call the in-flight pass made: a line when mutating, else a read count."""
+    """Record one memory tool call the in-flight pass made as current: a line when mutating, else a read count."""
+    _progress["current"] = f"{tool} {args}".strip()
     if mutating:
-        _progress["calls"].append(f"{tool} {args}".strip())
+        _progress["calls"].append(_progress["current"])
     else:
         _progress["reads"] += 1
+    _write()
+
+
+def record_turn() -> None:
+    """Record that the in-flight pass's agent started another turn."""
+    _progress["turns"] += 1
     _write()
 
 
@@ -241,7 +255,7 @@ def clear() -> None:
     _configs = {}
     _last_pass = None
     _running = None
-    _progress = {"reads": 0, "calls": []}
+    _progress = _empty_progress()
 
 
 def _status_path() -> Path:
@@ -295,8 +309,8 @@ def _read_file() -> DreamStatus | None:
 def _normalise_progress(progress: object) -> PassProgress:
     """Return the persisted progress, or an empty one when the marker predates it."""
     if not isinstance(progress, dict):
-        return {"reads": 0, "calls": []}
-    return cast("PassProgress", {"reads": progress.get("reads", 0), "calls": progress.get("calls", [])})
+        return _empty_progress()
+    return cast("PassProgress", {key: progress.get(key, empty) for key, empty in _empty_progress().items()})
 
 
 def _tier_config(raw: dict[str, object]) -> DreamConfig:

@@ -815,7 +815,20 @@ class TestSpawnProgress:
         ])
         status = dream_status.read_status()
         assert status is not None
-        assert status["progress"] == {"reads": 1, "calls": []}
+        assert (status["progress"]["reads"], status["progress"]["calls"]) == (1, [])
+
+    def test_turns_are_counted_from_claude_messages_and_pi_turn_starts(self) -> None:
+        dream_status.clear()
+        dream_status.record_pass_start("heavy")
+        self._spawn([
+            json.dumps({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": "hi"}]}}),
+            json.dumps({"type": "assistant", "message": {"id": "m1", "content": []}}),
+            json.dumps({"type": "assistant", "message": {"id": "m2", "content": []}}),
+            json.dumps({"type": "turn_start"}),
+        ])
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"]["turns"] == 3
 
     def test_times_out_a_silent_agent(self) -> None:
         script = "import time; time.sleep(30)"

@@ -982,6 +982,61 @@ class TestCmdDream:
         assert out.count("rename_entity p b c") == 1
         assert out.index("vote p d -1") < out.index('"tier": "light"')
 
+    def test_wait_on_a_terminal_redraws_a_live_status_line(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        clock = iter([100.0, 105.0, 172.0])
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None, monotonic=lambda: next(clock)))
+        monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+        monkeypatch.setenv("COLUMNS", "40")
+        last_pass = {"tier": "light"}
+        self._fake_urlopen(
+            monkeypatch,
+            {"started": True},
+            {"running": "light", "progress": {"calls": [], "turns": 2, "current": "search_nodes \x1b[31mq"}},
+            {"running": "light", "progress": {"calls": ["vote p a -1"], "turns": 3, "current": "x" * 60}},
+            {"running": None, "last_pass": last_pass, "progress": {"calls": ["vote p a -1"]}},
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="light", wait=True))
+
+        out = capsys.readouterr().out
+        assert "\r\x1b[Kturn 2, 5s: search_nodes q" in out
+        assert "\r\x1b[Kvote p a -1\nturn 3, 72s: " + "x" * 26 + "\r" in out
+        assert out.endswith("\r\x1b[K" + json.dumps(last_pass, indent=2) + "\n")
+
+    def test_wait_strips_control_characters_from_the_status_line(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda _: None, monotonic=lambda: 0.0))
+        monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+        self._fake_urlopen(
+            monkeypatch,
+            {"started": True},
+            {"running": "light", "progress": {"calls": [], "turns": 1, "current": "s\x1b[31m_n\x07 a\nb\rc\x7f"}},
+            {"running": None, "last_pass": {"tier": "light"}},
+        )
+
+        cli._cmd_dream(argparse.Namespace(tier="light", wait=True))
+
+        assert "\r\x1b[Kturn 1, 0s: s_n abc\r\x1b[K{" in capsys.readouterr().out
+
+    def test_ctrl_c_during_a_live_wait_clears_the_status_line_and_exits_130(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        def interrupt(_seconds: float) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=interrupt, monotonic=lambda: 0.0))
+        monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+        self._fake_urlopen(monkeypatch, {"started": True}, {"running": "light", "progress": {"calls": [], "turns": 1}})
+
+        with pytest.raises(SystemExit) as exit_info:
+            cli._cmd_dream(argparse.Namespace(tier="light", wait=True))
+
+        assert exit_info.value.code == 130
+        assert capsys.readouterr().out.endswith("turn 1, 0s\r\x1b[K")
+
 
 class TestCmdRestore:
     @pytest.fixture(autouse=True)
