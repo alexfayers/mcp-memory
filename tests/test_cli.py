@@ -396,7 +396,7 @@ class TestRegisterCodexServer:
 class TestRegisterPiServer:
     def test_adds_url_only_servers(self, tmp_path: cli.Path) -> None:
         mcp_path = tmp_path / "agent" / "mcp.json"
-        cli._register_mcp_server(mcp_path, "mcpServers", "memory", {"url": "http://localhost:8000/mcp"}, "Pi")
+        cli._register_mcp_server(mcp_path, ("mcpServers",), "memory", {"url": "http://localhost:8000/mcp"}, "Pi")
 
         data = json.loads(mcp_path.read_text(encoding="utf-8"))
         assert data["mcpServers"]["memory"] == {"url": "http://localhost:8000/mcp"}
@@ -412,7 +412,7 @@ class TestRegisterPiServer:
         }
         mcp_path.write_text(json.dumps({"mcpServers": {"memory": legacy}}), encoding="utf-8")
 
-        cli._register_mcp_server(mcp_path, "mcpServers", "memory", {"url": "http://localhost:8000/mcp"}, "Pi")
+        cli._register_mcp_server(mcp_path, ("mcpServers",), "memory", {"url": "http://localhost:8000/mcp"}, "Pi")
         data = json.loads(mcp_path.read_text(encoding="utf-8"))
 
         assert data["mcpServers"]["memory"] == {"url": "http://custom/mcp", "headers": {"X": "1"}, "extra": 1}
@@ -422,7 +422,7 @@ class TestRegisterPiServer:
         existing = {"settings": {"toolPrefix": "server"}, "mcpServers": {"memory": {"url": "http://custom/mcp"}}}
         mcp_path.write_text(json.dumps(existing), encoding="utf-8")
 
-        cli._register_mcp_server(mcp_path, "mcpServers", "memory", {"url": "http://localhost:8000/mcp"}, "Pi")
+        cli._register_mcp_server(mcp_path, ("mcpServers",), "memory", {"url": "http://localhost:8000/mcp"}, "Pi")
         data = json.loads(mcp_path.read_text(encoding="utf-8"))
 
         assert data["settings"] == existing["settings"]
@@ -483,17 +483,24 @@ class TestInstallOpencode:
 
         assert jsonc.read_text(encoding="utf-8") == before
         assert json.loads((config_dir / "opencode.json").read_text(encoding="utf-8")) == {
-            "mcp": {"memory": {"type": "remote", "url": "http://localhost:8000/mcp", "enabled": True}}
+            "mcp": {"servers": {"memory": {"type": "remote", "url": "http://localhost:8000/mcp"}}}
         }
 
     @pytest.mark.parametrize("name", ["opencode.json", "opencode.jsonc"])
-    def test_keeps_an_existing_memory_entry(self, config_dir: cli.Path, name: str) -> None:
-        (config_dir / name).write_text('{"mcp": {"memory": {"type": "remote", "url": "http://custom/mcp"}}}')
-        before = {p.name: p.read_text(encoding="utf-8") for p in config_dir.iterdir()}
+    @pytest.mark.parametrize("native", [False, True])
+    def test_keeps_an_existing_memory_entry(
+        self, config_dir: cli.Path, name: str, native: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        servers = {"memory": {"type": "remote", "url": "http://custom/mcp"}}
+        (config_dir / name).write_text(json.dumps({"mcp": {"servers": servers} if native else servers}))
+        before = {p.name: p.read_bytes() for p in config_dir.iterdir()}
+        monkeypatch.setattr(cli, "_LEGACY_AGENT_PLIST", config_dir / "absent.plist")
+        monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(cli.subprocess, "run", lambda *_a, **_kw: None)
 
-        cli._cmd_install_opencode()
+        cli._cmd_install(cli._build_parser().parse_args(["install", "opencode"]), cli._build_parser())
 
-        assert {p.name: p.read_text(encoding="utf-8") for p in config_dir.iterdir()} == before
+        assert {p.name: p.read_bytes() for p in config_dir.iterdir()} == before
 
     def test_non_object_mcp_exits_with_an_error(self, config_dir: cli.Path, capsys: pytest.CaptureFixture[str]) -> None:
         (config_dir / "opencode.json").write_text('{"mcp": []}')
@@ -517,7 +524,7 @@ class TestInstallOpencode:
         cli._cmd_install(cli._build_parser().parse_args(["install", "opencode"]), cli._build_parser())
 
         data = json.loads((tmp_path / "opencode" / "opencode.json").read_text(encoding="utf-8"))
-        assert data["mcp"]["memory"]["url"] == "http://localhost:8000/mcp"
+        assert data == {"mcp": {"servers": {"memory": {"type": "remote", "url": "http://localhost:8000/mcp"}}}}
 
 
 class TestInstallRemovesRetiredAgentService:
