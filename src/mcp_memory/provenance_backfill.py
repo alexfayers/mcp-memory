@@ -19,7 +19,7 @@ _RECORD_PREFIX = "provenance-backfill-"
 _RULES = (
     ("inferred", re.compile(r"^(INFERRED|Inferred|UNVERIFIED|Likely)|hypothesis:")),
     ("observed", re.compile(r"^(VERIFIED|OBSERVED|Verified|Source-verified|Confirmed)")),
-    ("user", re.compile(r"^(User|The user) |(?i:user: ')")),
+    ("user", re.compile(r"^(User|The user) ")),
 )
 
 

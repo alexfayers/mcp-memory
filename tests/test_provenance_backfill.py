@@ -29,12 +29,12 @@ def test_tags_by_the_first_matching_rule_once(store: Storage, backups: Path) -> 
     lines = ["INFERRED: User said it", "Verified from source", "User chose B", "On Oct 28, the user: 'go'", "plain"]
     store.entities.create("proj", [{"name": "task/t", "entityType": "task", "observations": lines}])
 
-    assert backfill_once(store) == 4
+    assert backfill_once(store) == 3
     assert list(backups.glob("test-*.db"))
     store.observations.add("proj", "task/t", ["User asked later"])
     assert backfill_once(store) is None
     assert _provenances(store) == dict(
-        zip([*lines, "User asked later"], ["inferred", "observed", "user", "user", None, None], strict=True)
+        zip([*lines, "User asked later"], ["inferred", "observed", "user", None, None, None], strict=True)
     )
 
 
