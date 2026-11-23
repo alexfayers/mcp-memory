@@ -686,7 +686,9 @@ class TestAddObservationsTool:
         tools.add_observations("proj", "e1", ["a"], provenance="user")
         tools.add_observations("proj", "e1", ["a", "c"], provenance="observed")
         tools.merge_observations("proj", "e1", hash_observation("c"), hash_observation("b"))
-        observations = tools.get_entity_with_relations("proj", "e1")["entity"]["observations"]
+        server_db.entities.create("proj", [{"name": "e2", "entityType": "task", "observations": ["a", "b"]}])
+        tools.merge_entities("proj", "e1", "e2")
+        observations = tools.get_entity_with_relations("proj", "e2")["entity"]["observations"]
         assert {o["content"]: o.get("from") for o in observations} == {"a": "user", "b": "observed"}
 
     def test_create_entities_schema_lists_provenance(self) -> None:

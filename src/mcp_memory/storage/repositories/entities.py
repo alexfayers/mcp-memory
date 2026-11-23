@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from mcp_memory.config import get_strict_policy_enabled
-from mcp_memory.models import STRUCTURAL_RELATION_TYPES, VALID_STATUSES, validate_provenance, validate_vote
+from mcp_memory.models import (
+    STRUCTURAL_RELATION_TYPES,
+    VALID_STATUSES,
+    raises_provenance,
+    validate_provenance,
+    validate_vote,
+)
 from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_today_date_prefix
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
@@ -292,7 +298,8 @@ class EntityRepository:
         """Fold a source entity into a target, then soft-delete the source.
 
         Additive on the target: the source's observations are copied over (deduped by
-        exact content, keeping their votes and timestamps), and equivalent relations are
+        exact content, keeping their votes and timestamps, a duplicate taking the higher-ranked
+        provenance), and equivalent relations are
         recreated on the target (skipping any that would become a target->target
         self-loop). The target keeps the higher of the two vote scores. The source is
         soft-deleted rather than removed, so the merge is reversible via restore.
@@ -307,7 +314,18 @@ class EntityRepository:
         if target_id is None:
             raise ValueError(f"Target entity '{target}' not found in project '{project}'")
 
+        live_sql = "SELECT id, content, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL"
+        source_provenance = {r["content"]: r["provenance"] for r in self._conn.query_all(live_sql, (source_id,))}
         with self._conn.transaction():
+            self._conn.write_many(
+                "UPDATE observations SET provenance = ? WHERE id = ?",
+                [
+                    (source_provenance[r["content"]], r["id"])
+                    for r in self._conn.query_all(live_sql, (target_id,))
+                    if r["content"] in source_provenance
+                    and raises_provenance(source_provenance[r["content"]], r["provenance"])
+                ],
+            )
             obs = self._conn.write(
                 "INSERT INTO observations "
                 "(entity_id, content, vote_score, created_at, content_hash, provenance) "
