@@ -1275,6 +1275,40 @@ class TestPiBackend:
         assert asyncio.run(dream.run_dream_pass()) == "[p/e] - demoted"
         assert commands[0][0] == "/usr/bin/claude"
 
+    def _fake_pi_and_claude(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pi_stderr: str) -> None:
+        monkeypatch.setenv("MCP_DREAM_PI_MODEL_LIGHT", "ext/m1")
+        pi_bin, claude_bin, payload = tmp_path / "pi-cli", tmp_path / "claude", tmp_path / "payload.jsonl"
+        pi_bin.write_text(f"#!/bin/sh\necho '{pi_stderr}' >&2\nexit 1\n")
+        payload.write_text(_dream_payload("[p/e] - demoted"))
+        claude_bin.write_text(f"#!/bin/sh\ncat {payload}\n")
+        for fake_bin in (pi_bin, claude_bin):
+            fake_bin.chmod(0o755)
+        monkeypatch.setattr(dream, "_pi_bin", lambda: str(pi_bin))
+        monkeypatch.setattr(dream, "_claude_bin", lambda: str(claude_bin))
+        monkeypatch.setattr(dream, "get_dream_model", lambda: _MODEL)
+
+    def test_falls_back_to_claude_when_pi_cannot_find_the_model(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        pi_dirs: tuple[Path, Path],
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        self._fake_pi_and_claude(
+            monkeypatch, tmp_path, 'Error: Model "ext/m1" not found. Use --list-models to see available models.'
+        )
+        with caplog.at_level("WARNING", logger="mcp-memory"):
+            assert asyncio.run(dream.run_dream_pass()) == "[p/e] - demoted"
+        assert "MCP_DREAM_PI_EXTENSIONS" in caplog.text
+
+    def test_a_pi_custom_model_warning_does_not_fall_back_to_claude(
+        self, monkeypatch: pytest.MonkeyPatch, pi_dirs: tuple[Path, Path], tmp_path: Path
+    ) -> None:
+        self._fake_pi_and_claude(
+            monkeypatch, tmp_path, 'Warning: Model "ext/m1" not found for provider "ext". Using custom model id.'
+        )
+        assert asyncio.run(dream.run_dream_pass()) == "dream agent exited with an error"
+
     def test_model_comes_from_env_then_agent_settings_then_user_default(
         self, monkeypatch: pytest.MonkeyPatch, pi_dirs: tuple[Path, Path]
     ) -> None:

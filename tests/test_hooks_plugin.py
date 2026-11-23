@@ -28,7 +28,6 @@ from mcp_memory.hooks.plugin import (
     _DATE_PREFIX_WARNING,
     _EDIT_TOOL_WEIGHT,
     _FRUSTRATION_NUDGE_TEMPLATE,
-    _MEMORY_COOLDOWN_STEPS,
     ENABLE_FRUSTRATION_CHECK,
     ENABLE_PROFANITY_CHECK,
     MemoryPlugin,
@@ -47,7 +46,7 @@ from mcp_memory.hooks.plugin import (
     _workspace_entity_note,
     resolve_project_for_path,
 )
-from mcp_memory.hooks.tracker import _MEMORY_BLOCK_THRESHOLD, get_scope, set_reminder_chance
+from mcp_memory.hooks.tracker import _MEMORY_BLOCK_THRESHOLD, _MEMORY_WARN_RATIO, get_scope
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage import open_writable
 from mcp_memory.tool_names import READ_ONLY_TOOLS
@@ -525,8 +524,7 @@ class TestMemoryPluginMessages:
         (repo / ".git").mkdir(parents=True)
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
 
-        set_reminder_chance("t1", 1.0)
-        with patch("random.random", return_value=0.0):
+        with patch("mcp_memory.hooks.plugin.should_warn", return_value=True):
             result = plugin.on_hook(
                 "PostToolUse",
                 task_id="t1",
@@ -537,34 +535,19 @@ class TestMemoryPluginMessages:
         assert len(result.notes) == 1
         assert "`cool-project`" in result.notes[0]
 
-    def test_reminder_cooldown_is_per_session(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
-        repo = tmp_path / "cool-project"
-        (repo / ".git").mkdir(parents=True)
-        plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        plugin.on_hook("TaskStart", task_id="t2", workspace_roots=[str(repo)])
-
-        def _edit(task_id: str) -> object:
-            return plugin.on_hook(
-                "PostToolUse",
-                task_id=task_id,
-                tool_name="write_to_file",
-                parameters={"path": str(repo / "file.py")},
-            )
-
-        with patch("random.random", return_value=1.0):
-            for _ in range(_MEMORY_COOLDOWN_STEPS):
-                _edit("t2")
-        with patch("random.random", return_value=0.0):
-            assert _edit("t1") is not None
-        with patch("random.random", return_value=0.5):
-            assert _edit("t2") is not None
+    def test_reminder_comes_only_at_the_soft_threshold(self, live_plugin: MemoryPlugin) -> None:
+        live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="replace_in_file", parameters={})
+        for _ in range(int(_MEMORY_BLOCK_THRESHOLD * _MEMORY_WARN_RATIO) - 1):
+            assert live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={}) is None
+        reminded = live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
+        assert reminded is not None
+        assert "MEMORY CHECK" in reminded.notes[0]
 
     def test_each_reminder_and_nudge_shown_is_counted(self, plugin: MemoryPlugin, tmp_path: Path) -> None:
         repo = tmp_path / "cool-project"
         (repo / ".git").mkdir(parents=True)
         plugin.on_hook("TaskStart", task_id="t1", workspace_roots=[str(repo)])
-        set_reminder_chance("t1", 1.0)
-        with patch("random.random", return_value=0.0):
+        with patch("mcp_memory.hooks.plugin.should_warn", return_value=True):
             plugin.on_hook(
                 "PostToolUse",
                 task_id="t1",
@@ -618,7 +601,7 @@ class TestMemoryPluginMessages:
     def test_reminder_fires_for_any_tool_type_once_the_soft_threshold_is_reached(
         self, plugin: MemoryPlugin, warn: bool
     ) -> None:
-        with patch("mcp_memory.hooks.plugin.should_warn", return_value=warn), patch("random.random", return_value=1.0):
+        with patch("mcp_memory.hooks.plugin.should_warn", return_value=warn):
             result = plugin.on_hook("PostToolUse", task_id="t1", tool_name="web_fetch", parameters={})
         assert (result is not None) is warn
 
@@ -776,22 +759,20 @@ class TestBuildTaskStartContext:
         parts = _build_task_start_context([str(repo)])
         assert any("project/acme" in part for part in parts)
 
-    def test_includes_numbered_instructions(self, tmp_path: Path) -> None:
+    def test_points_to_the_memory_rule_start_section(self, tmp_path: Path) -> None:
         repo = tmp_path / "acme"
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
         instructions = next(part for part in parts if "Session-start guidance" in part)
-        assert instructions.startswith("Session-start guidance:\n")
-        for step in ("1. ", "2. ", "3. ", "4. "):
-            assert step in instructions
+        assert "memory rule's Start section" in instructions
 
-    def test_task_scan_step_is_conditional_on_outstanding_work_ask(self, tmp_path: Path) -> None:
+    def test_task_scan_is_conditional_on_outstanding_work_ask(self, tmp_path: Path) -> None:
         repo = tmp_path / "acme"
         repo.mkdir()
         parts = _build_task_start_context([str(repo)])
         instructions = next(part for part in parts if "Session-start guidance" in part)
-        assert "REQUIRED before starting" not in instructions
-        assert "Only if the opening message asks about outstanding work" in instructions
+        assert "only if the opening message asks about outstanding work" in instructions
+        assert "only if the user explicitly asks for the full picture" in instructions
 
     def test_project_list_reflects_resolved_scopes(self, tmp_path: Path, api: FakeApi) -> None:
         api.results["group-members"] = ["cline-hooks"]
@@ -800,6 +781,7 @@ class TestBuildTaskStartContext:
         parts = _build_task_start_context([str(repo)])
         instructions = next(part for part in parts if "Session-start guidance" in part)
         assert "`global`, `llm-prompts`, `cline-hooks`" in instructions
+        assert "projects=['global', 'llm-prompts', 'cline-hooks'])`" in instructions
 
 
 class TestIsMemoryServerReachable:
@@ -1695,6 +1677,21 @@ class TestMemoryReviewNudge:
         assert "user" in note.lower()
         mock_reset.assert_called_once_with()
 
+    def test_user_prompt_skips_nudge_when_the_server_runs_heavy_dreams(self, api: FakeApi) -> None:
+        api.results["dream-heavy"] = True
+        with (
+            patch("mcp_memory.hooks.plugin.should_nudge", return_value=True),
+            patch("mcp_memory.hooks.plugin.reset_review") as mock_reset,
+        ):
+            result = MemoryPlugin().on_hook("UserPromptSubmit", task_id="t1")
+        assert result is None
+        mock_reset.assert_not_called()
+
+    def test_user_prompt_does_not_ask_the_server_when_not_due(self, api: FakeApi) -> None:
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            MemoryPlugin().on_hook("UserPromptSubmit", task_id="t1")
+        assert ("dream-heavy", None) not in api.calls
+
     def test_user_prompt_no_nudge_when_not_due(self) -> None:
         with (
             patch("mcp_memory.hooks.plugin.should_nudge", return_value=False),
@@ -2127,17 +2124,14 @@ class TestFileEditsReducedWeight:
 
 class TestMemoryGateWaitsForFirstFileEdit:
     def test_lookup_only_session_gets_no_reminder_and_no_block(self, live_plugin: MemoryPlugin) -> None:
-        set_reminder_chance("t1", 1.0)
-        with patch("random.random", return_value=0.0):
-            for _ in range(_MEMORY_BLOCK_THRESHOLD * 2):
-                for hook in ("PostToolUse", "PreToolUse"):
-                    assert live_plugin.on_hook(hook, task_id="t1", tool_name="execute_command", parameters={}) is None
+        for _ in range(_MEMORY_BLOCK_THRESHOLD * 2):
+            for hook in ("PostToolUse", "PreToolUse"):
+                assert live_plugin.on_hook(hook, task_id="t1", tool_name="execute_command", parameters={}) is None
 
     def test_session_is_gated_once_a_file_edit_is_made(self, live_plugin: MemoryPlugin) -> None:
         live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="write_to_file", parameters={})
-        with patch("random.random", return_value=1.0):
-            for _ in range(_MEMORY_BLOCK_THRESHOLD):
-                live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
+        for _ in range(_MEMORY_BLOCK_THRESHOLD):
+            live_plugin.on_hook("PostToolUse", task_id="t1", tool_name="execute_command", parameters={})
         blocked = live_plugin.on_hook("PreToolUse", task_id="t1", tool_name="execute_command", parameters={})
         assert blocked is not None
         assert blocked.block is not None
@@ -2217,3 +2211,45 @@ class TestFailedMemoryWriteKeepsTheGate:
         blocked = self._next_command(live_plugin)
         assert blocked is not None
         assert blocked.block is not None
+
+
+class TestStopNeedsTaskAfterWideWork:
+    @staticmethod
+    def _post(plugin: MemoryPlugin, tool_name: str, **parameters: object) -> None:
+        plugin.on_hook("PostToolUse", task_id="t1", tool_name=tool_name, parameters=parameters)
+
+    @pytest.mark.parametrize(
+        "calls",
+        [
+            pytest.param([("execute_command", {"command": "git add . && git commit -m x"})], id="commit"),
+            pytest.param([("replace_in_file", {"path": "a.py"}), ("replace_in_file", {"path": "b.py"})], id="files"),
+            pytest.param([("plan_mode_respond", {})], id="plan"),
+            pytest.param([("spawn_agent", {"subagent_type": "general"})], id="delegation"),
+            pytest.param([("fork", {"role": "writer"})], id="fork"),
+            pytest.param([("execute_command", {"command": "git commit -F - <<'EOF'\nit's\nEOF"})], id="heredoc"),
+            pytest.param([("execute_command", {"command": "echo a#b; git commit"})], id="hash-in-word"),
+            pytest.param([("execute_command", {"command": "# note\ngit commit"})], id="after-comment"),
+            pytest.param([("execute_command", {"command": "GIT_EDITOR=true /usr/bin/git commit"})], id="env-path"),
+        ],
+    )
+    def test_wide_work_blocks_stop_once_until_a_task_is_written(
+        self, live_plugin: MemoryPlugin, calls: list[tuple[str, dict[str, object]]]
+    ) -> None:
+        for tool_name, parameters in calls:
+            self._post(live_plugin, tool_name, **parameters)
+        blocked = live_plugin.on_hook("Stop", task_id="t1")
+        assert blocked is not None
+        assert "task/" in (blocked.block or "")
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    def test_a_task_write_lets_wide_work_stop(self, live_plugin: MemoryPlugin) -> None:
+        self._post(live_plugin, "plan_mode_respond")
+        entity = {"name": "task/x", "entityType": "task", "observations": ["x"]}
+        self._post(live_plugin, "mcp__memory__create_entities", project="proj", entities=[entity])
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    def test_a_small_fix_stops_without_a_task(self, live_plugin: MemoryPlugin) -> None:
+        self._post(live_plugin, "replace_in_file", path="a.py")
+        self._post(live_plugin, "execute_command", command="git -P log --grep commit")
+        self._post(live_plugin, "fork", role="reader")
+        assert live_plugin.on_hook("Stop", task_id="t1") is None

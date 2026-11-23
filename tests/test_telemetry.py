@@ -6,6 +6,7 @@ import asyncio
 from collections import Counter
 import functools
 import json
+import sqlite3
 import statistics
 import time
 from typing import TYPE_CHECKING, Any
@@ -23,6 +24,7 @@ from .eval.eval_fixture import mark_used
 from .eval.eval_harness import _build_eval_fixture
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from mcp_memory.storage import Storage
@@ -308,7 +310,7 @@ def test_report_sizes_the_store_in_buckets(store: Storage, sent: list[dict[str, 
 
 
 TOOLS = ("llm-prompts", "cline-hooks", "mcp-memory")
-ENTRY_KEYS = {"commit", "base", "local", "dirty", "ahead"}
+ENTRY_KEYS = {"commit", "base", "local", "dirty", "ahead", "release"}
 
 
 def _assert_versions(properties: dict[str, Any], tmp_path: Path) -> None:
@@ -332,7 +334,14 @@ def test_report_names_the_installed_commit_of_a_remote_install(
     usage.report()
 
     entry = sent[0]["properties"]["versions"]["mcp-memory"]
-    assert entry == {"commit": "abc123", "base": "abc123", "local": False, "dirty": False, "ahead": None}
+    assert entry == {
+        "commit": "abc123",
+        "base": "abc123",
+        "local": False,
+        "dirty": False,
+        "ahead": None,
+        "release": None,
+    }
 
 
 def test_report_names_a_local_checkout_without_its_path(
@@ -453,6 +462,80 @@ def test_dream_pass_reports_counts_without_text(sent: list[dict[str, Any]], monk
     assert failed["ok"] is False
     assert failed["error_type"] == "ValueError"
     assert "secret-project" not in json.dumps(sent)
+
+
+@pytest.mark.parametrize(
+    ("cli", "script", "error_type"),
+    [
+        ("claude", "exit 1", "agent_exit"),
+        ("claude", "sleep 5", "timeout"),
+        ("claude", "echo not-json", "output_rejected"),
+        ("claude", "echo 'Not logged in' >&2; exit 1", "auth_failed"),
+        ("pi", "echo 'Error: Model \"m\" not found. Use --list-models' >&2; exit 1", "model_not_found"),
+    ],
+)
+def test_a_handled_dream_failure_reports_why_it_failed(
+    cli: str,
+    script: str,
+    error_type: str,
+    sent: list[dict[str, Any]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_bin = tmp_path / cli
+    agent_bin.write_text(f"#!/bin/sh\n{script}\n")
+    agent_bin.chmod(0o755)
+    monkeypatch.setattr(dream.shutil, "which", lambda name: str(agent_bin) if name == cli else None)
+    monkeypatch.setenv("MCP_DREAM_TIMEOUT", "1")
+    monkeypatch.setenv("MCP_DREAM_PI_MODEL_LIGHT", "p/m")
+    monkeypatch.setenv("MCP_DREAM_AGENT_DIR", str(tmp_path / "dream-agent"))
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi-agent"))
+    spec = dream.TierSpec("light", lambda: True, lambda: 0.0, lambda: 1.0, dream.run_dream_pass)
+    asyncio.run(dream._run_claimed(spec))
+
+    (event,) = sent
+    assert event["properties"]["ok"] is False
+    assert event["properties"]["error_type"] == error_type
+
+
+def _break_backup(monkeypatch: pytest.MonkeyPatch, _: Path) -> None:
+    monkeypatch.setattr(dream.backup, "backup_database", lambda: (_ for _ in ()).throw(OSError()))
+
+
+def _break_prepass(monkeypatch: pytest.MonkeyPatch, _: Path) -> None:
+    monkeypatch.setenv("MCP_MEMORY_BACKUP_ENABLED", "false")
+    monkeypatch.setattr(dream, "_dream_prepass", lambda: (_ for _ in ()).throw(sqlite3.Error()))
+
+
+def _break_agent_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / "file").write_text("")
+    monkeypatch.setattr(dream.shutil, "which", lambda name: "/usr/bin/pi" if name == "pi" else None)
+    monkeypatch.setenv("MCP_DREAM_AGENT_DIR", str(tmp_path / "file" / "dream-agent"))
+
+
+@pytest.mark.parametrize(
+    ("tier", "break_pass", "error_type"),
+    [
+        ("light", lambda monkeypatch, _: monkeypatch.setattr(dream.shutil, "which", lambda _: None), "no_backend"),
+        ("heavy", _break_backup, "backup_failed"),
+        ("heavy", _break_prepass, "prepass_failed"),
+        ("light", _break_agent_dir, "setup_failed"),
+    ],
+)
+def test_a_dream_pass_that_cannot_start_reports_why(
+    tier: str,
+    break_pass: Callable[[pytest.MonkeyPatch, Path], None],
+    error_type: str,
+    sent: list[dict[str, Any]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    break_pass(monkeypatch, tmp_path)
+    run_pass = dream.run_heavy_dream_pass if tier == "heavy" else dream.run_dream_pass
+    asyncio.run(dream._run_claimed(dream.TierSpec(tier, lambda: True, lambda: 0.0, lambda: 1.0, run_pass)))
+
+    (event,) = sent
+    assert event["properties"]["error_type"] == error_type
 
 
 async def _audit_pass() -> str:

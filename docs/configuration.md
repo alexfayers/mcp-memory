@@ -42,6 +42,10 @@ Environment variables. The server reads the first table. The hook plugin reads t
 | `MCP_MEMORY_WRAPPER_TOOLS` | Extra tools that run other tool calls. Counted as one call, unless their input names a memory write tool | `codemode` |
 | `MCP_MEMORY_UNCOUNTED_TOOLS` | Extra bookkeeping tools that are not counted toward the gate | the frontend's bookkeeping, skill and message tools |
 
+Stopping needs a `task/` write only after wide work: a `git commit`, edits to more than one file, a presented plan or a writer delegation. Stop is blocked once per piece of work.
+
+The `MEMORY CHECK` reminder comes after a weighted count of 8 since the first file edit, with a block at 10.
+
 Another cline-hooks plugin can add workspace markers by implementing the `memory_workspace_markers` hook. It returns a `frozenset[str]` of directory names:
 
 ```python
@@ -57,7 +61,7 @@ def memory_workspace_markers(self) -> frozenset[str]:
 Dreaming lets the server curate memory while it is idle. It runs a headless `pi -p` session when the `pi` CLI is on `PATH` and a pi model resolves, else a headless `claude -p` session, and the session connects back to the server. Both tiers are off by default. Set the variables, then run `mcp-memory setup-service` so the service picks them up.
 
 - Light (`MCP_DREAM_ENABLED`): downvotes stale, superseded or duplicated entities and observations. It never deletes.
-- Heavy (`MCP_DREAM_HEAVY_ENABLED`): does the same. Each pass first applies the audit's safe steps in code (renames, merges of an unprefixed entity into its prefixed twin, feature relinks, stale archives), then runs the memory-review checklist with reversible tools only (merges, trims, splits, relinks orphans, soft-deletes outright wrong content). It never deletes an entity with live `depends-on` or `implements` edges.
+- Heavy (`MCP_DREAM_HEAVY_ENABLED`): does the same. Each pass first applies the audit's safe steps in code (renames, merges of an unprefixed entity into its prefixed twin, feature relinks, stale archives), then runs the memory-review checklist with reversible tools only (merges, trims, splits, relinks orphans, soft-deletes outright wrong content). It never deletes an entity with live `depends-on` or `implements` edges. While it is on and a `pi` or `claude` CLI is on `PATH`, the hook skips the "MEMORY REVIEW DUE" nudge.
 
 Each tier fires once per idle session. At most one pass runs at a time. The visualiser's dream card has Run light and Run heavy buttons that start a pass on demand, whether or not the tier is enabled.
 
@@ -73,7 +77,7 @@ A running pass records each memory change it makes, and a finished pass records 
 | `MCP_DREAM_MODEL` | Fully-qualified model id | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
 | `MCP_DREAM_TIMEOUT` | Timeout per pass, seconds | `300` |
 | `MCP_DREAM_MAX_VOTES` | Advisory cap on entities and observations demoted per pass | `15` |
-| `MCP_DREAM_HEAVY_ENABLED` | Enable the heavy tier | off |
+| `MCP_DREAM_HEAVY_ENABLED` | Enable the heavy tier and turn off the memory-review nudge | off |
 | `MCP_DREAM_HEAVY_IDLE_SECONDS` | Idle time before the heavy pass fires | `5400` |
 | `MCP_DREAM_HEAVY_POLL_SECONDS` | How often to check whether it is due | `900` |
 | `MCP_DREAM_HEAVY_MODEL` | Fully-qualified model id. A bare alias maps to Opus | the light model |
@@ -84,4 +88,4 @@ A running pass records each memory change it makes, and a finished pass records 
 | `MCP_DREAM_PI_EXTENSIONS` | Comma-separated pi extension paths to load, for a model provider that an extension supplies | none |
 | `MCP_DREAM_AGENT_DIR` | The pi dream agent directory | `$XDG_CONFIG_HOME/mcp-memory/dream-agent` |
 
-The claude model variables above apply to `claude -p` only. Pi runs from its own dream agent directory. The server creates it on first use with an `mcp.json` that holds only the memory server, an empty `settings.json`, and links to your pi `auth.json` and `models.json`. Edit `settings.json` freely, the server never overwrites it. The server keeps `mcp.json` memory-only: it rewrites the file's server list to the memory server and sets the `x-mcp-memory-dream` header on it, so any other server you add is removed. Your other settings on the memory server, such as `timeout`, stay. Other top-level keys stay. The pi model for a tier is the first of: its `MCP_DREAM_PI_MODEL_*` variable, the `dreamModelLight` or `dreamModelHeavy` key in the dream agent `settings.json`, then your pi default model. When none is set, the pass runs through `claude -p` if the `claude` CLI is on `PATH`, and fails otherwise.
+The claude model variables above apply to `claude -p` only. Pi runs from its own dream agent directory. The server creates it on first use with an `mcp.json` that holds only the memory server, an empty `settings.json`, and links to your pi `auth.json` and `models.json`. Edit `settings.json` freely, the server never overwrites it. The server keeps `mcp.json` memory-only: it rewrites the file's server list to the memory server and sets the `x-mcp-memory-dream` header on it, so any other server you add is removed. Your other settings on the memory server, such as `timeout`, stay. Other top-level keys stay. The pi model for a tier is the first of: its `MCP_DREAM_PI_MODEL_*` variable, the `dreamModelLight` or `dreamModelHeavy` key in the dream agent `settings.json`, then your pi default model. When none is set, or pi cannot find the model, the pass runs through `claude -p` if the `claude` CLI is on `PATH`, and fails otherwise.
