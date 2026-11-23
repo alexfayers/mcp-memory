@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/alexfayers/mcp-memory/compare/v0.3.1...v0.3.2) (2026-11-23)
+
+
+### Miscellaneous Chores
+
+* **deps:** lock file maintenance ([#224](https://github.com/alexfayers/mcp-memory/issues/224)) ([35f05b5](https://github.com/alexfayers/mcp-memory/commit/35f05b513ca7ecff95123edbda44161a1a1b48d5))
+
 ## [0.3.1](https://github.com/alexfayers/mcp-memory/compare/v0.3.0...v0.3.1) (2026-11-22)
 
 
