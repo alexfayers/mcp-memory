@@ -33,7 +33,7 @@
 | src/mcp\_memory/payload.py                           |       12 |        0 |    100% |           |
 | src/mcp\_memory/plan\_apply.py                       |       39 |        1 |     97% |        40 |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      628 |       43 |     93% |74-75, 512, 522, 558, 571, 647-649, 653, 728-729, 759-760, 768, 776, 788-789, 851-852, 866-867, 1060-1061, 1105-1110, 1202, 1245-1246, 1300-1301, 1547-1548, 1579-1583, 1587 |
+| src/mcp\_memory/server.py                            |      628 |       42 |     93% |74-75, 512, 522, 558, 571, 647-649, 653, 728-729, 759-760, 768, 776, 788-789, 851-852, 866-867, 1060-1061, 1105-1110, 1202, 1245-1246, 1300-1301, 1548, 1579-1583, 1587 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
@@ -114,7 +114,7 @@
 | tests/test\_tracker.py                               |       68 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      656 |        0 |    100% |           |
-| **TOTAL**                                            | **16852** |  **478** | **97%** |           |
+| **TOTAL**                                            | **16852** |  **477** | **97%** |           |
 
 
 ## Setup coverage badge
