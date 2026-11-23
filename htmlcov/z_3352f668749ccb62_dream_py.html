@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_3352f668749ccb62_dream_status_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.3">coverage.py v7.17.3</a>,
-            created at 2026-11-23 23:48 +0000
+            created at 2026-11-23 23:50 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -642,15 +642,15 @@
     <p class="pln"><span class="n"><a id="t560" href="#t560">560</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t561" href="#t561">561</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t562" href="#t562">562</a></span><span class="t"><span class="key">def</span> <span class="nam">_model_token</span><span class="op">(</span><span class="nam">model_id</span><span class="op">:</span> <span class="nam">str</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">str</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t563" href="#t563">563</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Reduce a model id to a stable family token (e.g. claude-haiku-4-5).&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t564" href="#t564">564</a></span><span class="t">    <span class="nam">match</span> <span class="op">=</span> <span class="nam">re</span><span class="op">.</span><span class="nam">search</span><span class="op">(</span><span class="str">r&quot;claude-[a-z]+-\d+-\d+&quot;</span><span class="op">,</span> <span class="nam">model_id</span><span class="op">.</span><span class="nam">lower</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t563" href="#t563">563</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Reduce a model id to a stable family and version token (e.g. claude-haiku-4-5).&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t564" href="#t564">564</a></span><span class="t">    <span class="nam">match</span> <span class="op">=</span> <span class="nam">re</span><span class="op">.</span><span class="nam">search</span><span class="op">(</span><span class="str">r&quot;claude-[a-z]+-\d+(?:-\d{1,2})?(?!\d)&quot;</span><span class="op">,</span> <span class="nam">model_id</span><span class="op">.</span><span class="nam">lower</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t565" href="#t565">565</a></span><span class="t">    <span class="key">return</span> <span class="nam">match</span><span class="op">.</span><span class="nam">group</span><span class="op">(</span><span class="num">0</span><span class="op">)</span> <span class="key">if</span> <span class="nam">match</span> <span class="key">else</span> <span class="nam">model_id</span><span class="op">.</span><span class="nam">lower</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t566" href="#t566">566</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t567" href="#t567">567</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t568" href="#t568">568</a></span><span class="t"><span class="key">def</span> <span class="nam">_model_matches</span><span class="op">(</span><span class="nam">model_id</span><span class="op">:</span> <span class="nam">str</span><span class="op">,</span> <span class="nam">usage_keys</span><span class="op">:</span> <span class="nam">list</span><span class="op">[</span><span class="nam">str</span><span class="op">]</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">bool</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t569" href="#t569">569</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Return True if any reported model-usage key is the expected model family.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t569" href="#t569">569</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Return True if any reported model-usage key is the expected model family and version.&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t570" href="#t570">570</a></span><span class="t">    <span class="nam">token</span> <span class="op">=</span> <span class="nam">_model_token</span><span class="op">(</span><span class="nam">model_id</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t571" href="#t571">571</a></span><span class="t">    <span class="key">return</span> <span class="nam">any</span><span class="op">(</span><span class="nam">token</span> <span class="key">in</span> <span class="nam">key</span><span class="op">.</span><span class="nam">lower</span><span class="op">(</span><span class="op">)</span> <span class="key">for</span> <span class="nam">key</span> <span class="key">in</span> <span class="nam">usage_keys</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t571" href="#t571">571</a></span><span class="t">    <span class="key">return</span> <span class="nam">any</span><span class="op">(</span><span class="nam">_model_token</span><span class="op">(</span><span class="nam">key</span><span class="op">)</span> <span class="op">==</span> <span class="nam">token</span> <span class="key">for</span> <span class="nam">key</span> <span class="key">in</span> <span class="nam">usage_keys</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t572" href="#t572">572</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t573" href="#t573">573</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t574" href="#t574">574</a></span><span class="t"><span class="key">def</span> <span class="nam">parse_dream_result</span><span class="op">(</span><span class="nam">stdout</span><span class="op">:</span> <span class="nam">str</span><span class="op">,</span> <span class="op">*</span><span class="op">,</span> <span class="nam">expected_model</span><span class="op">:</span> <span class="nam">str</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">SpawnResult</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -1491,7 +1491,7 @@
             <a class="nav" href="z_3352f668749ccb62_dream_status_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.3">coverage.py v7.17.3</a>,
-            created at 2026-11-23 23:48 +0000
+            created at 2026-11-23 23:50 +0000
         </p>
     </div>
 </footer>
