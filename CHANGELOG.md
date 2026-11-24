@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.0](https://github.com/alexfayers/mcp-memory/compare/v0.3.2...v0.4.0) (2026-11-24)
+
+
+### Features
+
+* add opencode install target ([#199](https://github.com/alexfayers/mcp-memory/issues/199)) ([6d9e691](https://github.com/alexfayers/mcp-memory/commit/6d9e691a0b347aae4666ad8f0403025b91566e48))
+* **dream:** show the dream's progress live while waiting ([#204](https://github.com/alexfayers/mcp-memory/issues/204)) ([e28f2f9](https://github.com/alexfayers/mcp-memory/commit/e28f2f98387e908fcc7261de987a5770e309a9b6))
+
+
+### Bug Fixes
+
+* **dream:** match model ids by exact family and version (+1 more) ([#207](https://github.com/alexfayers/mcp-memory/issues/207)) ([5f36acc](https://github.com/alexfayers/mcp-memory/commit/5f36accfa8b6de4c1d0a45149ba39065b584a7a0))
+
+
+### Miscellaneous Chores
+
+* **deps:** update fayers-configs lock source ([#230](https://github.com/alexfayers/mcp-memory/issues/230)) ([b7fef37](https://github.com/alexfayers/mcp-memory/commit/b7fef3737f8730f7adebc5f5c95a70221e1c36ef))
+* **deps:** update github actions ([#227](https://github.com/alexfayers/mcp-memory/issues/227)) ([e38ea13](https://github.com/alexfayers/mcp-memory/commit/e38ea133cfdcf86771bbd9309791024b704d8681))
+
 ## [0.3.2](https://github.com/alexfayers/mcp-memory/compare/v0.3.1...v0.3.2) (2026-11-23)
 
 
