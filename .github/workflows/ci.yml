@@ -54,6 +54,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+  test-macos:
+    needs: unblocked
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: alexfayers/llm-prompts-ci/.github/actions/setup-just@main
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: just test -vv --cov=.
+
   benchmark:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
