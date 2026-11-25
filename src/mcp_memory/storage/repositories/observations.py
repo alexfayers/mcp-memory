@@ -178,17 +178,21 @@ class ObservationRepository:
         ):
             raise ValueError("Refused: a dream may not remove or demote a user-provenance observation.")
 
-    def refuse_user_tombstone_purge(self, project: str, names: Sequence[str]) -> None:
-        """Raise ValueError if creating any of names would purge a soft-deleted entity holding a user observation."""
-        row = self._conn.query_one(
-            "SELECT e.name FROM entities e JOIN projects p ON e.project_id = p.id "
-            "JOIN observations o ON o.entity_id = e.id "
-            "WHERE p.name = ? AND e.deleted_at IS NOT NULL AND o.provenance = 'user' "
-            f"AND e.name IN ({placeholders(len(names))})",
-            (project, *names),
+    def inherit_provenance(self, project: str, entity_name: str, contents: Sequence[str]) -> None:
+        """Give each untagged observation in contents the provenance of a live copy elsewhere in the project.
+
+        An inferred copy wins over an observed one, and a user copy is never inherited.
+        """
+        entity_id = self._require_entity_id(project, entity_name)
+        self._conn.write_many(
+            "UPDATE observations SET provenance = (SELECT src.provenance FROM observations src "
+            "JOIN entities e ON src.entity_id = e.id WHERE src.content = observations.content "
+            "AND src.entity_id != observations.entity_id AND src.deleted_at IS NULL AND e.deleted_at IS NULL "
+            "AND e.project_id = (SELECT project_id FROM entities WHERE id = ?) "
+            "AND src.provenance IN ('inferred', 'observed') ORDER BY src.provenance = 'inferred' DESC LIMIT 1) "
+            "WHERE entity_id = ? AND content = ? AND provenance IS NULL AND deleted_at IS NULL",
+            [(entity_id, entity_id, content) for content in contents],
         )
-        if row is not None:
-            raise ValueError(f"Refused: a dream may not replace deleted '{row['name']}', which holds user data.")
 
     def trim_to_outcome(
         self, project: str, entity_name: str, keep_hashes: list[str], *, protect_corrections: bool = False

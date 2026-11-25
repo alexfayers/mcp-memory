@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, cast
 
 from mcp_memory.config import get_strict_policy_enabled
@@ -21,6 +22,10 @@ from mcp_memory.storage.services.integrity import orphaned_neighbors_if_entity_d
 if TYPE_CHECKING:
     from mcp_memory.models import EntityStatus, Relation
     from mcp_memory.storage.connection import Connection
+
+
+# Set for a dream request, so a re-create or rename cannot purge a deleted entity holding user observations.
+KEEP_USER_TOMBSTONES: ContextVar[bool] = ContextVar("keep_user_tombstones", default=False)
 
 
 class EntityRepository:
@@ -280,10 +285,16 @@ class EntityRepository:
 
         The UNIQUE(name, project_id) constraint means a tombstone would otherwise block
         inserting a fresh entity with the same name. Runs within the caller's transaction.
+        Refused while KEEP_USER_TOMBSTONES is set and the tombstone holds a user observation.
         """
         tombstone_id = get_entity_id(self._conn, name, project_id, include_deleted=True)
-        if tombstone_id is not None:
-            self.hard_delete_row(tombstone_id, project, name)
+        if tombstone_id is None:
+            return
+        if KEEP_USER_TOMBSTONES.get() and self._conn.query_one(
+            "SELECT 1 FROM observations WHERE entity_id = ? AND provenance = 'user'", (tombstone_id,)
+        ):
+            raise ValueError(f"Refused: a dream may not replace deleted '{name}', which holds user data.")
+        self.hard_delete_row(tombstone_id, project, name)
 
     def restore(self, project: str, name: str) -> None:
         """Clear an entity's soft-deleted mark, making it visible to reads again."""

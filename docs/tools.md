@@ -18,7 +18,7 @@ Read results order observations best-first by vote and trim them to the characte
 
 ## Write
 
-A dream-spawned call may not delete, trim, merge away or downvote a `user` observation, or delete or merge away an entity that holds one. It cannot set `user` provenance or recreate a deleted entity that holds a `user` observation. Orphan GC never reaps an entity that holds a live `user` observation.
+A dream-spawned call may not delete, trim, merge away or downvote a `user` observation, or delete or merge away an entity that holds one. It cannot pass `provenance`. An observation it writes takes the provenance of a live copy of the same text elsewhere in the project, preferring `inferred` and never `user`. It cannot create, rename onto or auto-create a project root over a deleted entity that holds a `user` observation. Orphan GC never reaps an entity that holds a live `user` observation.
 
 | Tool | What it does |
 |---|---|

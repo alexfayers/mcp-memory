@@ -233,7 +233,7 @@ _HEAVY_DREAM_PREAMBLE = (
     "relation only to replace a task's belongs-to project edge with the implements edge you just "
     "added, or when the edge is outright wrong. "
     "Use create_entities and add_observations only to split an audit consider_split entity in the "
-    "same project. Copy observation text verbatim with its from as provenance, give each new entity a "
+    "same project. Copy observation text verbatim without provenance, give each new entity a "
     "relation, then delete "
     "the moved observations from the source. Never move one whose from is user. Never write new facts. "
     "Use restore_* only to undo an operation you made in this pass. "

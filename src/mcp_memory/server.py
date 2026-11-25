@@ -33,6 +33,7 @@ from .models import (
 from .payload import compact_json
 from .storage import GraphResult, NodeList, open_writable
 from .storage.pure.rows import reject_status_observation, strip_today_date_prefix
+from .storage.repositories.entities import KEEP_USER_TOMBSTONES
 from .visualise import register_visualise_routes
 
 if TYPE_CHECKING:
@@ -59,6 +60,9 @@ def _observe_call(name: str, arguments: dict[str, Any], result: dict[str, Any]) 
     telemetry.note_result(name, result)
 
 
+_DREAM_PROVENANCE_REFUSAL = "Refused: a dream may not set provenance. Copied observations take it from their source."
+
+
 def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
     """Record each tool call's activity and return its result as compact JSON text plus structured content.
 
@@ -67,7 +71,11 @@ def _track[**P](fn: Callable[P, dict[str, Any]]) -> Callable[P, CallToolResult]:
 
     @functools.wraps(fn)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> CallToolResult:
-        result = fn(*args, **kwargs)
+        token = KEEP_USER_TOMBSTONES.set(dream.is_dream_request(cast("Context | None", kwargs.get("ctx"))))
+        try:
+            result = fn(*args, **kwargs)
+        finally:
+            KEEP_USER_TOMBSTONES.reset(token)
         try:
             bound = inspect.signature(fn).bind_partial(*args, **kwargs).arguments
             arguments = {key: value for key, value in bound.items() if not isinstance(value, Context)}
@@ -679,12 +687,18 @@ def create_entities(
     entities: _ENTITY_INPUTS,
     ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Create or update entities with observations, enforcing relation requirements; a dream's provenance is dropped."""
+    """Create entities, enforcing relation requirements; a dream's copies take provenance from their source."""
     try:
-        if dream.is_dream_request(ctx):
-            _get_db().observations.refuse_user_tombstone_purge(project, [str(e.get("name", "")) for e in entities])
-            entities = [{k: v for k, v in e.items() if (k, v) != ("provenance", "user")} for e in entities]
-        return _create_entities(project, entities)
+        if not dream.is_dream_request(ctx):
+            return _create_entities(project, entities)
+        if any(e.get("provenance") is not None for e in entities):
+            raise ValueError(_DREAM_PROVENANCE_REFUSAL)
+        result = _create_entities(project, entities)
+        for e in entities:
+            _get_db().observations.inherit_provenance(
+                project, str(e["name"]), cast("list[str]", e.get("observations") or [])
+            )
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -1261,6 +1275,19 @@ def get_entity_with_relations(
         return {"error": str(e)}
 
 
+def _add_observations(
+    project: str, entity_name: str, observations: list[str], provenance: str | None, is_dream: bool
+) -> list[str]:
+    """Add observations, refusing a dream's provenance and giving its copies their source's provenance."""
+    db = _get_db()
+    if is_dream and provenance is not None:
+        raise ValueError(_DREAM_PROVENANCE_REFUSAL)
+    hashes = db.observations.add(project, entity_name, observations, provenance)
+    if is_dream:
+        db.observations.inherit_provenance(project, entity_name, observations)
+    return hashes
+
+
 @mcp.tool(
     description=ADD_OBSERVATIONS_DESC,
     annotations=ToolAnnotations(
@@ -1277,12 +1304,10 @@ def add_observations(
     provenance: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, object]:
-    """Append deduplicated observations to an existing entity; a dream's user provenance is dropped."""
+    """Append deduplicated observations to an existing entity; a dream's copies take provenance from their source."""
     try:
         _reject_status_observations(observations)
-        db = _get_db()
-        provenance = None if provenance == "user" and dream.is_dream_request(ctx) else provenance
-        hashes = db.observations.add(project, entityName, observations, provenance)
+        hashes = _add_observations(project, entityName, observations, provenance, dream.is_dream_request(ctx))
         return {
             "message": f"Added {len(hashes)} observations to '{entityName}'.",
             "count": len(hashes),
@@ -1405,7 +1430,12 @@ def _rename_entity(project: str, old_name: str, new_name: str) -> str:
     title="Rename entity",
 )
 @_track
-def rename_entity(project: str, old_name: str, new_name: str) -> dict[str, str]:
+def rename_entity(
+    project: str,
+    old_name: str,
+    new_name: str,
+    ctx: Context | None = None,  # ruff: ignore[unused-function-argument] - _track reads it to guard user tombstones
+) -> dict[str, str]:
     """Rename a single entity in place, preserving its relations and observations."""
     try:
         return {"message": _rename_entity(project, old_name, new_name)}
