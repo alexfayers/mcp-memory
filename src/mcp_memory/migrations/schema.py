@@ -831,4 +831,9 @@ MIGRATIONS: list[Migration] = [
             "ALTER TABLE observations ADD COLUMN provenance TEXT",
         ],
     ),
+    Migration(
+        version=30,
+        # A row marks the one-time provenance backfill as done for this database.
+        statements=["CREATE TABLE provenance_backfill (ran_at DATETIME DEFAULT CURRENT_TIMESTAMP)"],
+    ),
 ]

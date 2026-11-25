@@ -59,3 +59,10 @@ def test_server_logs_a_failed_backfill_and_returns(
     monkeypatch.setattr(server.provenance_backfill, "backfill_once", lambda *_: 1 / 0)
     server._backfill_provenance_once()
     assert "Provenance backfill failed" in caplog.text
+
+
+def test_a_record_from_another_database_does_not_stop_the_backfill(store: Storage, backups: Path) -> None:
+    backups.mkdir()
+    (backups / "provenance-backfill-20260101T000000Z.json").write_text("[]", encoding="utf-8")
+    store.entities.create("proj", [{"name": "task/t", "entityType": "task", "observations": ["User chose B"]}])
+    assert backfill_once(store) == 1

@@ -39,7 +39,7 @@ A dream-spawned call may not delete, trim, merge away or downvote a `user` obser
 | `restore_entity` | Undo a soft delete, until a purge removes it. Observations and relations deleted separately before the entity was deleted stay deleted |
 | `delete_entity` | Soft-delete an entity, hiding it and its observations and relations. Restorable with `restore_entity` until a purge. Refuses while other live entities relate to it or if it would orphan one |
 
-On its first start, the server tags observations that have no provenance from their wording: `inferred` for `INFERRED`, `Inferred`, `UNVERIFIED` or `Likely` leads and any `hypothesis:`, `observed` for `VERIFIED`, `OBSERVED`, `Verified`, `Source-verified` or `Confirmed` leads, and `user` for `User ...` or `The user ...` leads. The first match wins, and unmatched observations stay unknown. It backs up the database first if anything needs tagging. It records the tagged rows beside the backups and never runs the backfill again while that record exists.
+On its first start, the server tags observations that have no provenance from their wording: `inferred` for `INFERRED`, `Inferred`, `UNVERIFIED` or `Likely` leads and any `hypothesis:`, `observed` for `VERIFIED`, `OBSERVED`, `Verified`, `Source-verified` or `Confirmed` leads, and `user` for `User ...` or `The user ...` leads. The first match wins, and unmatched observations stay unknown. It backs up the database first if anything needs tagging. It marks the run done in the database in the same transaction, so it never runs again for that database, and writes the tagged rows beside the backups.
 
 ## Projects
 
