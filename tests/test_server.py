@@ -1061,6 +1061,11 @@ class TestDedupedReads:
         assert "observations" not in second["entities"][0]
         assert "include_seen" in second["seen_note"]
 
+    def test_a_provenance_change_is_sent_again_in_full(self) -> None:
+        self._search(1)
+        tools.add_observations("proj", "a", ["alpha needle"], provenance="user")
+        assert obs_contents(self._search(2)["entities"][0]) == ["alpha needle"]
+
     def test_full_text_for_include_seen_ttl_other_or_missing_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_DEDUPE_TURNS", "5")
         self._search(1)
