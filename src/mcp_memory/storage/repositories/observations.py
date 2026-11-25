@@ -7,8 +7,6 @@ from typing import TYPE_CHECKING
 from mcp_memory.config import get_max_observation_chars
 from mcp_memory.models import (
     is_protected_observation,
-    outranks,
-    raises_provenance,
     validate_provenance,
     validate_vote,
 )
@@ -22,6 +20,7 @@ from mcp_memory.storage.pure.rows import (
 from mcp_memory.storage.pure.sql import placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
+from mcp_memory.storage.services.provenance import raise_provenance
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -83,14 +82,7 @@ class ObservationRepository:
                 "INSERT INTO observations (entity_id, content, content_hash, provenance) VALUES (?, ?, ?, ?)",
                 [(entity_id, obs, hash_observation(obs), provenance) for obs in new_observations],
             )
-            self._conn.write_many(
-                "UPDATE observations SET provenance = ? WHERE id = ?",
-                [
-                    (provenance, row["id"])
-                    for row in rows
-                    if row["content"] in observations and raises_provenance(provenance, row["provenance"])
-                ],
-            )
+            raise_provenance(self._conn, [(provenance, row["id"]) for row in rows if row["content"] in observations])
 
         return [hash_observation(obs) for obs in new_observations]
 
@@ -187,15 +179,17 @@ class ObservationRepository:
         An inferred copy wins over an observed one, and a user copy is never inherited.
         """
         entity_id = self._require_entity_id(project, entity_name)
-        self._conn.write_many(
-            "UPDATE observations SET provenance = (SELECT src.provenance FROM observations src "
-            "JOIN entities e ON src.entity_id = e.id WHERE src.content = observations.content "
-            "AND src.entity_id != observations.entity_id AND src.deleted_at IS NULL AND e.deleted_at IS NULL "
-            "AND e.project_id = (SELECT project_id FROM entities WHERE id = ?) "
-            "AND src.provenance IN ('inferred', 'observed') ORDER BY src.provenance = 'inferred' DESC LIMIT 1) "
-            "WHERE entity_id = ? AND content = ? AND provenance IS NULL AND deleted_at IS NULL",
-            [(entity_id, entity_id, content) for content in contents],
+        copies = self._conn.query_all(
+            "SELECT o.id, (SELECT src.provenance FROM observations src JOIN entities e ON src.entity_id = e.id "
+            "WHERE src.content = o.content AND src.entity_id != o.entity_id AND src.deleted_at IS NULL "
+            "AND e.deleted_at IS NULL AND e.project_id = (SELECT project_id FROM entities WHERE id = o.entity_id) "
+            "AND src.provenance IN ('inferred', 'observed') "
+            "ORDER BY src.provenance = 'inferred' DESC LIMIT 1) AS source "
+            "FROM observations o WHERE o.entity_id = ? AND o.deleted_at IS NULL "
+            f"AND o.content IN ({placeholders(len(contents))})",
+            (entity_id, *contents),
         )
+        raise_provenance(self._conn, [(row["source"], row["id"]) for row in copies])
 
     def trim_to_outcome(
         self, project: str, entity_name: str, keep_hashes: list[str], *, protect_corrections: bool = False
@@ -282,16 +276,20 @@ class ObservationRepository:
         if entity_id is None:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
 
-        source = self._find_by_hash(entity_id, entity_name, source_hash, "Source observation")
-        target = self._find_by_hash(entity_id, entity_name, target_hash, "Target observation")
-
+        self._find_by_hash(entity_id, entity_name, source_hash, "Source observation")
+        self._find_by_hash(entity_id, entity_name, target_hash, "Target observation")
+        rows_sql = (
+            "SELECT id, vote_score, provenance FROM observations "
+            "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL"
+        )
+        sources = self._conn.query_all(rows_sql, (entity_id, source_hash))
+        targets = self._conn.query_all(rows_sql, (entity_id, target_hash))
         with self._conn.transaction():
-            kept = source if outranks(source["provenance"], target["provenance"]) else target
-            self._conn.write(
-                "UPDATE observations SET vote_score = ?, provenance = ? "
-                "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
-                (max(int(source["vote_score"]), int(target["vote_score"])), kept["provenance"], entity_id, target_hash),
+            self._conn.write_many(
+                "UPDATE observations SET vote_score = MAX(vote_score, ?) WHERE id = ?",
+                [(max(int(r["vote_score"]) for r in sources), t["id"]) for t in targets],
             )
+            raise_provenance(self._conn, [(s["provenance"], t["id"]) for t in targets for s in sources])
             hashes = self._soft_delete(entity_id, "content_hash = ?", [source_hash])
         return {"merged": len(hashes), "hashes": hashes}
 

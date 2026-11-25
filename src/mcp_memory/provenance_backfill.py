@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from mcp_memory.backup import backup_database
 from mcp_memory.config import get_backup_dir
+from mcp_memory.storage.services.provenance import raise_provenance
 
 if TYPE_CHECKING:
     from mcp_memory.storage import Storage
@@ -38,7 +39,7 @@ def backfill_once(db: Storage) -> int | None:
     if tagged:
         backup_database()
     with db.connection.transaction():
-        db.connection.write_many("UPDATE observations SET provenance = ? WHERE id = ?", tagged)
+        raise_provenance(db.connection, tagged)
         db.connection.write("INSERT INTO provenance_backfill DEFAULT VALUES")
     if tagged:
         record_dir = get_backup_dir()

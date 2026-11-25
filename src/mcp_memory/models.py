@@ -14,8 +14,8 @@ Provenance = Literal["user", "observed", "inferred"]
 
 VALID_PROVENANCES = get_args(Provenance)
 
-# Trust rank used when two observations merge: user > observed > unknown > inferred.
-_PROVENANCE_RANK: dict[str | None, int] = {"user": 3, "observed": 2, None: 1, "inferred": 0}
+# Trust rank of a stored observation's provenance, which only ever rises: user > observed > inferred > untagged.
+PROVENANCE_RANK: dict[str | None, int] = {"user": 3, "observed": 2, "inferred": 1, None: 0}
 
 # Entity types exempt from autonomous orphan GC.
 STRUCTURAL_ENTITY_TYPES = frozenset({"project", "user-preferences"})
@@ -39,16 +39,6 @@ def validate_provenance(provenance: str | None) -> None:
     """Raise ValueError unless provenance is None or one of VALID_PROVENANCES."""
     if provenance is not None and provenance not in VALID_PROVENANCES:
         raise ValueError(f"Invalid provenance '{provenance}'. Must be one of: {VALID_PROVENANCES}")
-
-
-def outranks(new: str | None, old: str | None) -> bool:
-    """Return whether new ranks above old, as a merge compares them."""
-    return _PROVENANCE_RANK[new] > _PROVENANCE_RANK[old]
-
-
-def raises_provenance(new: str | None, old: str | None) -> bool:
-    """Return whether new is a known provenance that outranks old, as a write compares them."""
-    return new is not None and outranks(new, old)
 
 
 VALID_RELATION_TYPES = (

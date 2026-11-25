@@ -691,17 +691,6 @@ class TestAddObservationsTool:
         observations = tools.get_entity_with_relations("proj", "e2")["entity"]["observations"]
         assert {o["content"]: o.get("from") for o in observations} == {"a": "user", "b": "observed"}
 
-    def test_a_merge_of_an_unknown_observation_into_an_inferred_one_keeps_unknown(self, server_db: Storage) -> None:
-        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["b"]}])
-        tools.add_observations("proj", "e1", ["a"], provenance="inferred")
-        tools.merge_observations("proj", "e1", hash_observation("b"), hash_observation("a"))
-        server_db.entities.create("proj", [{"name": "e2", "entityType": "task", "observations": ["c"]}])
-        inferred = {"name": "e3", "entityType": "task", "observations": ["c"], "provenance": "inferred"}
-        server_db.entities.create("proj", [inferred])
-        tools.merge_entities("proj", "e2", "e3")
-        assert [o.provenance for o in server_db.reads.get_entity("proj", "e1").observations] == [None]
-        assert [o.provenance for o in server_db.reads.get_entity("proj", "e3").observations] == [None]
-
     def test_a_duplicate_write_compares_each_row_by_id(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         server_db.connection.write(
@@ -711,6 +700,29 @@ class TestAddObservationsTool:
         tools.add_observations("proj", "e1", ["a"], provenance="observed")
         provenances = sorted(o.provenance for o in server_db.reads.get_entity("proj", "e1").observations)
         assert provenances == ["observed", "user"]
+
+    def test_merges_rank_each_duplicate_row(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
+        server_db.connection.write(
+            "INSERT INTO observations (entity_id, content, content_hash, provenance) "
+            "SELECT entity_id, content, content_hash, 'user' FROM observations WHERE content = 'a'"
+        )
+        server_db.connection.write(
+            "UPDATE observations SET provenance = 'inferred' WHERE content = 'b' "
+            "AND entity_id = (SELECT id FROM entities WHERE name = 'e1')"
+        )
+        tools.merge_observations("proj", "e1", hash_observation("b"), hash_observation("a"))
+        e1 = server_db.reads.get_entity("proj", "e1").observations
+        assert sorted((o.provenance for o in e1), key=str) == ["inferred", "user"]
+        user_entity = {"name": "e3", "entityType": "task", "observations": ["c"], "provenance": "user"}
+        server_db.entities.create("proj", [user_entity])
+        server_db.connection.write(
+            "INSERT INTO observations (entity_id, content, content_hash) SELECT entity_id, content, content_hash "
+            "FROM observations WHERE content = 'c'"
+        )
+        server_db.entities.create("proj", [{"name": "e4", "entityType": "task", "observations": ["c"]}])
+        tools.merge_entities("proj", "e3", "e4")
+        assert [o.provenance for o in server_db.reads.get_entity("proj", "e4").observations] == ["user"]
 
     def test_create_entities_schema_lists_provenance(self) -> None:
         tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "create_entities")

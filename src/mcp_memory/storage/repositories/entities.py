@@ -9,7 +9,6 @@ from mcp_memory.config import get_strict_policy_enabled
 from mcp_memory.models import (
     STRUCTURAL_RELATION_TYPES,
     VALID_STATUSES,
-    outranks,
     validate_provenance,
     validate_vote,
 )
@@ -18,6 +17,7 @@ from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholder
 from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_entity_type_id, get_or_create_project_id
 from mcp_memory.storage.services.integrity import orphaned_neighbors_if_entity_deleted
+from mcp_memory.storage.services.provenance import raise_provenance
 
 if TYPE_CHECKING:
     from mcp_memory.models import EntityStatus, Relation
@@ -326,14 +326,15 @@ class EntityRepository:
             raise ValueError(f"Target entity '{target}' not found in project '{project}'")
 
         live_sql = "SELECT id, content, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL"
-        source_provenance = {r["content"]: r["provenance"] for r in self._conn.query_all(live_sql, (source_id,))}
+        sources = self._conn.query_all(live_sql, (source_id,))
         with self._conn.transaction():
-            self._conn.write_many(
-                "UPDATE observations SET provenance = ? WHERE id = ?",
+            raise_provenance(
+                self._conn,
                 [
-                    (source_provenance[r["content"]], r["id"])
-                    for r in self._conn.query_all(live_sql, (target_id,))
-                    if r["content"] in source_provenance and outranks(source_provenance[r["content"]], r["provenance"])
+                    (s["provenance"], t["id"])
+                    for t in self._conn.query_all(live_sql, (target_id,))
+                    for s in sources
+                    if s["content"] == t["content"]
                 ],
             )
             obs = self._conn.write(

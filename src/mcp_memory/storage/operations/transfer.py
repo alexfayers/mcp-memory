@@ -6,7 +6,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from mcp_memory.migrations.runner import schema_version
-from mcp_memory.models import normalize_relation_type, raises_provenance
+from mcp_memory.models import normalize_relation_type
 from mcp_memory.storage.pure.rows import build_entity
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT
 from mcp_memory.storage.services.ids import (
@@ -16,6 +16,7 @@ from mcp_memory.storage.services.ids import (
     get_or_create_project_id,
     get_or_create_relation_type_id,
 )
+from mcp_memory.storage.services.provenance import raise_provenance
 
 if TYPE_CHECKING:
     from mcp_memory.models import Relation
@@ -195,41 +196,40 @@ class Transfer:
         """Append observations, deduping by content_hash, preserving each observation's
         created_at. A duplicate takes the higher-ranked provenance. Returns (new_count, duplicate_count).
         """
-        existing: dict[str, list[dict[str, Any]]] = {}
-        for row in self._conn.query_all(
-            "SELECT id, content_hash, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL",
-            (entity_id,),
-        ):
-            existing.setdefault(row["content_hash"], []).append({"id": row["id"], "provenance": row["provenance"]})
+        existing = {
+            row["content_hash"]
+            for row in self._conn.query_all(
+                "SELECT content_hash FROM observations WHERE entity_id = ? AND deleted_at IS NULL", (entity_id,)
+            )
+        }
         new_count = 0
         duplicate_count = 0
         for obs in observations:
             content_hash = obs["content_hash"]
             if content_hash in existing:
                 duplicate_count += 1
-                for kept in existing[content_hash]:
-                    if raises_provenance(obs.get("provenance"), kept["provenance"]):
-                        self._conn.write(
-                            "UPDATE observations SET provenance = ? WHERE id = ?", (obs["provenance"], kept["id"])
-                        )
-                        kept["provenance"] = obs["provenance"]
+                rows = self._conn.query_all(
+                    "SELECT id FROM observations WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
+                    (entity_id, content_hash),
+                )
+                raise_provenance(self._conn, [(obs.get("provenance"), row["id"]) for row in rows])
                 continue
             new_count += 1
             created_at, provenance = obs.get("created_at"), obs.get("provenance")
             if created_at is None:
-                cursor = self._conn.write(
+                self._conn.write(
                     "INSERT INTO observations (entity_id, content, content_hash, vote_score, provenance) "
                     "VALUES (?, ?, ?, ?, ?)",
                     (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), provenance),
                 )
             else:
-                cursor = self._conn.write(
+                self._conn.write(
                     "INSERT INTO observations "
                     "(entity_id, content, content_hash, vote_score, created_at, provenance) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at, provenance),
                 )
-            existing[content_hash] = [{"id": cursor.lastrowid, "provenance": provenance}]
+            existing.add(content_hash)
         return new_count, duplicate_count
 
     def _import_relations(self, project_id: int, relations: list[Relation]) -> tuple[int, int]:

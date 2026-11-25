@@ -18,6 +18,8 @@ Read results order observations best-first by vote and trim them to the characte
 
 ## Write
 
+Provenance invariant: a stored observation's provenance only rises (`user` > `observed` > `inferred` > untagged), so `user` is never lost through any write, merge, import, backfill or dream. The only exception is an explicit `edit_observation`, which dreams cannot call. Every provenance change on an existing row goes through one rank-checked update by row ID.
+
 A dream-spawned call may not delete, trim, merge away or downvote a `user` observation, or delete or merge away an entity that holds one. It cannot pass `provenance`. An observation it writes takes the provenance of a live copy of the same text elsewhere in the project, preferring `inferred` and never `user`. It cannot create, rename onto or auto-create a project root over a deleted entity that holds a `user` observation. Orphan GC never reaps an entity that holds a live `user` observation.
 
 | Tool | What it does |
