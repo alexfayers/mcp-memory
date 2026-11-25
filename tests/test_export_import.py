@@ -70,6 +70,19 @@ class TestProvenanceRoundTrip:
         provenances = {o.content: o.provenance for o in target.reads.get_entity("proj", "task/t").observations}
         assert provenances == {"d": None, "said": "user"}
 
+    def test_importing_a_duplicate_raises_its_provenance(self, tmp_path: Path) -> None:
+        db = _make_db(tmp_path / "src.db")
+        db.observations.add("proj", "task/t", ["said"], provenance="user")
+        out = tmp_path / "export.json"
+        export_database(db, out)
+        db.connection.close()
+
+        target = _make_db(tmp_path / "dst.db")
+        target.observations.add("proj", "task/t", ["said"])
+        import_projects(target, load_export(out), ["proj"], dry_run=False)
+        provenances = {o.content: o.provenance for o in target.reads.get_entity("proj", "task/t").observations}
+        assert provenances == {"d": None, "said": "user"}
+
     def test_import_rejects_an_unknown_provenance(self, tmp_path: Path) -> None:
         data = build_export(_make_db(tmp_path / "src.db"))
         data["projects"]["proj"]["entities"][0]["observations"][0]["provenance"] = "guess"
