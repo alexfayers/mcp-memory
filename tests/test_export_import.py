@@ -92,6 +92,24 @@ class TestProvenanceRoundTrip:
         import_projects(target, data, ["proj"], dry_run=False)
         assert [o.provenance for o in target.reads.get_entity("proj", "task/t").observations] == ["user"]
 
+    def test_import_compares_each_destination_row_by_id(self, tmp_path: Path) -> None:
+        db = _make_db(tmp_path / "src.db")
+        db.observations.add("proj", "task/t", ["said"], provenance="observed")
+        out = tmp_path / "export.json"
+        export_database(db, out)
+        db.connection.close()
+
+        target = _make_db(tmp_path / "dst.db")
+        target.observations.add("proj", "task/t", ["said"])
+        target.connection.write(
+            "INSERT INTO observations (entity_id, content, content_hash, provenance) "
+            "SELECT entity_id, content, content_hash, 'user' FROM observations WHERE content = 'said'"
+        )
+        import_projects(target, load_export(out), ["proj"], dry_run=False)
+        observations = target.reads.get_entity("proj", "task/t").observations
+        provenances = sorted((o.provenance for o in observations if o.content == "said"), key=str)
+        assert provenances == ["observed", "user"]
+
     def test_import_rejects_an_unknown_provenance(self, tmp_path: Path) -> None:
         data = build_export(_make_db(tmp_path / "src.db"))
         data["projects"]["proj"]["entities"][0]["observations"][0]["provenance"] = "guess"

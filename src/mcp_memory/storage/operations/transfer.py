@@ -195,43 +195,41 @@ class Transfer:
         """Append observations, deduping by content_hash, preserving each observation's
         created_at. A duplicate takes the higher-ranked provenance. Returns (new_count, duplicate_count).
         """
-        existing = {
-            row["content_hash"]: row["provenance"]
-            for row in self._conn.query_all(
-                "SELECT content_hash, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL",
-                (entity_id,),
-            )
-        }
+        existing: dict[str, list[dict[str, Any]]] = {}
+        for row in self._conn.query_all(
+            "SELECT id, content_hash, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL",
+            (entity_id,),
+        ):
+            existing.setdefault(row["content_hash"], []).append({"id": row["id"], "provenance": row["provenance"]})
         new_count = 0
         duplicate_count = 0
         for obs in observations:
             content_hash = obs["content_hash"]
             if content_hash in existing:
                 duplicate_count += 1
-                if raises_provenance(obs.get("provenance"), existing[content_hash]):
-                    self._conn.write(
-                        "UPDATE observations SET provenance = ? "
-                        "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
-                        (obs["provenance"], entity_id, content_hash),
-                    )
-                    existing[content_hash] = obs["provenance"]
+                for kept in existing[content_hash]:
+                    if raises_provenance(obs.get("provenance"), kept["provenance"]):
+                        self._conn.write(
+                            "UPDATE observations SET provenance = ? WHERE id = ?", (obs["provenance"], kept["id"])
+                        )
+                        kept["provenance"] = obs["provenance"]
                 continue
-            existing[content_hash] = obs.get("provenance")
             new_count += 1
             created_at, provenance = obs.get("created_at"), obs.get("provenance")
             if created_at is None:
-                self._conn.write(
+                cursor = self._conn.write(
                     "INSERT INTO observations (entity_id, content, content_hash, vote_score, provenance) "
                     "VALUES (?, ?, ?, ?, ?)",
                     (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), provenance),
                 )
             else:
-                self._conn.write(
+                cursor = self._conn.write(
                     "INSERT INTO observations "
                     "(entity_id, content, content_hash, vote_score, created_at, provenance) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at, provenance),
                 )
+            existing[content_hash] = [{"id": cursor.lastrowid, "provenance": provenance}]
         return new_count, duplicate_count
 
     def _import_relations(self, project_id: int, relations: list[Relation]) -> tuple[int, int]:
