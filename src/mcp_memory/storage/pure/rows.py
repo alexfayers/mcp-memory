@@ -74,6 +74,7 @@ def build_observation(row: sqlite3.Row) -> Observation:
         content_hash=row["content_hash"],
         vote_score=int(row["vote_score"]),
         created_at=row["created_at"],
+        provenance=row["provenance"],
     )
 
 

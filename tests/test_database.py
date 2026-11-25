@@ -2049,6 +2049,12 @@ class TestGcDownvotedOrphans:
         assert store.maintenance._gc_downvoted_orphans() == 0
         assert obs_contents(store.reads.get_entity("proj", "e1")) == ["x"]
 
+    def test_floored_orphan_holding_a_user_observation_is_spared(self, store: Storage) -> None:
+        entity = {"name": "e1", "entityType": "task", "observations": ["x"], "provenance": "user"}
+        store.entities.create("proj", [entity])
+        self._downvote(store, "proj", "e1", 10)
+        assert store.maintenance._gc_downvoted_orphans() == 0
+
     def test_at_floor_boundary_is_reaped(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["x"]}])
         self._downvote(store, "proj", "e1", 10)

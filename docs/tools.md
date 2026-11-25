@@ -18,11 +18,15 @@ Read results order observations best-first by vote and trim them to the characte
 
 ## Write
 
+Provenance invariant: a stored observation's provenance only rises (`user` > `observed` > `inferred` > untagged), so `user` is never lost through any write, merge, import, backfill or dream. The only exception is an explicit `edit_observation`, which dreams cannot call. Every provenance change on an existing row goes through one rank-checked update by row ID.
+
+A dream-spawned call may not delete, trim, merge away or downvote a `user` observation, or delete or merge away an entity that holds one. It cannot pass `provenance`. An observation it writes takes the provenance of a live copy of the same text elsewhere in the project, preferring `inferred` and never `user`. It cannot create, rename onto or auto-create a project root over a deleted entity that holds a `user` observation. Orphan GC never reaps an entity that holds a live `user` observation.
+
 | Tool | What it does |
 |---|---|
-| `create_entities` | Create entities with observations. Fails if a name exists. Every type except `project` needs at least one relation |
-| `add_observations` | Append to an existing entity. Duplicates are skipped |
-| `edit_observation` | Edit one observation by `content_hash`, keeping its votes and timestamp. Use `oldText`/`newText` for a partial edit |
+| `create_entities` | Create entities with observations. Fails if a name exists. Every type except `project` needs at least one relation. An entity dict may carry `provenance`, applied to its observations |
+| `add_observations` | Append to an existing entity. Duplicates are skipped. Pass `provenance` (`user`, `observed` or `inferred`) once per call to record where the claims come from. A duplicate add raises a less trusted observation to the higher-ranked provenance and never lowers it. Reads show a set provenance as `from` |
+| `edit_observation` | Edit one observation by `content_hash`, keeping its votes and timestamp. Use `oldText`/`newText` for a partial edit. An edit keeps the provenance unless `provenance` is passed |
 | `delete_observations` | Soft-delete by exact `observations` text and/or `observationHashes`. Returns the count and hashes deleted. Restorable with `restore_observations` until a purge |
 | `restore_observations` | Undo a soft delete of observations by `observationHashes` and/or exact `observations` text. A hash with a live copy is skipped. Returns the restored count and hashes |
 | `trim_observations_to_outcome` | Soft-delete every observation except those in `keep_hashes` (at least one). Returns the count and hashes trimmed. Restorable with `restore_observations` until a purge |
@@ -36,6 +40,8 @@ Read results order observations best-first by vote and trim them to the characte
 | `merge_entities` | Fold a duplicate entity (`source`) into `target` in one project. Observations are copied, relations repointed, the higher vote score kept. The source is soft-deleted |
 | `restore_entity` | Undo a soft delete, until a purge removes it. Observations and relations deleted separately before the entity was deleted stay deleted |
 | `delete_entity` | Soft-delete an entity, hiding it and its observations and relations. Restorable with `restore_entity` until a purge. Refuses while other live entities relate to it or if it would orphan one |
+
+On its first start, the server tags observations that have no provenance from their wording: `inferred` for `INFERRED`, `Inferred`, `UNVERIFIED` or `Likely` leads and any `hypothesis:`, `observed` for `VERIFIED`, `OBSERVED`, `Verified`, `Source-verified` or `Confirmed` leads, and `user` for `User ...` or `The user ...` leads. The first match wins, and unmatched observations stay unknown. It backs up the database first if anything needs tagging. It marks the run done in the database in the same transaction, so it never runs again for that database, and writes the tagged rows beside the backups.
 
 ## Projects
 

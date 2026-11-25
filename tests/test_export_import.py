@@ -19,6 +19,7 @@ from mcp_memory.export_import import (
     export_database as build_export,
     import_projects,
     load_export,
+    validate_export,
 )
 from mcp_memory.migrations.schema import MIGRATIONS
 from mcp_memory.models import Relation
@@ -54,6 +55,66 @@ def _make_db(path: Path) -> Storage:
     db.projects.set_paths("proj", ["/tmp/proj"])
     db.projects.set_groups("proj", ["tooling"])
     return db
+
+
+class TestProvenanceRoundTrip:
+    def test_export_then_import_keeps_provenance(self, tmp_path: Path) -> None:
+        db = _make_db(tmp_path / "src.db")
+        db.observations.add("proj", "task/t", ["said"], provenance="user")
+        out = tmp_path / "export.json"
+        export_database(db, out)
+        db.connection.close()
+
+        target = open_writable(tmp_path / "dst.db")
+        import_projects(target, load_export(out), ["proj"], dry_run=False)
+        provenances = {o.content: o.provenance for o in target.reads.get_entity("proj", "task/t").observations}
+        assert provenances == {"d": None, "said": "user"}
+
+    def test_importing_a_duplicate_raises_its_provenance(self, tmp_path: Path) -> None:
+        db = _make_db(tmp_path / "src.db")
+        db.observations.add("proj", "task/t", ["said"], provenance="user")
+        out = tmp_path / "export.json"
+        export_database(db, out)
+        db.connection.close()
+
+        target = _make_db(tmp_path / "dst.db")
+        target.observations.add("proj", "task/t", ["said"])
+        import_projects(target, load_export(out), ["proj"], dry_run=False)
+        provenances = {o.content: o.provenance for o in target.reads.get_entity("proj", "task/t").observations}
+        assert provenances == {"d": None, "said": "user"}
+
+    def test_a_repeated_import_row_compares_against_the_raised_provenance(self, tmp_path: Path) -> None:
+        data = build_export(_make_db(tmp_path / "src.db"))
+        entity = next(e for e in data["projects"]["proj"]["entities"] if e["name"] == "task/t")
+        observations = entity["observations"]
+        observations += [{**observations[0], "provenance": "user"}, {**observations[0], "provenance": "observed"}]
+        target = open_writable(tmp_path / "dst.db")
+        import_projects(target, data, ["proj"], dry_run=False)
+        assert [o.provenance for o in target.reads.get_entity("proj", "task/t").observations] == ["user"]
+
+    def test_import_compares_each_destination_row_by_id(self, tmp_path: Path) -> None:
+        db = _make_db(tmp_path / "src.db")
+        db.observations.add("proj", "task/t", ["said"], provenance="observed")
+        out = tmp_path / "export.json"
+        export_database(db, out)
+        db.connection.close()
+
+        target = _make_db(tmp_path / "dst.db")
+        target.observations.add("proj", "task/t", ["said"])
+        target.connection.write(
+            "INSERT INTO observations (entity_id, content, content_hash, provenance) "
+            "SELECT entity_id, content, content_hash, 'user' FROM observations WHERE content = 'said'"
+        )
+        import_projects(target, load_export(out), ["proj"], dry_run=False)
+        observations = target.reads.get_entity("proj", "task/t").observations
+        provenances = sorted((o.provenance for o in observations if o.content == "said"), key=str)
+        assert provenances == ["observed", "user"]
+
+    def test_import_rejects_an_unknown_provenance(self, tmp_path: Path) -> None:
+        data = build_export(_make_db(tmp_path / "src.db"))
+        data["projects"]["proj"]["entities"][0]["observations"][0]["provenance"] = "guess"
+        with pytest.raises(ValueError, match="Invalid provenance 'guess'"):
+            validate_export(data)
 
 
 class TestExport:

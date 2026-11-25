@@ -824,4 +824,16 @@ MIGRATIONS: list[Migration] = [
             END""",
         ],
     ),
+    Migration(
+        version=29,
+        statements=[
+            # user, observed or inferred, validated in Python. NULL means unknown. Not in the FTS projection.
+            "ALTER TABLE observations ADD COLUMN provenance TEXT",
+        ],
+    ),
+    Migration(
+        version=30,
+        # A row marks the one-time provenance backfill as done for this database.
+        statements=["CREATE TABLE provenance_backfill (ran_at DATETIME DEFAULT CURRENT_TIMESTAMP)"],
+    ),
 ]

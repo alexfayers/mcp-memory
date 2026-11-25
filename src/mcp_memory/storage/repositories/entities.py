@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, cast
 
 from mcp_memory.config import get_strict_policy_enabled
-from mcp_memory.models import STRUCTURAL_RELATION_TYPES, VALID_STATUSES, validate_vote
+from mcp_memory.models import (
+    STRUCTURAL_RELATION_TYPES,
+    VALID_STATUSES,
+    validate_provenance,
+    validate_vote,
+)
 from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_today_date_prefix
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_entity_type_id, get_or_create_project_id
 from mcp_memory.storage.services.integrity import orphaned_neighbors_if_entity_deleted
+from mcp_memory.storage.services.provenance import raise_provenance
 
 if TYPE_CHECKING:
     from mcp_memory.models import EntityStatus, Relation
     from mcp_memory.storage.connection import Connection
+
+
+# Set for a dream request, so a re-create or rename cannot purge a deleted entity holding user observations.
+KEEP_USER_TOMBSTONES: ContextVar[bool] = ContextVar("keep_user_tombstones", default=False)
 
 
 class EntityRepository:
@@ -42,6 +53,7 @@ class EntityRepository:
 
         if status is not None and status not in VALID_STATUSES:
             raise ValueError(f"Invalid status '{status}' for entity '{name}'. Must be one of: {VALID_STATUSES}")
+        validate_provenance(cast("str | None", entity_data.get("provenance")))
 
         if get_strict_policy_enabled() and project != "global" and entity_type == "user-preferences":
             raise ValueError(
@@ -61,6 +73,7 @@ class EntityRepository:
                 observations = cast("list[str]", entity_data.get("observations"))
                 observations = [strip_today_date_prefix(obs) for obs in observations]
                 status = entity_data.get("status")
+                provenance = entity_data.get("provenance")
 
                 if get_entity_id(self._conn, str(name), project_id) is not None:
                     raise ValueError(
@@ -79,8 +92,8 @@ class EntityRepository:
                 entity_id = cast("int", cursor.lastrowid)
 
                 self._conn.write_many(
-                    "INSERT INTO observations (entity_id, content, content_hash) VALUES (?, ?, ?)",
-                    [(entity_id, obs, hash_observation(obs)) for obs in observations],
+                    "INSERT INTO observations (entity_id, content, content_hash, provenance) VALUES (?, ?, ?, ?)",
+                    [(entity_id, obs, hash_observation(obs), provenance) for obs in observations],
                 )
 
     def rename(self, project: str, old_name: str, new_name: str, *, entity_type: str | None = None) -> None:
@@ -272,10 +285,16 @@ class EntityRepository:
 
         The UNIQUE(name, project_id) constraint means a tombstone would otherwise block
         inserting a fresh entity with the same name. Runs within the caller's transaction.
+        Refused while KEEP_USER_TOMBSTONES is set and the tombstone holds a user observation.
         """
         tombstone_id = get_entity_id(self._conn, name, project_id, include_deleted=True)
-        if tombstone_id is not None:
-            self.hard_delete_row(tombstone_id, project, name)
+        if tombstone_id is None:
+            return
+        if KEEP_USER_TOMBSTONES.get() and self._conn.query_one(
+            "SELECT 1 FROM observations WHERE entity_id = ? AND provenance = 'user'", (tombstone_id,)
+        ):
+            raise ValueError(f"Refused: a dream may not replace deleted '{name}', which holds user data.")
+        self.hard_delete_row(tombstone_id, project, name)
 
     def restore(self, project: str, name: str) -> None:
         """Clear an entity's soft-deleted mark, making it visible to reads again."""
@@ -290,7 +309,8 @@ class EntityRepository:
         """Fold a source entity into a target, then soft-delete the source.
 
         Additive on the target: the source's observations are copied over (deduped by
-        exact content, keeping their votes and timestamps), and equivalent relations are
+        exact content, keeping their votes and timestamps, a duplicate taking the higher-ranked
+        provenance), and equivalent relations are
         recreated on the target (skipping any that would become a target->target
         self-loop). The target keeps the higher of the two vote scores. The source is
         soft-deleted rather than removed, so the merge is reversible via restore.
@@ -305,11 +325,22 @@ class EntityRepository:
         if target_id is None:
             raise ValueError(f"Target entity '{target}' not found in project '{project}'")
 
+        live_sql = "SELECT id, content, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL"
+        sources = self._conn.query_all(live_sql, (source_id,))
         with self._conn.transaction():
+            raise_provenance(
+                self._conn,
+                [
+                    (s["provenance"], t["id"])
+                    for t in self._conn.query_all(live_sql, (target_id,))
+                    for s in sources
+                    if s["content"] == t["content"]
+                ],
+            )
             obs = self._conn.write(
                 "INSERT INTO observations "
-                "(entity_id, content, vote_score, created_at, content_hash) "
-                "SELECT ?, content, vote_score, created_at, content_hash FROM observations "
+                "(entity_id, content, vote_score, created_at, content_hash, provenance) "
+                "SELECT ?, content, vote_score, created_at, content_hash, provenance FROM observations "
                 "WHERE entity_id = ? AND deleted_at IS NULL AND content NOT IN "
                 "(SELECT content FROM observations WHERE entity_id = ? AND deleted_at IS NULL)",
                 (target_id, source_id, target_id),

@@ -74,9 +74,9 @@ class Maintenance:
     def _gc_downvoted_orphans(self, threshold: int = GC_DOWNVOTE_FLOOR) -> int:
         """Soft-delete downvoted orphan entities, returning the number reaped.
 
-        Reaps an entity that is all of: live, at or below the downvote floor, not a
-        relation-exempt type, with no live incoming relation and no live outgoing structural
-        relation to a live entity. Removal is a reversible
+        Reaps an entity that is all of: live, at or below the downvote floor, without a live
+        user-provenance observation, not a relation-exempt type, with no live incoming relation
+        and no live outgoing structural relation to a live entity. Removal is a reversible
         soft-delete, so the grace-window purge stays the sole path to permanent removal.
         """
         with self._conn.transaction():
@@ -84,6 +84,8 @@ class Maintenance:
                 f"UPDATE entities SET deleted_at = CURRENT_TIMESTAMP "
                 f"WHERE deleted_at IS NULL "
                 f"AND vote_score <= ? "
+                f"AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.entity_id = entities.id "
+                f"AND o.deleted_at IS NULL AND o.provenance = 'user') "
                 f"AND entity_type_id NOT IN "
                 f"(SELECT id FROM entity_types WHERE name IN "
                 f"({placeholders(len(STRUCTURAL_ENTITY_TYPES))})) "

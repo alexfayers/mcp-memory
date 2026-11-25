@@ -16,6 +16,7 @@ from mcp_memory.storage.services.ids import (
     get_or_create_project_id,
     get_or_create_relation_type_id,
 )
+from mcp_memory.storage.services.provenance import raise_provenance
 
 if TYPE_CHECKING:
     from mcp_memory.models import Relation
@@ -193,7 +194,7 @@ class Transfer:
 
     def _import_observations(self, entity_id: int, observations: list[dict[str, Any]]) -> tuple[int, int]:
         """Append observations, deduping by content_hash, preserving each observation's
-        created_at. Returns (new_count, duplicate_count).
+        created_at. A duplicate takes the higher-ranked provenance. Returns (new_count, duplicate_count).
         """
         existing = {
             row["content_hash"]
@@ -207,22 +208,28 @@ class Transfer:
             content_hash = obs["content_hash"]
             if content_hash in existing:
                 duplicate_count += 1
+                rows = self._conn.query_all(
+                    "SELECT id FROM observations WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
+                    (entity_id, content_hash),
+                )
+                raise_provenance(self._conn, [(obs.get("provenance"), row["id"]) for row in rows])
                 continue
-            existing.add(content_hash)
             new_count += 1
-            created_at = obs.get("created_at")
+            created_at, provenance = obs.get("created_at"), obs.get("provenance")
             if created_at is None:
                 self._conn.write(
-                    "INSERT INTO observations (entity_id, content, content_hash, vote_score) VALUES (?, ?, ?, ?)",
-                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0)),
+                    "INSERT INTO observations (entity_id, content, content_hash, vote_score, provenance) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), provenance),
                 )
             else:
                 self._conn.write(
                     "INSERT INTO observations "
-                    "(entity_id, content, content_hash, vote_score, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at),
+                    "(entity_id, content, content_hash, vote_score, created_at, provenance) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at, provenance),
                 )
+            existing.add(content_hash)
         return new_count, duplicate_count
 
     def _import_relations(self, project_id: int, relations: list[Relation]) -> tuple[int, int]:

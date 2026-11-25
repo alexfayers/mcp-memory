@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mcp_memory.config import get_max_observation_chars
-from mcp_memory.models import is_protected_observation, validate_vote
+from mcp_memory.models import (
+    is_protected_observation,
+    validate_provenance,
+    validate_vote,
+)
 from mcp_memory.storage.pure.rows import (
     budget_observations,
     build_observation,
@@ -16,6 +20,7 @@ from mcp_memory.storage.pure.rows import (
 from mcp_memory.storage.pure.sql import placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
+from mcp_memory.storage.services.provenance import raise_provenance
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -34,7 +39,7 @@ class ObservationRepository:
     def for_entity(self, entity_id: int) -> list[Observation]:
         """Return an entity's observations best-first (vote_score DESC, then insertion order)."""
         rows = self._conn.query_all(
-            "SELECT content, content_hash, vote_score, created_at FROM observations "
+            "SELECT content, content_hash, vote_score, created_at, provenance FROM observations "
             "WHERE entity_id = ? AND deleted_at IS NULL ORDER BY vote_score DESC, id",
             (entity_id,),
         )
@@ -56,23 +61,28 @@ class ObservationRepository:
         kept = budget_observations(full, budget)
         return kept, len(full) - len(kept)
 
-    def add(self, project: str, entity_name: str, observations: list[str]) -> list[str]:
-        """Append deduplicated observations to an entity, returning the new ones' content hashes."""
+    def add(self, project: str, entity_name: str, observations: list[str], provenance: str | None = None) -> list[str]:
+        """Append deduplicated observations, returning their hashes; a duplicate takes a higher-ranked provenance."""
+        validate_provenance(provenance)
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, entity_name, project_id)
         if entity_id is None:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
 
         observations = [strip_today_date_prefix(obs) for obs in observations]
-        existing = {obs.content for obs in self.for_entity(entity_id)}
+        rows = self._conn.query_all(
+            "SELECT id, content, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL",
+            (entity_id,),
+        )
+        existing = {row["content"] for row in rows}
         new_observations = [obs for obs in observations if obs not in existing]
 
-        if new_observations:
-            with self._conn.transaction():
-                self._conn.write_many(
-                    "INSERT INTO observations (entity_id, content, content_hash) VALUES (?, ?, ?)",
-                    [(entity_id, obs, hash_observation(obs)) for obs in new_observations],
-                )
+        with self._conn.transaction():
+            self._conn.write_many(
+                "INSERT INTO observations (entity_id, content, content_hash, provenance) VALUES (?, ?, ?, ?)",
+                [(entity_id, obs, hash_observation(obs), provenance) for obs in new_observations],
+            )
+            raise_provenance(self._conn, [(provenance, row["id"]) for row in rows if row["content"] in observations])
 
         return [hash_observation(obs) for obs in new_observations]
 
@@ -152,12 +162,41 @@ class ObservationRepository:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
         return entity_id
 
+    def refuse_user_loss(
+        self, project: str, entity_name: str, hashes: Sequence[str] | None = None, contents: Sequence[str] = ()
+    ) -> None:
+        """Raise ValueError if an addressed observation has user provenance; hashes None addresses them all."""
+        own = self.for_entity(self._require_entity_id(project, entity_name))
+        if any(
+            o.provenance == "user" and (hashes is None or o.content_hash in hashes or o.content in contents)
+            for o in own
+        ):
+            raise ValueError("Refused: a dream may not remove or demote a user-provenance observation.")
+
+    def inherit_provenance(self, project: str, entity_name: str, contents: Sequence[str]) -> None:
+        """Give each untagged observation in contents the provenance of a live copy elsewhere in the project.
+
+        An inferred copy wins over an observed one, and a user copy is never inherited.
+        """
+        entity_id = self._require_entity_id(project, entity_name)
+        copies = self._conn.query_all(
+            "SELECT o.id, (SELECT src.provenance FROM observations src JOIN entities e ON src.entity_id = e.id "
+            "WHERE src.content = o.content AND src.entity_id != o.entity_id AND src.deleted_at IS NULL "
+            "AND e.deleted_at IS NULL AND e.project_id = (SELECT project_id FROM entities WHERE id = o.entity_id) "
+            "AND src.provenance IN ('inferred', 'observed') "
+            "ORDER BY src.provenance = 'inferred' DESC LIMIT 1) AS source "
+            "FROM observations o WHERE o.entity_id = ? AND o.deleted_at IS NULL "
+            f"AND o.content IN ({placeholders(len(contents))})",
+            (entity_id, *contents),
+        )
+        raise_provenance(self._conn, [(row["source"], row["id"]) for row in copies])
+
     def trim_to_outcome(
         self, project: str, entity_name: str, keep_hashes: list[str], *, protect_corrections: bool = False
     ) -> list[str]:
         """Soft-delete all observations on an entity except those with a content_hash in keep_hashes.
 
-        With protect_corrections, user corrections, decisions and lessons are kept too.
+        With protect_corrections, user corrections, decisions, lessons and user-provenance observations are kept too.
         Returns the content hashes of the trimmed observations.
         """
         if not keep_hashes:
@@ -167,7 +206,11 @@ class ObservationRepository:
         if protect_corrections:
             keep_hashes = [
                 *keep_hashes,
-                *(o.content_hash for o in self.for_entity(entity_id) if is_protected_observation(o.content)),
+                *(
+                    o.content_hash
+                    for o in self.for_entity(entity_id)
+                    if o.provenance == "user" or is_protected_observation(o.content)
+                ),
             ]
         with self._conn.transaction():
             return self._soft_delete(entity_id, f"content_hash NOT IN ({placeholders(len(keep_hashes))})", keep_hashes)
@@ -233,26 +276,40 @@ class ObservationRepository:
         if entity_id is None:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
 
-        source = self._find_by_hash(entity_id, entity_name, source_hash, "Source observation")
-        target = self._find_by_hash(entity_id, entity_name, target_hash, "Target observation")
-
+        self._find_by_hash(entity_id, entity_name, source_hash, "Source observation")
+        self._find_by_hash(entity_id, entity_name, target_hash, "Target observation")
+        rows_sql = (
+            "SELECT id, vote_score, provenance FROM observations "
+            "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL"
+        )
+        sources = self._conn.query_all(rows_sql, (entity_id, source_hash))
+        targets = self._conn.query_all(rows_sql, (entity_id, target_hash))
         with self._conn.transaction():
-            self._conn.write(
-                "UPDATE observations SET vote_score = ? "
-                "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
-                (max(int(source["vote_score"]), int(target["vote_score"])), entity_id, target_hash),
+            self._conn.write_many(
+                "UPDATE observations SET vote_score = MAX(vote_score, ?) WHERE id = ?",
+                [(max(int(r["vote_score"]) for r in sources), t["id"]) for t in targets],
             )
+            raise_provenance(self._conn, [(s["provenance"], t["id"]) for t in targets for s in sources])
             hashes = self._soft_delete(entity_id, "content_hash = ?", [source_hash])
         return {"merged": len(hashes), "hashes": hashes}
 
     def edit(
-        self, project: str, entity_name: str, content_hash: str, new_text: str, old_text: str | None = None
+        self,
+        project: str,
+        entity_name: str,
+        content_hash: str,
+        new_text: str,
+        old_text: str | None = None,
+        *,
+        provenance: str | None = None,
     ) -> str:
         """Rewrite one observation in place, addressed by content_hash, returning its new content_hash.
 
         Without old_text, new_text replaces the whole content; with it, new_text replaces the single
-        occurrence of old_text. The observation keeps its id, vote score and timestamp.
+        occurrence of old_text. The observation keeps its id, vote score, timestamp and, unless
+        provenance is passed, its provenance.
         """
+        validate_provenance(provenance)
         if old_text is not None and not old_text:
             raise ValueError("oldText must not be empty")
         project_id = get_or_create_project_id(self._conn, project)
@@ -273,18 +330,19 @@ class ObservationRepository:
         if not new_content.strip():
             raise ValueError("Edited observation must not be empty")
         reject_status_observation(new_content)
-        if new_content == content:
+        if new_content == content and provenance is None:
             return content_hash
 
         new_hash = hash_observation(new_content)
-        if any(obs.content_hash == new_hash for obs in self.for_entity(entity_id)):
+        if new_hash != content_hash and any(obs.content_hash == new_hash for obs in self.for_entity(entity_id)):
             raise ValueError("Edit duplicates an existing observation; use delete_observations or merge_observations")
 
         with self._conn.transaction():
             refresh_for_entity(self._conn, entity_id, delete=True)
             self._conn.write(
-                "UPDATE observations SET content = ?, content_hash = ? WHERE id = ?",
-                (new_content, new_hash, row["id"]),
+                "UPDATE observations SET content = ?, content_hash = ?, provenance = COALESCE(?, provenance) "
+                "WHERE id = ?",
+                (new_content, new_hash, provenance, row["id"]),
             )
             self._conn.write("UPDATE entities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (entity_id,))
             refresh_for_entity(self._conn, entity_id, delete=False)
@@ -292,7 +350,7 @@ class ObservationRepository:
 
     def _find_by_hash(self, entity_id: int, entity_name: str, content_hash: str, label: str) -> sqlite3.Row:
         row = self._conn.query_one(
-            "SELECT id, content, vote_score FROM observations "
+            "SELECT id, content, vote_score, provenance FROM observations "
             "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
             (entity_id, content_hash),
         )
@@ -303,7 +361,7 @@ class ObservationRepository:
     def export_rows(self, entity_id: int) -> list[dict[str, object]]:
         """Return an entity's observations as export dicts, best-first, preserving created_at."""
         rows = self._conn.query_all(
-            "SELECT content, content_hash, vote_score, created_at FROM observations "
+            "SELECT content, content_hash, vote_score, created_at, provenance FROM observations "
             "WHERE entity_id = ? AND deleted_at IS NULL ORDER BY vote_score DESC, id",
             (entity_id,),
         )
@@ -313,6 +371,7 @@ class ObservationRepository:
                 "content_hash": row["content_hash"],
                 "vote_score": int(row["vote_score"]),
                 "created_at": row["created_at"],
+                "provenance": row["provenance"],
             }
             for row in rows
         ]

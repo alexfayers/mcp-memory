@@ -10,6 +10,13 @@ EntityStatus = Literal["planned", "in-progress", "blocked", "resolved", "archive
 
 VALID_STATUSES = get_args(EntityStatus)
 
+Provenance = Literal["user", "observed", "inferred"]
+
+VALID_PROVENANCES = get_args(Provenance)
+
+# Trust rank of a stored observation's provenance, which only ever rises: user > observed > inferred > untagged.
+PROVENANCE_RANK: dict[str | None, int] = {"user": 3, "observed": 2, "inferred": 1, None: 0}
+
 # Entity types exempt from autonomous orphan GC.
 STRUCTURAL_ENTITY_TYPES = frozenset({"project", "user-preferences"})
 
@@ -26,6 +33,13 @@ def is_protected_observation(content: str) -> bool:
 
 
 MAX_VOTE_MAGNITUDE = 3
+
+
+def validate_provenance(provenance: str | None) -> None:
+    """Raise ValueError unless provenance is None or one of VALID_PROVENANCES."""
+    if provenance is not None and provenance not in VALID_PROVENANCES:
+        raise ValueError(f"Invalid provenance '{provenance}'. Must be one of: {VALID_PROVENANCES}")
+
 
 VALID_RELATION_TYPES = (
     "implements",
@@ -107,6 +121,7 @@ class Observation:
     content_hash: str
     vote_score: int = 0
     created_at: str | None = None
+    provenance: Provenance | None = None
 
 
 @dataclass

@@ -671,6 +671,127 @@ class TestAddObservationsTool:
         assert result["count"] == 2
         assert result["hashes"] == [hash_observation("b"), hash_observation("c")]
 
+    def test_provenance_is_stored_and_returned_in_reads(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        tools.add_observations("proj", "e1", ["b"], provenance="user")
+        tools.edit_observation("proj", "e1", hash_observation("b"), "b2", provenance="observed")
+        tools.edit_observation("proj", "e1", hash_observation("b2"), "b3")
+        observations = tools.get_entity_with_relations("proj", "e1")["entity"]["observations"]
+        assert {o["content"]: o.get("from") for o in observations} == {"a": None, "b3": "observed"}
+        assert "error" in tools.add_observations("proj", "e1", ["c"], provenance="guess")
+
+    def test_a_duplicate_or_merge_keeps_the_higher_ranked_provenance(self, server_db: Storage) -> None:
+        entity = {"name": "e1", "entityType": "task", "observations": ["a", "b"], "provenance": "inferred"}
+        server_db.entities.create("proj", [entity])
+        tools.add_observations("proj", "e1", ["a"], provenance="user")
+        tools.add_observations("proj", "e1", ["a", "c"], provenance="observed")
+        tools.merge_observations("proj", "e1", hash_observation("c"), hash_observation("b"))
+        server_db.entities.create("proj", [{"name": "e2", "entityType": "task", "observations": ["a", "b"]}])
+        tools.merge_entities("proj", "e1", "e2")
+        observations = tools.get_entity_with_relations("proj", "e2")["entity"]["observations"]
+        assert {o["content"]: o.get("from") for o in observations} == {"a": "user", "b": "observed"}
+
+    def test_a_duplicate_write_compares_each_row_by_id(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        server_db.connection.write(
+            "INSERT INTO observations (entity_id, content, content_hash, provenance) "
+            "SELECT entity_id, content, content_hash, 'user' FROM observations"
+        )
+        tools.add_observations("proj", "e1", ["a"], provenance="observed")
+        provenances = sorted(o.provenance for o in server_db.reads.get_entity("proj", "e1").observations)
+        assert provenances == ["observed", "user"]
+
+    def test_merges_rank_each_duplicate_row(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
+        server_db.connection.write(
+            "INSERT INTO observations (entity_id, content, content_hash, provenance) "
+            "SELECT entity_id, content, content_hash, 'user' FROM observations WHERE content = 'a'"
+        )
+        server_db.connection.write(
+            "UPDATE observations SET provenance = 'inferred' WHERE content = 'b' "
+            "AND entity_id = (SELECT id FROM entities WHERE name = 'e1')"
+        )
+        tools.merge_observations("proj", "e1", hash_observation("b"), hash_observation("a"))
+        e1 = server_db.reads.get_entity("proj", "e1").observations
+        assert sorted((o.provenance for o in e1), key=str) == ["inferred", "user"]
+        user_entity = {"name": "e3", "entityType": "task", "observations": ["c"], "provenance": "user"}
+        server_db.entities.create("proj", [user_entity])
+        server_db.connection.write(
+            "INSERT INTO observations (entity_id, content, content_hash) SELECT entity_id, content, content_hash "
+            "FROM observations WHERE content = 'c'"
+        )
+        server_db.entities.create("proj", [{"name": "e4", "entityType": "task", "observations": ["c"]}])
+        tools.merge_entities("proj", "e3", "e4")
+        assert [o.provenance for o in server_db.reads.get_entity("proj", "e4").observations] == ["user"]
+
+    def test_create_entities_schema_lists_provenance(self) -> None:
+        tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "create_entities")
+        entity_schema = tool.input_schema["properties"]["entities"]["items"]["properties"]
+        assert entity_schema["provenance"]["enum"] == ["user", "observed", "inferred"]
+
+
+class TestDreamUserObservationGuards:
+    def test_a_dream_cannot_remove_demote_or_forge_a_user_observation(self, server_db: Storage) -> None:
+        dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+        server_db.entities.create(
+            "proj", [{"name": n, "entityType": "task", "observations": ["plain", "dup"]} for n in ("e1", "e2")]
+        )
+        server_db.observations.add("proj", "e1", ["ask"], provenance="user")
+        ask, dup = hash_observation("ask"), hash_observation("dup")
+        assert "error" in tools.delete_observations("proj", "e1", observationHashes=[ask], ctx=dream_ctx)
+        assert "error" in tools.vote("proj", "e1", -1, observationHash=ask, ctx=dream_ctx)
+        assert "error" in tools.merge_observations("proj", "e1", ask, dup, ctx=dream_ctx)
+        assert "error" in tools.delete_entity("proj", "e1", ctx=dream_ctx)
+        assert "error" in tools.merge_entities("proj", "e1", "e2", ctx=dream_ctx)
+        assert tools.trim_observations_to_outcome("proj", "e1", [dup], ctx=dream_ctx)["deleted"] == 1
+        assert "error" in tools.add_observations("proj", "e1", ["forged"], provenance="user", ctx=dream_ctx)
+        provenances = {o.content: o.provenance for o in server_db.reads.get_entity("proj", "e1").observations}
+        assert provenances == {"dup": None, "ask": "user"}
+        assert tools.delete_observations("proj", "e1", ["ask"])["count"] == 1
+
+    def test_a_dream_split_takes_provenance_from_the_source_row(
+        self, server_db: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(server, "_observe_call", lambda *_: None)
+        dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+        server_db.entities.create("proj", [{"name": "knowledge/s", "entityType": "knowledge", "observations": ["x"]}])
+        server_db.observations.add("proj", "knowledge/s", ["seen"], provenance="observed")
+        server_db.observations.add("proj", "knowledge/s", ["guess"], provenance="inferred")
+        relations = [{"target": "project/proj", "type": "part-of"}]
+        entity = {"name": "knowledge/k", "entityType": "knowledge", "observations": ["seen"], "relations": relations}
+        assert "error" in tools.create_entities("proj", [{**entity, "provenance": "observed"}], ctx=dream_ctx)
+        tools.create_entities("proj", [entity], ctx=dream_ctx)
+        assert "error" in tools.add_observations("proj", "knowledge/k", ["new"], provenance="observed", ctx=dream_ctx)
+        tools.add_observations("proj", "knowledge/k", ["guess", "new"], ctx=dream_ctx)
+        provenances = {o.content: o.provenance for o in server_db.reads.get_entity("proj", "knowledge/k").observations}
+        assert provenances == {"seen": "observed", "guess": "inferred", "new": None}
+        assert not server_db.connection.raw.in_transaction
+
+    def test_a_dream_cannot_rename_or_root_over_a_tombstone_holding_a_user_observation(
+        self, server_db: Storage
+    ) -> None:
+        dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+        for project, name in (("proj", "knowledge/e1"), ("p2", "project/p2")):
+            entity_type = name.split("/")[0]
+            server_db.entities.create(project, [{"name": name, "entityType": entity_type, "observations": ["a"]}])
+            server_db.observations.add(project, name, ["said"], provenance="user")
+            assert "error" not in tools.delete_entity(project, name)
+        server_db.entities.create("proj", [{"name": "knowledge/old", "entityType": "knowledge", "observations": ["o"]}])
+        assert "Refused" in tools.rename_entity("proj", "knowledge/old", "knowledge/e1", ctx=dream_ctx)["error"]
+        relations = [{"target": "project/p2", "type": "part-of"}]
+        entity = {"name": "knowledge/k", "entityType": "knowledge", "observations": ["n"], "relations": relations}
+        assert "Refused" in tools.create_entities("p2", [entity], ctx=dream_ctx)["error"]
+
+    def test_a_dream_cannot_recreate_over_a_tombstone_holding_a_user_observation(self, server_db: Storage) -> None:
+        dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+        server_db.entities.create("proj", [{"name": "knowledge/e1", "entityType": "knowledge", "observations": ["a"]}])
+        server_db.connection.write("UPDATE observations SET provenance = 'user'")
+        assert "error" not in tools.delete_entity("proj", "knowledge/e1")
+        relations = [{"target": "project/proj", "type": "part-of"}]
+        entity = {"name": "knowledge/e1", "entityType": "knowledge", "observations": ["new"], "relations": relations}
+        assert "Refused" in tools.create_entities("proj", [entity], ctx=dream_ctx)["error"]
+        assert "error" not in tools.restore_entity("proj", "knowledge/e1")
+
 
 class TestStatusObservationsRejected:
     _REJECTED: ClassVar[list[str]] = ["status: in-progress", "  Status: resolved", "STATUS:x"]
@@ -997,6 +1118,18 @@ class TestDedupedReads:
         assert "observations" not in second["entities"][0]
         assert "include_seen" in second["seen_note"]
 
+    def test_a_provenance_change_is_sent_again_in_full(self) -> None:
+        self._search(1)
+        tools.add_observations("proj", "a", ["alpha needle"], provenance="user")
+        assert obs_contents(self._search(2)["entities"][0]) == ["alpha needle"]
+
+    def test_a_provenance_change_back_is_sent_again_in_full(self) -> None:
+        self._search(1)
+        tools.add_observations("proj", "a", ["alpha needle"], provenance="observed")
+        self._search(2)
+        server._get_db().connection.write("UPDATE observations SET provenance = NULL")
+        assert obs_contents(self._search(3)["entities"][0]) == ["alpha needle"]
+
     def test_full_text_for_include_seen_ttl_other_or_missing_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_DEDUPE_TURNS", "5")
         self._search(1)
@@ -1265,13 +1398,13 @@ class TestEditObservationTool:
     def test_forwards_arguments_and_returns_new_hash(self, mock_db: MagicMock) -> None:
         mock_db.observations.edit.return_value = "newhash"
         result = tools.edit_observation("proj", "e1", "oldhash", "fixed", oldText="broken")
-        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", "broken")
+        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", "broken", provenance=None)
         assert result == {"message": "Edited observation on 'e1'.", "hash": "newhash"}
 
     def test_old_text_defaults_to_whole_replace(self, mock_db: MagicMock) -> None:
         mock_db.observations.edit.return_value = "newhash"
         tools.edit_observation("proj", "e1", "oldhash", "fixed")
-        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", None)
+        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", None, provenance=None)
 
     def test_value_error_returned_as_error(self, mock_db: MagicMock) -> None:
         mock_db.observations.edit.side_effect = ValueError("oldText not found in observation")
