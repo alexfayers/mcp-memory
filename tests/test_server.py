@@ -737,7 +737,10 @@ class TestDreamUserObservationGuards:
         assert provenances == {"dup": None, "ask": "user"}
         assert tools.delete_observations("proj", "e1", ["ask"])["count"] == 1
 
-    def test_a_dream_split_takes_provenance_from_the_source_row(self, server_db: Storage) -> None:
+    def test_a_dream_split_takes_provenance_from_the_source_row(
+        self, server_db: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(server, "_observe_call", lambda *_: None)
         dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
         server_db.entities.create("proj", [{"name": "knowledge/s", "entityType": "knowledge", "observations": ["x"]}])
         server_db.observations.add("proj", "knowledge/s", ["seen"], provenance="observed")
@@ -750,6 +753,7 @@ class TestDreamUserObservationGuards:
         tools.add_observations("proj", "knowledge/k", ["guess", "new"], ctx=dream_ctx)
         provenances = {o.content: o.provenance for o in server_db.reads.get_entity("proj", "knowledge/k").observations}
         assert provenances == {"seen": "observed", "guess": "inferred", "new": None}
+        assert not server_db.connection.raw.in_transaction
 
     def test_a_dream_cannot_rename_or_root_over_a_tombstone_holding_a_user_observation(
         self, server_db: Storage

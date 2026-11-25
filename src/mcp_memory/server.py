@@ -673,6 +673,18 @@ def _create_entities(
     return {"message": f"Created {len(entities)} entities in project '{project}'.", **_link_note(project, names)}
 
 
+def _create_dream_entities(project: str, entities: _ENTITY_INPUTS) -> dict[str, str]:
+    """Create a dream's entities, refusing its provenance and giving its copies their source's provenance."""
+    if any(e.get("provenance") is not None for e in entities):
+        raise ValueError(_DREAM_PROVENANCE_REFUSAL)
+    db = _get_db()
+    with db.transaction():
+        result = _create_entities(project, entities)
+        for e in entities:
+            db.observations.inherit_provenance(project, str(e["name"]), cast("list[str]", e.get("observations") or []))
+    return result
+
+
 @mcp.tool(
     description=CREATE_ENTITIES_DESC,
     annotations=ToolAnnotations(
@@ -691,14 +703,7 @@ def create_entities(
     try:
         if not dream.is_dream_request(ctx):
             return _create_entities(project, entities)
-        if any(e.get("provenance") is not None for e in entities):
-            raise ValueError(_DREAM_PROVENANCE_REFUSAL)
-        result = _create_entities(project, entities)
-        for e in entities:
-            _get_db().observations.inherit_provenance(
-                project, str(e["name"]), cast("list[str]", e.get("observations") or [])
-            )
-        return result
+        return _create_dream_entities(project, entities)
     except Exception as e:
         return {"error": str(e)}
 
@@ -1282,9 +1287,10 @@ def _add_observations(
     db = _get_db()
     if is_dream and provenance is not None:
         raise ValueError(_DREAM_PROVENANCE_REFUSAL)
-    hashes = db.observations.add(project, entity_name, observations, provenance)
-    if is_dream:
-        db.observations.inherit_provenance(project, entity_name, observations)
+    with db.transaction():
+        hashes = db.observations.add(project, entity_name, observations, provenance)
+        if is_dream:
+            db.observations.inherit_provenance(project, entity_name, observations)
     return hashes
 
 
