@@ -716,6 +716,25 @@ class TestDreamUserObservationGuards:
         assert provenances == {"dup": None, "ask": "user", "forged": None}
         assert tools.delete_observations("proj", "e1", ["ask"])["count"] == 1
 
+    def test_a_dream_split_keeps_observed_and_inferred_provenance(self, server_db: Storage) -> None:
+        dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+        relations = [{"target": "project/proj", "type": "part-of"}]
+        entity = {"name": "knowledge/k", "entityType": "knowledge", "observations": ["seen"], "relations": relations}
+        tools.create_entities("proj", [{**entity, "provenance": "observed"}], ctx=dream_ctx)
+        tools.add_observations("proj", "knowledge/k", ["guess"], provenance="inferred", ctx=dream_ctx)
+        provenances = {o.content: o.provenance for o in server_db.reads.get_entity("proj", "knowledge/k").observations}
+        assert provenances == {"seen": "observed", "guess": "inferred"}
+
+    def test_a_dream_cannot_recreate_over_a_tombstone_holding_a_user_observation(self, server_db: Storage) -> None:
+        dream_ctx = SimpleNamespace(headers={dream.DREAM_CALLER_HEADER: "1"})
+        server_db.entities.create("proj", [{"name": "knowledge/e1", "entityType": "knowledge", "observations": ["a"]}])
+        server_db.connection.write("UPDATE observations SET provenance = 'user'")
+        assert "error" not in tools.delete_entity("proj", "knowledge/e1")
+        relations = [{"target": "project/proj", "type": "part-of"}]
+        entity = {"name": "knowledge/e1", "entityType": "knowledge", "observations": ["new"], "relations": relations}
+        assert "Refused" in tools.create_entities("proj", [entity], ctx=dream_ctx)["error"]
+        assert "error" not in tools.restore_entity("proj", "knowledge/e1")
+
 
 class TestStatusObservationsRejected:
     _REJECTED: ClassVar[list[str]] = ["status: in-progress", "  Status: resolved", "STATUS:x"]

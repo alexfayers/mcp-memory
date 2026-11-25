@@ -177,6 +177,18 @@ class ObservationRepository:
         ):
             raise ValueError("Refused: a dream may not remove or demote a user-provenance observation.")
 
+    def refuse_user_tombstone_purge(self, project: str, names: Sequence[str]) -> None:
+        """Raise ValueError if creating any of names would purge a soft-deleted entity holding a user observation."""
+        row = self._conn.query_one(
+            "SELECT e.name FROM entities e JOIN projects p ON e.project_id = p.id "
+            "JOIN observations o ON o.entity_id = e.id "
+            "WHERE p.name = ? AND e.deleted_at IS NOT NULL AND o.provenance = 'user' "
+            f"AND e.name IN ({placeholders(len(names))})",
+            (project, *names),
+        )
+        if row is not None:
+            raise ValueError(f"Refused: a dream may not replace deleted '{row['name']}', which holds user data.")
+
     def trim_to_outcome(
         self, project: str, entity_name: str, keep_hashes: list[str], *, protect_corrections: bool = False
     ) -> list[str]:

@@ -682,7 +682,8 @@ def create_entities(
     """Create or update entities with observations, enforcing relation requirements; a dream's provenance is dropped."""
     try:
         if dream.is_dream_request(ctx):
-            entities = [{k: v for k, v in e.items() if k != "provenance"} for e in entities]
+            _get_db().observations.refuse_user_tombstone_purge(project, [str(e.get("name", "")) for e in entities])
+            entities = [{k: v for k, v in e.items() if (k, v) != ("provenance", "user")} for e in entities]
         return _create_entities(project, entities)
     except Exception as e:
         return {"error": str(e)}
@@ -1276,11 +1277,11 @@ def add_observations(
     provenance: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, object]:
-    """Append deduplicated observations to an existing entity; a dream's provenance is dropped."""
+    """Append deduplicated observations to an existing entity; a dream's user provenance is dropped."""
     try:
         _reject_status_observations(observations)
         db = _get_db()
-        provenance = None if dream.is_dream_request(ctx) else provenance
+        provenance = None if provenance == "user" and dream.is_dream_request(ctx) else provenance
         hashes = db.observations.add(project, entityName, observations, provenance)
         return {
             "message": f"Added {len(hashes)} observations to '{entityName}'.",
