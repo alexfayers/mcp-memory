@@ -691,6 +691,17 @@ class TestAddObservationsTool:
         observations = tools.get_entity_with_relations("proj", "e2")["entity"]["observations"]
         assert {o["content"]: o.get("from") for o in observations} == {"a": "user", "b": "observed"}
 
+    def test_a_merge_of_an_unknown_observation_into_an_inferred_one_keeps_unknown(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["b"]}])
+        tools.add_observations("proj", "e1", ["a"], provenance="inferred")
+        tools.merge_observations("proj", "e1", hash_observation("b"), hash_observation("a"))
+        server_db.entities.create("proj", [{"name": "e2", "entityType": "task", "observations": ["c"]}])
+        inferred = {"name": "e3", "entityType": "task", "observations": ["c"], "provenance": "inferred"}
+        server_db.entities.create("proj", [inferred])
+        tools.merge_entities("proj", "e2", "e3")
+        assert [o.provenance for o in server_db.reads.get_entity("proj", "e1").observations] == [None]
+        assert [o.provenance for o in server_db.reads.get_entity("proj", "e3").observations] == [None]
+
     def test_create_entities_schema_lists_provenance(self) -> None:
         tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "create_entities")
         entity_schema = tool.input_schema["properties"]["entities"]["items"]["properties"]

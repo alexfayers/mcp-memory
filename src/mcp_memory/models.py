@@ -41,9 +41,14 @@ def validate_provenance(provenance: str | None) -> None:
         raise ValueError(f"Invalid provenance '{provenance}'. Must be one of: {VALID_PROVENANCES}")
 
 
+def outranks(new: str | None, old: str | None) -> bool:
+    """Return whether new ranks above old, as a merge compares them."""
+    return _PROVENANCE_RANK[new] > _PROVENANCE_RANK[old]
+
+
 def raises_provenance(new: str | None, old: str | None) -> bool:
-    """Return whether new is a known provenance that outranks old."""
-    return new is not None and _PROVENANCE_RANK[new] > _PROVENANCE_RANK[old]
+    """Return whether new is a known provenance that outranks old, as a write compares them."""
+    return new is not None and outranks(new, old)
 
 
 VALID_RELATION_TYPES = (

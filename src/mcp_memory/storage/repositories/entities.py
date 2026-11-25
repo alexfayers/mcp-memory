@@ -8,7 +8,7 @@ from mcp_memory.config import get_strict_policy_enabled
 from mcp_memory.models import (
     STRUCTURAL_RELATION_TYPES,
     VALID_STATUSES,
-    raises_provenance,
+    outranks,
     validate_provenance,
     validate_vote,
 )
@@ -322,8 +322,7 @@ class EntityRepository:
                 [
                     (source_provenance[r["content"]], r["id"])
                     for r in self._conn.query_all(live_sql, (target_id,))
-                    if r["content"] in source_provenance
-                    and raises_provenance(source_provenance[r["content"]], r["provenance"])
+                    if r["content"] in source_provenance and outranks(source_provenance[r["content"]], r["provenance"])
                 ],
             )
             obs = self._conn.write(

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from mcp_memory.config import get_max_observation_chars
 from mcp_memory.models import (
     is_protected_observation,
+    outranks,
     raises_provenance,
     validate_provenance,
     validate_vote,
@@ -278,7 +279,7 @@ class ObservationRepository:
         target = self._find_by_hash(entity_id, entity_name, target_hash, "Target observation")
 
         with self._conn.transaction():
-            kept = source if raises_provenance(source["provenance"], target["provenance"]) else target
+            kept = source if outranks(source["provenance"], target["provenance"]) else target
             self._conn.write(
                 "UPDATE observations SET vote_score = ?, provenance = ? "
                 "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
