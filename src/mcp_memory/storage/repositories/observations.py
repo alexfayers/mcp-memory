@@ -71,7 +71,11 @@ class ObservationRepository:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
 
         observations = [strip_today_date_prefix(obs) for obs in observations]
-        existing = {obs.content: obs for obs in self.for_entity(entity_id)}
+        rows = self._conn.query_all(
+            "SELECT id, content, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL",
+            (entity_id,),
+        )
+        existing = {row["content"] for row in rows}
         new_observations = [obs for obs in observations if obs not in existing]
 
         with self._conn.transaction():
@@ -80,12 +84,11 @@ class ObservationRepository:
                 [(entity_id, obs, hash_observation(obs), provenance) for obs in new_observations],
             )
             self._conn.write_many(
-                "UPDATE observations SET provenance = ? "
-                "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
+                "UPDATE observations SET provenance = ? WHERE id = ?",
                 [
-                    (provenance, entity_id, o.content_hash)
-                    for c in observations
-                    if (o := existing.get(c)) and raises_provenance(provenance, o.provenance)
+                    (provenance, row["id"])
+                    for row in rows
+                    if row["content"] in observations and raises_provenance(provenance, row["provenance"])
                 ],
             )
 

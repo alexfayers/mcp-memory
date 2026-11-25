@@ -702,6 +702,16 @@ class TestAddObservationsTool:
         assert [o.provenance for o in server_db.reads.get_entity("proj", "e1").observations] == [None]
         assert [o.provenance for o in server_db.reads.get_entity("proj", "e3").observations] == [None]
 
+    def test_a_duplicate_write_compares_each_row_by_id(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        server_db.connection.write(
+            "INSERT INTO observations (entity_id, content, content_hash, provenance) "
+            "SELECT entity_id, content, content_hash, 'user' FROM observations"
+        )
+        tools.add_observations("proj", "e1", ["a"], provenance="observed")
+        provenances = sorted(o.provenance for o in server_db.reads.get_entity("proj", "e1").observations)
+        assert provenances == ["observed", "user"]
+
     def test_create_entities_schema_lists_provenance(self) -> None:
         tool = next(t for t in asyncio.run(server.mcp.list_tools()) if t.name == "create_entities")
         entity_schema = tool.input_schema["properties"]["entities"]["items"]["properties"]
