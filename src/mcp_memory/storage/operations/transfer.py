@@ -214,6 +214,7 @@ class Transfer:
                         "WHERE entity_id = ? AND content_hash = ? AND deleted_at IS NULL",
                         (obs["provenance"], entity_id, content_hash),
                     )
+                    existing[content_hash] = obs["provenance"]
                 continue
             existing[content_hash] = obs.get("provenance")
             new_count += 1
