@@ -6,22 +6,22 @@ from .config import get_dedupe_turns
 
 _MAX_WINDOWS = 256
 SEEN_NOTE = "seen: hashes of observations returned earlier in this context. Pass include_seen=true for full text."
-_windows: dict[str, dict[tuple[str | None, str | None], int]] = {}
+_windows: dict[str, dict[str, tuple[int, str | None]]] = {}
 
 
-def _dedupe_entity(entity: dict[str, Any], sent: dict[tuple[str | None, str | None], int], turn: int, ttl: int) -> bool:
+def _dedupe_entity(entity: dict[str, Any], sent: dict[str, tuple[int, str | None]], turn: int, ttl: int) -> bool:
     """Replace the entity's observations sent within ttl turns by their hashes, recording the rest as sent.
 
-    An observation is keyed by its hash and provenance, so a provenance change is sent again in full.
+    Each hash keeps the provenance last sent, so a provenance change is sent again in full.
     """
     observations = entity["observations"]
     keys = [(o.get("content_hash"), o.get("from")) for o in observations]
-    seen_keys = {key for key in keys if key in sent and turn - sent[key] < ttl}
-    sent.update({key: turn for key in keys if key[0] and key not in seen_keys})
-    if not seen_keys:
+    seen = {h for h, src in keys if h in sent and sent[h][1] == src and turn - sent[h][0] < ttl}
+    sent.update({h: (turn, src) for h, src in keys if h and h not in seen})
+    if not seen:
         return False
-    kept = [o for o, key in zip(observations, keys, strict=True) if key not in seen_keys]
-    entity.update(seen=[key[0] for key in keys if key in seen_keys], observations=kept)
+    kept = [o for o, (h, _) in zip(observations, keys, strict=True) if h not in seen]
+    entity.update(seen=[h for h, _ in keys if h in seen], observations=kept)
     if not kept:
         del entity["observations"]
     return True

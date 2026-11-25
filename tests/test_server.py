@@ -1107,6 +1107,13 @@ class TestDedupedReads:
         tools.add_observations("proj", "a", ["alpha needle"], provenance="user")
         assert obs_contents(self._search(2)["entities"][0]) == ["alpha needle"]
 
+    def test_a_provenance_change_back_is_sent_again_in_full(self) -> None:
+        self._search(1)
+        tools.add_observations("proj", "a", ["alpha needle"], provenance="observed")
+        self._search(2)
+        server._get_db().connection.write("UPDATE observations SET provenance = NULL")
+        assert obs_contents(self._search(3)["entities"][0]) == ["alpha needle"]
+
     def test_full_text_for_include_seen_ttl_other_or_missing_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_DEDUPE_TURNS", "5")
         self._search(1)
