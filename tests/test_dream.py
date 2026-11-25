@@ -727,6 +727,8 @@ class TestParseDreamResult:
         stdout = _dream_payload("- finding", model="global.anthropic.claude-opus-4-8-v1:0")
         with pytest.raises(RuntimeError, match="unexpected model"):
             dream.parse_dream_result(stdout, expected_model=_MODEL)
+        with pytest.raises(RuntimeError, match="unexpected model"):
+            dream.parse_dream_result(_dream_payload("x", model="claude-opus-5-5"), expected_model="claude-opus-5")
 
     def test_rejects_error_payload(self) -> None:
         stdout = _dream_payload("boom", is_error=True)
@@ -815,7 +817,20 @@ class TestSpawnProgress:
         ])
         status = dream_status.read_status()
         assert status is not None
-        assert status["progress"] == {"reads": 1, "calls": []}
+        assert (status["progress"]["reads"], status["progress"]["calls"]) == (1, [])
+
+    def test_turns_are_counted_from_claude_messages_and_pi_turn_starts(self) -> None:
+        dream_status.clear()
+        dream_status.record_pass_start("heavy")
+        self._spawn([
+            json.dumps({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": "hi"}]}}),
+            json.dumps({"type": "assistant", "message": {"id": "m1", "content": []}}),
+            json.dumps({"type": "assistant", "message": {"id": "m2", "content": []}}),
+            json.dumps({"type": "turn_start"}),
+        ])
+        status = dream_status.read_status()
+        assert status is not None
+        assert status["progress"]["turns"] == 3
 
     def test_times_out_a_silent_agent(self) -> None:
         script = "import time; time.sleep(30)"
@@ -1246,6 +1261,7 @@ class TestPiBackend:
     ) -> None:
         monkeypatch.setattr(dream, "_pi_bin", lambda: "/usr/bin/pi")
         monkeypatch.setattr(dream, "_claude_bin", lambda: "/usr/bin/claude")
+        monkeypatch.setattr(dream, "get_dream_model", lambda: _MODEL)
         commands: list[list[str]] = []
 
         async def fake_spawn(
