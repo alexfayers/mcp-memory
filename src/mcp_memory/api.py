@@ -65,10 +65,15 @@ def _entity_lines(entity: Entity) -> tuple[str, str]:
     if entity.status:
         details.append(entity.status)
     brief = f"- {entity.name} ({', '.join(details)})"
+    observation = _first_observation(entity)
+    return brief, f"{brief}: {observation}" if observation else brief
+
+
+def _first_observation(entity: Entity) -> str:
+    """Return an entity's first observation, shortened, or an empty string when it has none."""
     if not entity.observations:
-        return brief, brief
-    observation = textwrap.shorten(entity.observations[0].content, _START_OBSERVATION_CHARS, placeholder="...")
-    return brief, f"{brief}: {observation}"
+        return ""
+    return textwrap.shorten(entity.observations[0].content, _START_OBSERVATION_CHARS, placeholder="...")
 
 
 def _recent_memory(db: Storage, repo: str, left: int | None) -> str:
@@ -144,6 +149,11 @@ def _recall_triggers(db: Storage, args: dict[str, Any]) -> dict[str, Any]:
     return {"etag": etag} if args["etag"] == etag else {"etag": etag, "rows": rows}
 
 
+def _surface_relevant(db: Storage, args: dict[str, Any]) -> list[dict[str, str]]:
+    entities = db.reads.surface_relevant(args["projects"], args["message"], limit=args["limit"])
+    return [{"project": e.project_name or "", "entity": e.name, "content": _first_observation(e)} for e in entities]
+
+
 async def _eval(db: Storage, args: dict[str, Any]) -> dict[str, Any]:
     return asdict(await evaluate_cached_async(db, args["k"], args["since"], args["min_content_tokens"]))
 
@@ -160,6 +170,7 @@ _OPERATIONS: dict[str, Callable[[Storage, dict[str, Any]], Any]] = {
     "import": _import,
     "dream-heavy": lambda _db, _args: heavy_dreaming_runnable(),
     "recall-triggers": _recall_triggers,
+    "surface-relevant": _surface_relevant,
 }
 
 

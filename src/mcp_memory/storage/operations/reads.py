@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import math
 import sqlite3
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
-from mcp_memory.storage.pure.ranking import score_row
+from mcp_memory.storage.pure.ranking import (
+    SURFACE_MAX_MESSAGE_CHARS,
+    SURFACE_MIN_SCORE,
+    SURFACE_MIN_TERMS,
+    score_row,
+    surface_terms,
+)
 from mcp_memory.storage.pure.rows import build_entity
 from mcp_memory.storage.pure.sql import parse_date, placeholders
 from mcp_memory.storage.services.fts import sanitize_fts_query
@@ -83,6 +90,22 @@ _SEARCH_SQL = (
     "JOIN projects p ON e.project_id = p.id "
     "WHERE entities_fts MATCH ? AND e.deleted_at IS NULL"
 )
+
+
+def _ranked(rows: list[sqlite3.Row], now: datetime | None = None) -> list[sqlite3.Row]:
+    """Return search rows best first by recency- and vote-weighted BM25, measured from ``now`` or the current time."""
+    at = now or datetime.now(tz=UTC)
+    scores = {
+        int(row["id"]): score_row(
+            rank=row["rank"],
+            updated_at=row["updated_at"],
+            entity_type=row["entity_type"],
+            vote_score=int(row["vote_score"]),
+            now=at,
+        )
+        for row in rows
+    }
+    return sorted(rows, key=lambda row: (-scores[int(row["id"])], int(row["id"])))
 
 
 class Reads:
@@ -230,23 +253,7 @@ class Reads:
         sql += filter_sql
         params.extend(filter_params)
 
-        rows = self._conn.query_all(sql, params)
-
-        if now is None:
-            now = datetime.now(tz=UTC)
-        scored: list[tuple[float, sqlite3.Row]] = []
-        for row in rows:
-            score = score_row(
-                rank=row["rank"],
-                updated_at=row["updated_at"],
-                entity_type=row["entity_type"],
-                vote_score=int(row["vote_score"]),
-                now=now,
-            )
-            scored.append((score, row))
-
-        scored.sort(key=lambda x: (-x[0], int(x[1]["id"])))
-        top_rows = [row for _, row in scored[:limit]]
+        top_rows = _ranked(self._conn.query_all(sql, params), now)[:limit]
 
         entities = [
             self._hydrate_entity(
@@ -278,6 +285,38 @@ class Reads:
             "relations": [rel for group in by_project.values() for rel in group],
             "relations_by_project": by_project,
         }
+
+    def surface_relevant(self, projects: list[str], message: str, *, limit: int) -> list[Entity]:
+        """Return up to ``limit`` entities that strongly match a message, each with its top observation.
+
+        Matches are ranked as ``search`` ranks them. A match is strong when its BM25 score reaches
+        SURFACE_MIN_SCORE times the square root of the message's word count, so a long message needs
+        a stronger match than a short one, and when its name after the last "/" or its top observation
+        holds SURFACE_MIN_TERMS of the message's terms. Only the first SURFACE_MAX_MESSAGE_CHARS of the
+        message are matched. Archived entities are excluded.
+        """
+        message = message[:SURFACE_MAX_MESSAGE_CHARS]
+        sanitized = sanitize_fts_query(message)
+        if not sanitized:
+            return []
+        filter_sql, filter_params = _search_nodes_filters(projects, None, None, None, None)
+        floor = SURFACE_MIN_SCORE * math.sqrt(len(message.split()))
+        rows = [
+            row
+            for row in self._conn.query_all(_SEARCH_SQL + filter_sql, [sanitized, *filter_params])
+            if -row["rank"] >= floor
+        ]
+        terms = surface_terms(message)
+        strong: list[Entity] = []
+        for row in _ranked(rows):
+            entity = self._hydrate_entity(row, row["id"], max_observation_chars=0, project_name=row["project_name"])
+            name = entity.name.rsplit("/", 1)[-1]
+            shown = " ".join([name, *(observation.content for observation in entity.observations)])
+            if len(terms & surface_terms(shown)) >= SURFACE_MIN_TERMS:
+                strong.append(entity)
+            if len(strong) == limit:
+                break
+        return strong
 
     def recent(
         self,

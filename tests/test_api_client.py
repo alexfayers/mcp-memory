@@ -85,6 +85,25 @@ class TestRoute:
         assert api_client.call("import", args)["entities_new"] == 1
         assert dest.entities.exists_in("task/t", "proj")
 
+    def test_surface_relevant_returns_each_strong_match_with_its_first_observation(
+        self, store: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(server, "_db", store)
+        fillers = [
+            {"name": f"task/filler-{index}", "entityType": "task", "observations": ["chore"]} for index in range(20)
+        ]
+        target = {"name": "task/visualise-rebuild", "entityType": "task", "observations": ["Rebuild the visualiser."]}
+        store.entities.create("proj", [*fillers, target])
+
+        args = {"projects": ["proj"], "message": "visualise rebuild", "limit": 5}
+        assert api_client.call("surface-relevant", args) == [
+            {
+                "project": "proj",
+                "entity": "task/visualise-rebuild",
+                "content": "Rebuild the visualiser.",
+            }
+        ]
+
     def test_recall_triggers_send_rows_only_when_the_etag_changes(
         self, store: Storage, monkeypatch: pytest.MonkeyPatch
     ) -> None:

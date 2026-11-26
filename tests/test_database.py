@@ -801,6 +801,53 @@ class TestArchivedExclusion:
         assert [e.name for e in result["entities"]] == ["a"]
 
 
+class TestSurfaceRelevant:
+    @pytest.fixture
+    def graph(self, store: Storage) -> Storage:
+        fillers = [
+            {
+                "name": f"task/filler-{index}",
+                "entityType": "task",
+                "observations": [f"routine chore {index} for the team"],
+            }
+            for index in range(200)
+        ]
+        target = {
+            "name": "task/visualise-rebuild",
+            "entityType": "task",
+            "observations": ["Rebuild the graph visualiser with filters."],
+        }
+        store.entities.create("proj", [*fillers, target])
+        return store
+
+    def test_only_a_strong_match_is_surfaced(self, graph: Storage) -> None:
+        assert [e.name for e in graph.reads.surface_relevant(["proj"], "visualise rebuild", limit=5)] == [
+            "task/visualise-rebuild"
+        ]
+        assert graph.reads.surface_relevant(["proj"], "ok thanks, the team can rebuild it later", limit=5) == []
+
+    def test_a_short_reply_that_hits_one_name_word_is_not_surfaced(self, graph: Storage) -> None:
+        assert graph.reads.surface_relevant(["proj"], "visualise", limit=5) == []
+
+    def test_the_type_prefix_of_a_name_is_not_a_matched_term(self, graph: Storage) -> None:
+        palette = {"name": "pattern/graph-colours", "entityType": "pattern", "observations": ["Use a safe palette."]}
+        graph.entities.create("proj", [palette])
+        assert graph.reads.surface_relevant(["proj"], "pattern colours", limit=5) == []
+
+    def test_terms_only_in_a_later_observation_are_not_surfaced(self, graph: Storage) -> None:
+        hidden = {
+            "name": "task/hidden",
+            "entityType": "task",
+            "observations": ["Unrelated first note.", "Kumquat ledger reconciliation."],
+        }
+        graph.entities.create("proj", [hidden])
+        assert graph.reads.surface_relevant(["proj"], "kumquat ledger", limit=5) == []
+
+    def test_a_match_past_the_message_cap_is_ignored(self, graph: Storage) -> None:
+        message = "x" * 100_000 + " visualise rebuild"
+        assert graph.reads.surface_relevant(["proj"], message, limit=5) == []
+
+
 class TestDeleteEntityPurgesSurfaced:
     def test_delete_entity_removes_its_surfaced_rows(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "task/a", "entityType": "task", "observations": ["x"]}])
