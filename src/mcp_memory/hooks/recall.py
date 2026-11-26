@@ -34,11 +34,13 @@ _MAX_RECALLED = 2
 _GIT_TIMEOUT_SECONDS = 2.0
 _BLAMED_COMMIT = re.compile(r"^([0-9a-f]{40,64}) \d+ \d+", re.MULTILINE)
 _SEARCH_BLOCK = re.compile(r"------- SEARCH\n(.*?)\n=======", re.DOTALL)
+_SURFACE_CANDIDATES = 10
 _RECALL_BLOCK = (
     "RECALLED MEMORY: this call matches a recall trigger. Check the call against these observations,"
     " then run it again if it still holds. The repeat call runs:\n{observations}"
 )
 _RECALL_NOTE = "RECALLED MEMORY: these observations match what you are working on:\n{observations}"
+_SURFACE_NOTE = "RELEVANT MEMORY: these entities match the user's message. Read them if they bear on it:\n{entities}"
 
 
 @dataclass(frozen=True)
@@ -225,6 +227,29 @@ def recall(task_id: str, event: Mapping[str, object], kind: str) -> str | None:
         return None
 
 
+def surface(task_id: str, message: str, projects: list[str]) -> str | None:
+    """Return a note naming the entities that strongly match the message and the task has not yet seen.
+
+    At most _MAX_RECALLED entities are named, best match first, and each is recorded as seen.
+    A blank message or an unreachable server surfaces nothing.
+    """
+    if not message.strip():
+        return None
+    args = {"projects": projects, "message": message, "limit": _SURFACE_CANDIDATES}
+    try:
+        matches = api_client.call("surface-relevant", args, timeout=_SERVER_TIMEOUT_SECONDS)
+    except api_client.ApiError:
+        return None
+    by_key = {f"{match['project']}:{match['entity']}": match for match in matches}
+    taken = take_unseen(task_id, "surfaced", list(by_key), _MAX_RECALLED)
+    return _SURFACE_NOTE.format(entities=_lines([by_key[key] for key in taken])) if taken else None
+
+
+def _lines(rows: list[TriggerRow]) -> str:
+    """Return one line per row, naming its entity and project, then its content."""
+    return "\n".join(f"- `{row['entity']}` ({row['project']}): {row['content']}" for row in rows)
+
+
 def _recall(task_id: str, event: Mapping[str, object], kind: str) -> str | None:
     rows = trigger_rows()
     if not any(row.get("kind") == kind for row in rows):
@@ -238,6 +263,5 @@ def _recall(task_id: str, event: Mapping[str, object], kind: str) -> str | None:
     if not taken:
         return None
     shown = [by_hash[key] for key in taken]
-    observations = "\n".join(f"- `{row['entity']}` ({row['project']}): {row['content']}" for row in shown)
     template = _RECALL_BLOCK if kind == "pattern" else _RECALL_NOTE
-    return template.format(observations=observations)
+    return template.format(observations=_lines(shown))

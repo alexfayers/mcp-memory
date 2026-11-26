@@ -48,6 +48,8 @@ The `MEMORY CHECK` reminder comes after a weighted count of 8 since the first fi
 
 Observation triggers (see `add_observations`) apply to every agent, including subagents and calls nested in a wrapper tool. A `pattern` trigger blocks the first matching call once per agent, and the repeat call runs. A `path` trigger adds its observations after the first read or edit of a matching file, a `mention` trigger adds them when a turn ends, on frontends with a transcript reader, and a `change` trigger adds them before an edit of lines blamed to its commit. An edit that names no replaced text counts every line of the file. The plugin keeps each commit's patch-id next to the database. Each observation is shown once per agent, at most 2 per match, best-voted first. The plugin keeps a copy of the trigger rows next to the database and asks the server at most every 5 seconds whether they changed. It matches only the first 20,000 characters of a call's input or a turn's text.
 
+On each user message, the plugin names up to 2 entities from the task's project and `global` that strongly match it, ranked as `search_nodes` ranks them, each with its first observation. A match is strong when its BM25 score reaches 7 times the square root of the message's word count, and its name (without the type prefix, such as `task/`) or first observation holds at least 2 of the message's words of 3 or more letters, other than common words. A short reply such as "ok thanks" names nothing. Only the first 20,000 characters of a message are matched. Each entity is named once per agent.
+
 Another cline-hooks plugin can add workspace markers by implementing the `memory_workspace_markers` hook. It returns a `frozenset[str]` of directory names:
 
 ```python
