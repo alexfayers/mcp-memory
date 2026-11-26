@@ -25,6 +25,7 @@ Unless a `Startup block: recent memory` is present, `read_graph`. Then `search_n
 - Every observation write MUST pass `provenance`: `user` for what the user said, asked, decided or corrected, `observed` for what you read or ran, `inferred` for your own unchecked conclusion.
 - MUST put facts of different provenance in separate observations. A delegate's claim keeps its observed or inferred tag, and an untagged one is `inferred`.
 - `edit_observation` MUST pass `provenance` when the edit changes the claim's origin.
+- Recording a do-not-run gotcha (a command that must not run, or only under a condition): MUST pass `triggers: [{kind: "pattern", value: "<regex over the call input>"}]` so the hook blocks the first matching call.
 - MUST render a presented `vote_score` as stars (e.g. ★3), not the raw number.
 - Before you {{TOOL_COMPLETE}}: MUST record lasting facts only. MUST record reusable lessons in `global`. MUST set the task `resolved`.
 
