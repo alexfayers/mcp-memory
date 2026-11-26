@@ -25,7 +25,7 @@ from cline_hooks.core.vocabulary import BOOKKEEPING_TOOLS, FILE_EDIT_TOOLS, MESS
 from cline_hooks.frontends.claude_code.protocol import ClaudeCodeProtocol
 from cline_hooks.plugins.startup_blocks import RESERVE_CHARS, StartupBlocksPlugin
 
-from mcp_memory import nudge_count, server
+from mcp_memory import api_client, nudge_count, server
 from mcp_memory.api import _recent_memory, _safe_project
 from mcp_memory.hooks.plugin import (
     _DATE_PREFIX_WARNING,
@@ -49,7 +49,8 @@ from mcp_memory.hooks.plugin import (
     _workspace_entity_note,
     resolve_project_for_path,
 )
-from mcp_memory.hooks.tracker import _MEMORY_BLOCK_THRESHOLD, _MEMORY_WARN_RATIO, get_scope
+from mcp_memory.hooks.recall import surface
+from mcp_memory.hooks.tracker import _MEMORY_BLOCK_THRESHOLD, _MEMORY_WARN_RATIO, get_scope, set_scope
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage import open_writable
 from mcp_memory.tool_names import READ_ONLY_TOOLS
@@ -2376,3 +2377,32 @@ class TestRecallTriggers:
         source.write_text("one\n")
 
         assert self._edit(live_plugin, source, "one") is None
+
+
+class TestSurfaceRelevant:
+    @pytest.fixture(autouse=True)
+    def _serve(self, live_server: None, store: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "_db", store)
+        fillers = [
+            {"name": f"task/filler-{index}", "entityType": "task", "observations": ["chore"]} for index in range(20)
+        ]
+        target = {"name": "task/visualise-rebuild", "entityType": "task", "observations": ["Rebuild the visualiser."]}
+        store.entities.create("proj", [*fillers, target])
+
+    def test_a_strong_match_is_noted_once_per_task(self, live_plugin: MemoryPlugin) -> None:
+        set_scope("t1", "proj")
+        with patch("mcp_memory.hooks.plugin.should_nudge", return_value=False):
+            first = live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="visualise rebuild")
+            repeat = live_plugin.on_hook("UserPromptSubmit", task_id="t1", message="visualise rebuild")
+        assert first is not None
+        assert "- `task/visualise-rebuild` (proj): Rebuild the visualiser." in first.notes[0]
+        assert repeat is None
+
+    def test_a_blank_message_makes_no_server_call(self) -> None:
+        with patch("mcp_memory.hooks.recall.api_client.call") as call:
+            assert surface("t1", "  ", ["proj"]) is None
+        call.assert_not_called()
+
+    def test_an_unreachable_server_surfaces_nothing(self) -> None:
+        with patch("mcp_memory.hooks.recall.api_client.call", side_effect=api_client.ApiError):
+            assert surface("t1", "visualise rebuild", ["proj"]) is None

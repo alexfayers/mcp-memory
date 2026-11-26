@@ -31,7 +31,7 @@ from cline_hooks.plugins.startup_blocks import StartupBlock
 
 from mcp_memory import api_client, nudge_count
 from mcp_memory.config import get_memory_url, get_workspace_markers
-from mcp_memory.hooks.recall import recall
+from mcp_memory.hooks.recall import recall, surface
 from mcp_memory.hooks.review_tracker import (
     record_write,
     reset as reset_review,
@@ -859,13 +859,19 @@ class MemoryPlugin(HooksPlugin):
         return HookResult(notes=[note]) if note else None
 
     def _on_user_prompt_submit(self, **kwargs: object) -> HookResult | None:
-        """Nudge on a memory-review backlog or on a profanity/shouting frustration signal."""
+        """Name memories that match the message, and nudge on a review backlog or a frustration signal."""
+        task_id = str(kwargs.get("task_id", ""))
+        message = str(kwargs.get("message", ""))
         notes: list[str] = []
+        scope = _task_scope(task_id, _str_list(kwargs.get("workspace_roots", [])))
+        surfaced = surface(task_id, message, [scope, "global"])
+        if surfaced:
+            notes.append(surfaced)
         if should_nudge() and not _server_runs_heavy_dreams():
             reset_review()
             nudge_count.record(NudgeKind.REVIEW)
             notes.append(_MEMORY_REVIEW_NUDGE)
-        frustration_note = self._frustration_note(str(kwargs.get("message", "")))
+        frustration_note = self._frustration_note(message)
         if frustration_note:
             notes.append(frustration_note)
         return HookResult(notes=notes) if notes else None
