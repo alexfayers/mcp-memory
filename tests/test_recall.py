@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 pytest.importorskip("cline_hooks")
 
-from mcp_memory.hooks.recall import Facts, facts, matches
+from mcp_memory.hooks.recall import Facts, facts, matches, recall, trigger_rows
+from mcp_memory.models import validate_triggers
+
+if TYPE_CHECKING:
+    from tests.conftest import FakeApi
 
 
 def _row(kind: str, value: str, content_hash: str = "h1", tool: str = "") -> dict[str, object]:
@@ -48,3 +54,25 @@ class TestMatches:
         call = Facts(tool="execute_command", input_json='{"command": "rm -rf build"}')
         rows = [_row("pattern", "("), _row("pattern", "rm"), _row("pattern", "build")]
         assert len(matches(rows, call, "pattern")) == 1
+
+
+class TestTriggerRows:
+    def test_a_fresh_local_copy_is_used_without_asking_the_server(self, api: FakeApi) -> None:
+        api.results["recall-triggers"] = {"etag": "e1", "rows": [_row("mention", "x")]}
+        assert trigger_rows() == trigger_rows() == [_row("mention", "x")]
+        assert [op for op, _ in api.calls] == ["recall-triggers"]
+
+    def test_a_malformed_row_fails_open(self, api: FakeApi) -> None:
+        api.results["recall-triggers"] = {"etag": "e1", "rows": [{"kind": "pattern"}]}
+        assert recall("t1", {"tool_name": "execute_command", "parameters": {}}, "pattern") is None
+
+
+class TestLimits:
+    def test_a_match_past_the_input_cap_is_ignored(self) -> None:
+        call = Facts(tool="execute_command", input_json="x" * 100_000 + "needle")
+        assert matches([_row("pattern", "needle")], call, "pattern") == []
+
+    @pytest.mark.parametrize("value", ["(a+)+$", "(x*)*", "a" * 1000])
+    def test_a_risky_regex_is_refused(self, value: str) -> None:
+        with pytest.raises(ValueError, match="trigger"):
+            validate_triggers([{"kind": "pattern", "value": value}])

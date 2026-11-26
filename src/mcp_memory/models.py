@@ -44,6 +44,9 @@ def validate_provenance(provenance: str | None) -> None:
 # The action each trigger kind takes when it matches.
 TRIGGER_ACTIONS = {"pattern": "block", "path": "inject", "mention": "inject"}
 _REGEX_TRIGGER_KINDS = frozenset({"pattern", "mention"})
+MAX_TRIGGER_CHARS = 200
+# A quantified group that itself holds a quantifier, such as (a+)+, can backtrack exponentially.
+_NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*}][^()]*\)[+*{]")
 
 
 def validate_triggers(triggers: list[dict[str, str]]) -> list[tuple[str, str, str, str]]:
@@ -61,7 +64,11 @@ def validate_triggers(triggers: list[dict[str, str]]) -> list[tuple[str, str, st
             raise ValueError("A trigger needs a non-empty value")
         if tool and kind != "pattern":
             raise ValueError("Only a pattern trigger may name a tool")
+        if len(value) > MAX_TRIGGER_CHARS:
+            raise ValueError(f"A trigger value must be at most {MAX_TRIGGER_CHARS} characters")
         if kind in _REGEX_TRIGGER_KINDS:
+            if _NESTED_QUANTIFIER.search(value):
+                raise ValueError(f"Invalid {kind} trigger regex '{value}': nested quantifiers can hang the hook")
             try:
                 re.compile(value)
             except re.error as exc:

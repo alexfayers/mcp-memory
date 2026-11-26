@@ -8,6 +8,7 @@ from fnmatch import fnmatchcase
 import json
 from pathlib import Path, PurePosixPath
 import re
+import time
 from typing import TYPE_CHECKING
 
 from cline_hooks.core.parameters import FileEditParameters, McpToolUse, ReadParameters
@@ -25,10 +26,12 @@ if TYPE_CHECKING:
 TriggerRow = dict[str, object]
 
 _SERVER_TIMEOUT_SECONDS = 1.0
+_REFRESH_SECONDS = 5.0
+_MAX_MATCHED_CHARS = 20_000
 _MAX_RECALLED = 2
 _RECALL_BLOCK = (
     "RECALLED MEMORY: this call matches a recall trigger. Check the call against these observations,"
-    " then run it again if it still holds:\n{observations}"
+    " then run it again if it still holds. The repeat call runs:\n{observations}"
 )
 _RECALL_NOTE = "RECALLED MEMORY: these observations match what you are working on:\n{observations}"
 
@@ -83,8 +86,8 @@ def _row_matches(row: TriggerRow, found: Facts) -> bool:
         return any(_path_matches(path, value) for path in found.paths)
     try:
         if row["kind"] == "mention":
-            return re.search(value, found.text) is not None
-        return row["tool"] in {"", found.tool} and re.search(value, found.input_json) is not None
+            return re.search(value, found.text[:_MAX_MATCHED_CHARS]) is not None
+        return row["tool"] in {"", found.tool} and re.search(value, found.input_json[:_MAX_MATCHED_CHARS]) is not None
     except re.error:
         return False
 
@@ -106,22 +109,26 @@ def _cache_path() -> Path:
 def trigger_rows() -> list[TriggerRow]:
     """Return every trigger row, refreshing the local copy only when the server's etag changes.
 
-    An unreachable server or an unreadable copy leaves the last known rows, or none.
+    The server is asked at most once per _REFRESH_SECONDS. An unreachable server or an unreadable copy
+    leaves the last known rows, or none.
     """
+    path = _cache_path()
     try:
-        cached = json.loads(_cache_path().read_text())
+        cached = json.loads(path.read_text())
+        fresh = time.time() - path.stat().st_mtime < _REFRESH_SECONDS
     except (OSError, ValueError):
-        cached = {}
+        cached, fresh = {}, False
     if not isinstance(cached, dict):
         cached = {}
-    try:
-        reply = api_client.call("recall-triggers", {"etag": cached.get("etag")}, timeout=_SERVER_TIMEOUT_SECONDS)
-    except api_client.ApiError:
-        reply = {}
-    if isinstance(reply, dict) and "rows" in reply:
-        cached = reply
+    if not fresh:
+        try:
+            reply = api_client.call("recall-triggers", {"etag": cached.get("etag")}, timeout=_SERVER_TIMEOUT_SECONDS)
+        except api_client.ApiError:
+            reply = {}
+        if isinstance(reply, dict) and "rows" in reply:
+            cached = reply
         with contextlib.suppress(OSError):
-            write_json_atomic(_cache_path(), cached)
+            write_json_atomic(path, cached)
     rows = cached.get("rows", [])
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
@@ -131,6 +138,13 @@ def recall(task_id: str, event: Mapping[str, object], kind: str) -> str | None:
 
     At most _MAX_RECALLED observations are returned, best-voted first, and each is recorded as seen.
     """
+    try:
+        return _recall(task_id, event, kind)
+    except (KeyError, TypeError, ValueError, OSError):
+        return None
+
+
+def _recall(task_id: str, event: Mapping[str, object], kind: str) -> str | None:
     rows = trigger_rows()
     if not any(row.get("kind") == kind for row in rows):
         return None
