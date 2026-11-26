@@ -10,6 +10,7 @@ import pytest
 from mcp_memory import api, cli, server
 from mcp_memory.audit import audit_graph, propose_plan
 from mcp_memory.models import Relation
+from mcp_memory.storage.pure.rows import hash_observation
 from mcp_memory.storage.services.ids import (
     get_entity_id,
     get_or_create_project_id,
@@ -632,6 +633,56 @@ class TestProposePlan:
         )
         (step,) = (s for s in self._plan(store, "proj") if s.get("tool") == "create_relations")
         assert (step["arguments"]["relations"][0]["target"], step["needs_review"]) == ("project/proj", False)  # type: ignore[index]
+
+
+def _seed_labelled(store: Storage, *rows: tuple[str, str | None, str]) -> None:
+    """Store each (content, provenance, created_at) row on task/labels, bypassing the write-time strip."""
+    store.entities.create("proj", [{"name": "task/labels", "entityType": "task", "observations": ["seed"]}])
+    entity_id = _entity_id(store, "task/labels")
+    with store.connection.transaction():
+        store.connection.write("DELETE FROM observations WHERE entity_id = ?", (entity_id,))
+        for content, provenance, created_at in rows:
+            store.connection.write(
+                "INSERT INTO observations (entity_id, content, content_hash, provenance, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (entity_id, content, hash_observation(content), provenance, created_at),
+            )
+
+
+def _contents(store: Storage) -> set[str]:
+    return {o.content for o in store.reads.get_entity("proj", "task/labels").observations}
+
+
+class TestRedundantLabels:
+    def test_audit_lists_labels_that_repeat_the_date_or_provenance(self, store: Storage) -> None:
+        _seed_labelled(
+            store,
+            ("User decision on 26 Nov: Use uv", "user", "2026-11-26 10:00:00"),
+            ("Design preference (26 Nov): dark mode", None, "2026-11-26 10:00:00"),
+            ("2026-11-20 11:14Z: deploy ran", "observed", "2026-11-20 11:14:00"),
+            ("Observed: cache is cold", "observed", "2026-11-26 10:00:00"),
+            ("Observed: tests are slow", "inferred", "2026-11-26 10:00:00"),
+            ("The cert expires 2027-01-01", "observed", "2026-11-26 10:00:00"),
+            ("User prefers tabs", "user", "2026-11-26 10:00:00"),
+        )
+
+        report = api._audit(store, {"project": "proj", "plan": False})
+
+        assert {f["cleaned"] for f in report["redundant_labels"]} == {
+            "Use uv",
+            "Design preference: dark mode",
+            "deploy ran",
+            "cache is cold",
+        }
+        assert report["dated_labels"] == []
+
+    def test_a_date_other_than_the_creation_day_needs_review(self, store: Storage) -> None:
+        _seed_labelled(store, ("2026-01-05: kickoff", None, "2026-11-26 10:00:00"))
+
+        report = api._audit(store, {"project": "proj", "plan": False})
+
+        assert report["redundant_labels"] == []
+        assert [f["cleaned"] for f in report["dated_labels"]] == ["kickoff"]
 
 
 class TestAuditCommand:

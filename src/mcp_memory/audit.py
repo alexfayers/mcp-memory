@@ -14,7 +14,7 @@ import sqlite3
 from typing import TYPE_CHECKING, cast
 
 from .models import is_protected_observation
-from .storage.pure.rows import build_observation
+from .storage.pure.rows import build_observation, labels_match_day, strip_redundant_labels
 
 if TYPE_CHECKING:
     from .models import Observation
@@ -191,6 +191,23 @@ def _scan_relations(rows: list[sqlite3.Row]) -> tuple[list[dict[str, object]], l
     return relation_violations, star_graph_tasks
 
 
+def _scan_labels(rows: list[sqlite3.Row]) -> dict[str, list[dict[str, object]]]:
+    """Split observations with a redundant leading label into safe ones and ones whose date may be a fact."""
+    found: dict[str, list[dict[str, object]]] = {"redundant_labels": [], "dated_labels": []}
+    for row in rows:
+        cleaned, labels = strip_redundant_labels(row["content"], row["provenance"])
+        if labels:
+            key = "redundant_labels" if labels_match_day(labels, row["created_at"]) else "dated_labels"
+            found[key].append({
+                "name": row["name"],
+                "project": row["project"],
+                "content_hash": row["content_hash"],
+                "content": row["content"],
+                "cleaned": cleaned,
+            })
+    return found
+
+
 def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
     """Build the structural-hygiene report for one project scope, or all when project is None.
 
@@ -208,6 +225,10 @@ def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
     entity_findings = _scan_entities(entity_rows)
     relation_violations, star_graph_tasks = _scan_relations(relation_rows)
 
+    observation_rows = db.connection.query_all(
+        _OBSERVATION_SQL + ("" if project is None else " AND p.name = ?"), entity_params
+    )
+
     scope_rows = db.connection.query_all(_SCOPE_COUNT_SQL)
     ghost_scopes = [r["project"] for r in scope_rows if r["n"] == 0 and (project is None or r["project"] == project)]
 
@@ -217,6 +238,7 @@ def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
         "relation_violations": relation_violations,
         "star_graph_tasks": star_graph_tasks,
         **entity_findings,
+        **_scan_labels(observation_rows),
     }
 
 
