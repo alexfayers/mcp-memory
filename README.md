@@ -23,7 +23,7 @@
 | src/mcp\_memory/hooks/plugin.py                      |      549 |       27 |     95% |176-177, 301, 303, 331, 479, 718-719, 724-732, 754, 798, 854, 857-859, 870, 877-881, 936 |
 | src/mcp\_memory/hooks/recall.py                      |      105 |        1 |     99% |       122 |
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
-| src/mcp\_memory/hooks/tracker.py                     |      138 |        2 |     99% |  130, 209 |
+| src/mcp\_memory/hooks/tracker.py                     |      143 |        0 |    100% |           |
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
 | src/mcp\_memory/metrics.py                           |       86 |        0 |    100% |           |
 | src/mcp\_memory/migrations/\_\_init\_\_.py           |        0 |        0 |    100% |           |
@@ -67,7 +67,7 @@
 | src/mcp\_memory/usefulness.py                        |       73 |        2 |     97% |     51-52 |
 | src/mcp\_memory/visualise.py                         |      184 |        5 |     97% |166, 235-236, 309, 313 |
 | tests/\_\_init\_\_.py                                |       43 |        1 |     98% |        85 |
-| tests/conftest.py                                    |       48 |        0 |    100% |           |
+| tests/conftest.py                                    |       53 |        0 |    100% |           |
 | tests/eval/\_\_init\_\_.py                           |        0 |        0 |    100% |           |
 | tests/eval/badge\_endpoints.py                       |       27 |        1 |     96% |        48 |
 | tests/eval/compare\_baseline.py                      |      206 |        3 |     99% |123, 135, 349 |
@@ -103,7 +103,7 @@
 | tests/test\_dream.py                                 |      895 |        5 |     99% |506-507, 604, 1067, 1126 |
 | tests/test\_dream\_status.py                         |      254 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      331 |        0 |    100% |           |
-| tests/test\_hooks\_plugin.py                         |     1146 |       66 |     94% |1709-1714, 1719-1722, 1727-1735, 1746-1749, 1778-1781, 1823-1826, 1830-1833, 1837-1841, 1845-1847, 1852-1854, 1859-1864, 1868-1869, 1873-1875, 1880-1888 |
+| tests/test\_hooks\_plugin.py                         |     1162 |       66 |     94% |1710-1715, 1720-1723, 1728-1736, 1747-1750, 1779-1782, 1824-1827, 1831-1834, 1838-1842, 1846-1848, 1853-1855, 1860-1865, 1869-1870, 1874-1876, 1881-1889 |
 | tests/test\_metrics.py                               |      183 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_nudge\_count.py                          |       12 |        0 |    100% |           |
@@ -120,10 +120,10 @@
 | tests/test\_telemetry\_contract.py                   |       11 |        0 |    100% |           |
 | tests/test\_tool\_annotations.py                     |       17 |        0 |    100% |           |
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
-| tests/test\_tracker.py                               |       68 |        0 |    100% |           |
+| tests/test\_tracker.py                               |       88 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      661 |        0 |    100% |           |
-| **TOTAL**                                            | **17820** |  **489** | **97%** |           |
+| **TOTAL**                                            | **17866** |  **487** | **97%** |           |
 
 
 ## Setup coverage badge

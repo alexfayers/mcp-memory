@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_f0f369cffe3001fc_recall_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.5">coverage.py v7.17.5</a>,
-            created at 2026-11-26 15:36 +0000
+            created at 2026-11-26 15:57 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -1033,12 +1033,12 @@
     <p class="run"><span class="n"><a id="t951" href="#t951">951</a></span><span class="t">        <span class="key">if</span> <span class="nam">_is_file_edit</span><span class="op">(</span><span class="nam">tool_name</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t952" href="#t952">952</a></span><span class="t">            <span class="nam">mark_edited</span><span class="op">(</span><span class="nam">task_id</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t953" href="#t953">953</a></span><span class="t">        <span class="key">if</span> <span class="nam">_is_wide_work</span><span class="op">(</span><span class="nam">task_id</span><span class="op">,</span> <span class="nam">tool_name</span><span class="op">,</span> <span class="nam">parameters</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t954" href="#t954">954</a></span><span class="t">            <span class="nam">mark_flag</span><span class="op">(</span><span class="nam">task_id</span><span class="op">,</span> <span class="nam">_WIDE_WORK</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t954" href="#t954">954</a></span><span class="t">            <span class="nam">mark_flag</span><span class="op">(</span><span class="nam">task_id</span><span class="op">,</span> <span class="nam">_WIDE_WORK</span><span class="op">,</span> <span class="nam">per_session</span><span class="op">=</span><span class="key">True</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t955" href="#t955">955</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t956" href="#t956">956</a></span><span class="t">        <span class="key">if</span> <span class="nam">_is_memory_write</span><span class="op">(</span><span class="nam">tool_name</span><span class="op">,</span> <span class="nam">parameters</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t957" href="#t957">957</a></span><span class="t">            <span class="key">if</span> <span class="key">not</span> <span class="nam">_is_error_result</span><span class="op">(</span><span class="nam">kwargs</span><span class="op">.</span><span class="nam">get</span><span class="op">(</span><span class="str">&quot;tool_result&quot;</span><span class="op">)</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t958" href="#t958">958</a></span><span class="t">                <span class="key">if</span> <span class="nam">_writes_task</span><span class="op">(</span><span class="nam">_task_scope</span><span class="op">(</span><span class="nam">task_id</span><span class="op">,</span> <span class="nam">workspace_roots</span><span class="op">)</span><span class="op">,</span> <span class="nam">tool_name</span><span class="op">,</span> <span class="nam">parameters</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t959" href="#t959">959</a></span><span class="t">                    <span class="nam">mark_flag</span><span class="op">(</span><span class="nam">task_id</span><span class="op">,</span> <span class="nam">_WROTE_TASK</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t959" href="#t959">959</a></span><span class="t">                    <span class="nam">mark_flag</span><span class="op">(</span><span class="nam">task_id</span><span class="op">,</span> <span class="nam">_WROTE_TASK</span><span class="op">,</span> <span class="nam">per_session</span><span class="op">=</span><span class="key">True</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t960" href="#t960">960</a></span><span class="t">                <span class="nam">reset</span><span class="op">(</span><span class="nam">task_id</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t961" href="#t961">961</a></span><span class="t">                <span class="nam">record_write</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t962" href="#t962">962</a></span><span class="t">            <span class="key">return</span> <span class="key">None</span>&nbsp;</span><span class="r"></span></p>
@@ -1072,7 +1072,7 @@
             <a class="nav" href="z_f0f369cffe3001fc_recall_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.5">coverage.py v7.17.5</a>,
-            created at 2026-11-26 15:36 +0000
+            created at 2026-11-26 15:57 +0000
         </p>
     </div>
 </footer>
