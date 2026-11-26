@@ -254,7 +254,7 @@ class TestVisualisePage:
         self, client: httpx.AsyncClient
     ) -> None:
         resp = await client.get("/visualise")
-        assert 'getElementById("project").onchange = () => { refitView = true;' in resp.text
+        assert "shownProject = project;\n  refitView = true;" in resp.text
         assert "if (refitView) { refitView = false; fitView(nodes, FIT_MS); }" in resp.text
         assert "{ lastUserInteract = Date.now(); refitView = false; }" in resp.text
         assert "function dragStart(e) {\n  refitView = false; svg.interrupt();" in resp.text

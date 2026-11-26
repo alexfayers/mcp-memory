@@ -23,3 +23,44 @@ test("shouldRefetchGraph reloads when the dream last pass changes", () => {
 test("shouldRefetchGraph waits for the first dream status before comparing passes", () => {
   assert.equal(lib.shouldRefetchGraph([], undefined, 6), false);
 });
+
+const entity = (name, entity_type, status, project = "p") => ({ name, entity_type, status, project });
+const names = list => list.map(e => e.name);
+const graph = [
+  entity("t1", "task", "in-progress"),
+  entity("t2", "task", "archived"),
+  entity("f1", "feature", null),
+  entity("t3", "task", "resolved", "q"),
+];
+
+test("filterEntities hides archived entities when no status chip is on", () => {
+  assert.deepEqual(names(lib.filterEntities(graph, {})), ["t1", "f1", "t3"]);
+});
+
+test("filterEntities shows archived entities only when the archived chip is on", () => {
+  assert.deepEqual(names(lib.filterEntities(graph, { statuses: new Set(["archived"]) })), ["t2"]);
+  assert.deepEqual(names(lib.filterEntities(graph, { statuses: new Set(["archived", "resolved"]) })), ["t2", "t3"]);
+});
+
+test("filterEntities narrows by project and type", () => {
+  assert.deepEqual(names(lib.filterEntities(graph, { project: "p" })), ["t1", "f1"]);
+  assert.deepEqual(names(lib.filterEntities(graph, { types: new Set(["task"]) })), ["t1", "t3"]);
+  assert.deepEqual(names(lib.filterEntities(graph, { project: "q", types: new Set(["feature"]) })), []);
+});
+
+test("formatRoute and parseRoute round-trip a project and an entity name with slashes", () => {
+  const hash = lib.formatRoute({ project: "my proj", name: "task/a b" });
+  assert.equal(hash, "#my%20proj/task/a%20b");
+  assert.deepEqual(lib.parseRoute(hash), { project: "my proj", name: "task/a b" });
+});
+
+test("parseRoute reads a project-only or empty hash", () => {
+  assert.deepEqual(lib.parseRoute("#global"), { project: "global", name: "" });
+  assert.deepEqual(lib.parseRoute(""), { project: "", name: "" });
+  assert.equal(lib.formatRoute({ project: "global", name: "" }), "#global");
+  assert.equal(lib.formatRoute({ project: "", name: "" }), "#");
+});
+
+test("parseRoute ignores a malformed escape", () => {
+  assert.deepEqual(lib.parseRoute("#%E0%A4%A"), { project: "", name: "" });
+});
