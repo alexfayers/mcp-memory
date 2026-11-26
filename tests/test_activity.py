@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mcp_memory import activity
+from mcp_memory import activity, tool_names
 from mcp_memory.models import Entity, Observation
 from mcp_memory.storage.pure.rows import hash_observation
 
@@ -105,6 +105,11 @@ class TestKindMapping:
             activity.clear()
             activity.record_tool(tool, {"project": "p"}, {"message": "ok"})
             assert activity.recent(0)[0]["kind"] == expected
+
+    @pytest.mark.parametrize("tool", tool_names.MUTATING_TOOLS)
+    def test_every_mutating_tool_records_a_write_kind(self, tool: str) -> None:
+        activity.record_tool(tool, {"project": "p"}, {"message": "ok"})
+        assert activity.recent(0)[0]["kind"] != "read"
 
     def test_unknown_tool_defaults_to_read(self) -> None:
         activity.record_tool("some_future_tool", {"project": "p"}, {"message": "ok"})

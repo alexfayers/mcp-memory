@@ -4,49 +4,54 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mcp-memory graph</title>
+<link rel="icon" href="data:,">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
+:root { --sidebar: 320px; --panel: 340px; --muted: #8b949e; }
+:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
+#entity-list li:focus-visible { outline-offset: -2px; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; overflow: hidden; }
-#controls { position: fixed; top: 12px; left: 12px; z-index: 10; display: flex; gap: 8px; align-items: center; }
 select, button { background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
 select:hover, button:hover { border-color: #58a6ff; }
-#status { position: fixed; top: 16px; right: 12px; font-size: 11px; color: #484f58; z-index: 10; }
-#panel { position: fixed; right: 0; top: 0; width: 340px; height: 100%; background: #161b22; border-left: 1px solid #30363d; padding: 16px; overflow-y: auto; transform: translateX(100%); transition: transform 0.2s; z-index: 10; }
+#panel { position: fixed; right: 0; top: 0; width: var(--panel); height: 100%; background: #161b22; border-left: 1px solid #30363d; padding: 16px; overflow-y: auto; transform: translateX(100%); transition: transform 0.2s; z-index: 10; }
 #panel.open { transform: translateX(0); }
 #panel h2 { font-size: 15px; margin-bottom: 4px; color: #58a6ff; word-break: break-all; }
-#panel h3 { font-size: 12px; color: #484f58; margin-bottom: 12px; }
+#panel h3 { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
 #panel .status-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #30363d; margin-bottom: 12px; }
 #panel .obs { font-size: 12px; line-height: 1.6; color: #8b949e; padding: 4px 0; border-bottom: 1px solid #21262d; display: flex; flex-direction: column; gap: 4px; }
 #panel .obs-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 #panel .obs-text { overflow-wrap: break-word; }
 #panel .obs-vote { display: flex; gap: 4px; align-items: center; flex-shrink: 0; opacity: 0; transition: opacity .1s; }
-#panel .obs:hover .obs-vote { opacity: 1; }
+#panel .obs:hover .obs-vote, #panel .obs:focus-within .obs-vote { opacity: 1; }
 #panel .obs-score { font-size: 11px; min-width: 18px; text-align: right; }
-#panel .obs-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color:#6e7681; border:1px solid #30363d; border-radius:6px; padding:0 4px; font-size:10px; flex-shrink:0; }
+#panel .obs-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); border:1px solid #30363d; border-radius:6px; padding:0 4px; font-size:10px; flex-shrink:0; }
 #panel .obs-from { border:1px solid currentColor; border-radius:6px; padding:0 4px; font-size:10px; flex-shrink:0; }
 #panel .obs-from.user { color:#58a6ff; }
 #panel .obs-from.observed { color:#3fb950; }
 #panel .obs-from.inferred { color:#d29922; }
-#panel .obs-date { color:#484f58; font-size:10px; flex-shrink:0; }
+#panel .obs-date { color: var(--muted); font-size:10px; flex-shrink:0; }
 #panel .obs-btn { padding: 0 6px; font-size: 11px; cursor: pointer; }
 #panel .obs.armed { outline: 1px solid #58a6ff; }
 #panel .obs.armed .obs-vote { opacity: 1; }
 #panel .obs-merge-btn.armed { color: #58a6ff; border-color: #58a6ff; }
-#panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #484f58; cursor: pointer; font-size: 18px; }
-svg { width: 100vw; height: 100vh; }
-#graph-canvas { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: none; }
+#panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; }
+svg, #graph-canvas { position: fixed; top: 0; left: var(--sidebar); width: calc(100vw - var(--sidebar) - var(--panel)); height: 100vh; }
+#graph-canvas { pointer-events: none; }
 svg.canvas-mode g { visibility: hidden; }
 .link { stroke-width: var(--link-px, 1px); }
+.link.hl { stroke: #58a6ff; stroke-opacity: 1; stroke-width: calc(2 * var(--link-px, 1px)); }
 svg.labels-off .link-label, svg.gradual-labels .node:not(.labelled) text:not(.search-badge) { display: none; }
 svg.gradual-labels .node.labelled text:not(.search-badge) { font-size: var(--label-px); }
-.link-label { font-size: 9px; fill: #484f58; pointer-events: none; }
+.link-label { font-size: 9px; fill: var(--muted); pointer-events: none; }
 .node circle { stroke-width: 1.5; cursor: pointer; }
 .node text { font-size: 10px; fill: #8b949e; pointer-events: none; }
 svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-weight: 600; fill: #c9d1d9; }
 .node.selected circle { stroke: #f0f6fc !important; stroke-width: 3; }
 .node.orphan circle { stroke: #f85149; stroke-dasharray: 4 2; }
-#legend { position: fixed; bottom: 12px; left: 12px; z-index: 10; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; font-size: 11px; }
-#legend h4 { font-size: 11px; color: #484f58; margin-bottom: 6px; }
+#legend { position: fixed; bottom: 12px; left: calc(var(--sidebar) + 12px); z-index: 10; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; font-size: 11px; max-height: calc(100vh - 24px); overflow-y: auto; }
+#legend summary { cursor: pointer; color: #8b949e; }
+#legend[open] summary { margin-bottom: 6px; }
+#legend h4 { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
 #legend .row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
 #legend .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 #legend .section { margin-top: 8px; }
@@ -58,7 +63,7 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 @keyframes feedin { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
 .node.activity circle { animation: glowpulse 1.5s ease-out; }
 .ripple { fill: none; pointer-events: none; }
-#activity { position: fixed; top: 54px; left: 12px; z-index: 10; width: 320px; max-width: 40vw;
+#activity { position: fixed; top: 12px; left: calc(var(--sidebar) + 12px); z-index: 10; width: 320px; max-width: 40vw;
   background: rgba(22,27,34,0.82); border: 1px solid #30363d; border-radius: 6px;
   backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
 #activity-head { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
@@ -67,38 +72,49 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 #activity-head .tally span { display: flex; align-items: center; gap: 3px; color: #8b949e; font-variant-numeric: tabular-nums; }
 #activity-head .tally i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 #feed { max-height: 34vh; overflow-y: auto; }
-#feed:empty::after { content: "waiting for memory activity..."; display: block; padding: 8px 12px; color: #484f58; font-style: italic; }
+#feed:empty::after { content: "waiting for memory activity..."; display: block; padding: 8px 12px; color: var(--muted); font-style: italic; }
 #feed .ev { display: flex; gap: 6px; align-items: baseline; padding: 4px 12px; border-left: 3px solid var(--c); animation: feedin 0.3s ease-out; }
-#feed .ev .t { color: #484f58; font-variant-numeric: tabular-nums; }
+#feed .ev .t { color: var(--muted); font-variant-numeric: tabular-nums; }
 #feed .ev .k { text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px; color: var(--c); flex-shrink: 0; }
 #feed .ev .n { color: #c9d1d9; word-break: break-all; flex: 1; }
-#feed .ev .tool { color: #484f58; }
-#controls-path { font-size: 11px; color: #6e7681; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 50vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#feed .ev .tool { color: var(--muted); }
+#sidebar { position: fixed; top: 0; left: 0; bottom: 0; width: var(--sidebar); z-index: 12; background: #161b22; border-right: 1px solid #30363d; display: flex; flex-direction: column; gap: 8px; padding: 12px; font-size: 12px; }
+#sidebar input[type="text"], #sidebar input[type="search"] { width: 100%; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+#sidebar input::placeholder { color: #8b949e; }
+#sidebar label { color: #8b949e; }
+#controls-path { font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#controls-path:empty { display: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { padding: 2px 8px; font-size: 11px; border-radius: 10px; }
+.chip[aria-pressed="true"] { background: #1f6feb; border-color: #58a6ff; color: #f0f6fc; }
+#list-summary { color: #8b949e; }
+#entity-list { list-style: none; overflow-y: auto; flex: 1; min-height: 0; border-top: 1px solid #21262d; }
+#entity-list li { padding: 5px 4px; border-bottom: 1px solid #21262d; cursor: pointer; }
+#entity-list li:hover, #entity-list li[aria-selected="true"] { background: rgba(88,166,255,0.12); }
+#entity-list .rank { color: #58a6ff; font-variant-numeric: tabular-nums; margin-right: 4px; }
+#entity-list .nm { color: #c9d1d9; word-break: break-all; }
+#entity-list .sub { color: #8b949e; display: block; }
+#entity-list .snip { color: #8b949e; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#sidebar-foot { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: #8b949e; font-size: 11px; }
+#home h2 { font-size: 15px; margin-bottom: 8px; color: #c9d1d9; }
+#home h4 { font-size: 12px; color: #c9d1d9; margin: 10px 0 2px; }
+#home .work { font-size: 12px; padding: 2px 0; }
+#home .work a { word-break: break-all; }
+#home .work .sub { color: #8b949e; font-size: 11px; display: block; }
+#p-project { font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+#panel a { color: #58a6ff; text-decoration: none; }
+#panel a:hover { text-decoration: underline; }
+#p-relations { margin-bottom: 12px; font-size: 12px; }
+#p-relations h4, #p-paths summary { font-size: 11px; color: #8b949e; margin: 6px 0 2px; }
+#p-relations a { display: block; word-break: break-all; padding: 1px 0; }
 #p-paths { margin-bottom: 12px; }
-#p-paths h4 { font-size: 11px; color: #484f58; margin-bottom: 4px; }
+#p-paths summary { cursor: pointer; }
 #p-paths .path { font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; padding: 2px 0; }
-#search { width: 200px; background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; font-size: 13px; }
-#search::placeholder { color: #484f58; }
-#search:focus { outline: none; border-color: #58a6ff; }
-#results { position: fixed; top: 44px; right: 12px; z-index: 11; width: 320px; max-width: 40vw;
-  background: rgba(22,27,34,0.92); border: 1px solid #30363d; border-radius: 6px;
-  backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; display: none; }
-#results.open { display: block; }
-#results-head { display: flex; align-items: baseline; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; color: #8b949e; }
-#results-head .count { margin-left: auto; color: #484f58; font-variant-numeric: tabular-nums; }
-#results-list { max-height: 70vh; overflow-y: auto; }
-#results-list:empty::after { content: "no matches"; display: block; padding: 8px 12px; color: #484f58; font-style: italic; }
-#results-list .hit { display: flex; gap: 8px; align-items: baseline; padding: 5px 12px; border-bottom: 1px solid #21262d; cursor: pointer; }
-#results-list .hit:hover { background: rgba(88,166,255,0.08); }
-#results-list .hit .rank { color: #58a6ff; font-variant-numeric: tabular-nums; flex-shrink: 0; width: 1.4em; text-align: right; }
-#results-list .hit .meta { flex: 1; min-width: 0; }
-#results-list .hit .nm { color: #c9d1d9; word-break: break-all; }
-#results-list .hit .sub { color: #484f58; }
-#results-list .hit .snip { color: #8b949e; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .node.search-hit circle:first-of-type { stroke: #58a6ff !important; stroke-width: 3; }
+svg.searching .node:not(.search-hit) { opacity: 0.25; }
 .search-ring { fill: none; stroke: #58a6ff; stroke-opacity: 0.9; pointer-events: none; }
 .search-badge { fill: #58a6ff; font-size: 9px; font-weight: 700; pointer-events: none; }
-#agent-panels { position: fixed; bottom: 12px; right: 12px; z-index: 10; width: 300px; max-width: 40vw;
+#agent-panels { position: fixed; bottom: 12px; right: calc(var(--panel) + 12px); z-index: 10; width: 300px; max-width: 40vw;
   max-height: calc(100vh - 24px); display: flex; flex-direction: column; gap: 8px;
   overflow-y: auto; }
 #dream { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
@@ -108,16 +124,16 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 #dream-head .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #484f58; flex-shrink: 0; }
 #dream-head.on .pill .dot { background: #bc8cff; box-shadow: 0 0 6px #bc8cff; }
 #dream-head.running .pill .dot { background: #bc8cff; box-shadow: 0 0 6px #bc8cff; animation: glowpulse 1.6s ease-in-out infinite; }
-#dream-head .idle { margin-left: auto; color: #6e7681; font-variant-numeric: tabular-nums; }
+#dream-head .idle { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 #dream-head.running .idle { color: #bc8cff; }
 #dream-body { padding: 6px 12px; }
 #dream-actions { display: flex; align-items: center; gap: 6px; padding: 4px 12px 8px; border-top: 1px solid #21262d; }
 #dream-actions button { padding: 2px 10px; font-size: 11px; }
 #dream-actions button:disabled { opacity: 0.5; cursor: default; }
-#dream-action-msg { color: #6e7681; font-size: 11px; }
+#dream-action-msg { color: var(--muted); font-size: 11px; }
 #dream-body .line { color: #8b949e; padding: 2px 0; }
 #dream-body .line .em { color: #c9d1d9; font-variant-numeric: tabular-nums; }
-#dream-body .line .why { color: #6e7681; }
+#dream-body .line .why { color: var(--muted); }
 #dream-body .line .pill { color: #bc8cff; border: 1px solid rgba(188,140,255,0.4); border-radius: 8px; padding: 0 6px; font-size: 11px; }
 #dream-operations { margin-top: 4px; max-height: 22vh; overflow-y: auto; }
 #dream-operations .dm { display: flex; gap: 6px; align-items: baseline; padding: 3px 0; border-top: 1px solid #21262d; cursor: pointer; }
@@ -125,18 +141,18 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 #dream-operations .dm .v { color: #d29922; font-weight: 700; flex-shrink: 0; }
 #dream-operations .dm .v.merge { color: #bc8cff; }
 #dream-operations .dm .v.edit { color: #58a6ff; }
-#dream-operations .dm .obs-tag { color: #6e7681; border: 1px solid #30363d; border-radius: 6px; padding: 0 4px; font-size: 10px; flex-shrink: 0; }
+#dream-operations .dm .obs-tag { color: var(--muted); border: 1px solid #30363d; border-radius: 6px; padding: 0 4px; font-size: 10px; flex-shrink: 0; }
 #dream-operations .dm .nm { color: #c9d1d9; word-break: break-all; }
-#dream-operations .dm .why { color: #6e7681; display: block; }
+#dream-operations .dm .why { color: var(--muted); display: block; }
 .node.demoted circle { stroke: #d29922; stroke-dasharray: 2 2; }
 .demoted-ring { fill: none; stroke: #d29922; stroke-opacity: 0.8; stroke-dasharray: 2 2; pointer-events: none; }
 #usage-trend { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
   backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
 #usage-trend-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
 #usage-trend-head .title { color: #8b949e; }
-#usage-trend-head .total { margin-left: auto; color: #6e7681; font-variant-numeric: tabular-nums; }
+#usage-trend-head .total { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 #usage-trend-body { max-height: 26vh; overflow-y: auto; padding: 4px 0; }
-#usage-trend-body:empty::after { content: "No calls recorded yet"; display: block; padding: 8px 12px; color: #484f58; font-style: italic; }
+#usage-trend-body:empty::after { content: "No calls recorded yet"; display: block; padding: 8px 12px; color: var(--muted); font-style: italic; }
 #usage-trend-body .ut { display: flex; align-items: center; gap: 8px; padding: 3px 12px; }
 #usage-trend-body .ut .nm { color: #c9d1d9; word-break: break-all; flex: 1; min-width: 0; }
 #usage-trend-body .ut .cnt { color: #58a6ff; font-variant-numeric: tabular-nums; flex-shrink: 0; }
@@ -146,7 +162,7 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
   backdrop-filter: blur(4px); overflow: hidden; font-size: 11px; }
 #eval-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid #21262d; }
 #eval-head .title { color: #8b949e; }
-#eval-head .qc { margin-left: auto; color: #6e7681; font-variant-numeric: tabular-nums; }
+#eval-head .qc { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 #eval-body { padding: 4px 0; }
 #eval-body .em { display: flex; align-items: baseline; gap: 8px; padding: 3px 12px; }
 #eval-body .em .lbl { color: #8b949e; flex: 1; min-width: 0; }
@@ -154,26 +170,35 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 #usage-trend-head, #eval-head, #dream-head { cursor: pointer; }
 #usage-trend.collapsed #usage-trend-body, #eval.collapsed #eval-body,
 #dream.collapsed #dream-body, #dream.collapsed #dream-operations, #dream.collapsed #dream-actions { display: none; }
-#usage-trend-head .caret, #eval-head .caret, #dream-head .caret { color: #6e7681; font-size: 10px; transition: transform 0.15s; display: inline-block; }
+#usage-trend-head .caret, #eval-head .caret, #dream-head .caret { color: var(--muted); font-size: 10px; transition: transform 0.15s; display: inline-block; }
 #usage-trend:not(.collapsed) #usage-trend-head .caret, #eval:not(.collapsed) #eval-head .caret,
 #dream:not(.collapsed) #dream-head .caret { transform: rotate(90deg); }
+@media (max-width: 767px) {
+  :root { --sidebar: 100vw; --panel: 100vw; }
+  svg, #graph-canvas, #legend, #activity, #agent-panels { display: none; }
+  #panel { display: none; }
+  body.detail-open #panel { display: block; z-index: 13; }
+}
 </style>
 </head>
 <body>
-<div id="controls">
-  <select id="project"><option value="">All projects</option></select>
-  <button id="refresh">Refresh</button>
-  <label style="font-size:12px;color:#484f58"><input type="checkbox" id="auto" checked> Auto (2s)</label>
-  <label style="font-size:12px;color:#484f58"><input type="checkbox" id="follow" checked> Follow activity</label>
-  <input id="search" type="text" placeholder="Search memory...">
-  <label style="font-size:12px;color:#484f58"><input type="checkbox" id="search-all"> all terms</label>
+<aside id="sidebar">
+  <input id="project" type="text" list="project-list" placeholder="All projects" aria-label="Project" autocomplete="off">
+  <datalist id="project-list"></datalist>
   <span id="controls-path"></span>
-</div>
-<div id="results">
-  <div id="results-head"><span>search results</span><span class="count" id="results-count"></span></div>
-  <div id="results-list"></div>
-</div>
-<div id="status"></div>
+  <input id="search" type="search" placeholder="Search memory (press /)" aria-label="Search memory">
+  <label><input type="checkbox" id="search-all"> match all terms</label>
+  <div id="type-chips" class="chips" role="group" aria-label="Entity type"></div>
+  <div id="status-chips" class="chips" role="group" aria-label="Status"></div>
+  <div id="list-summary" aria-live="polite"></div>
+  <ul id="entity-list" role="listbox" aria-label="Entities"></ul>
+  <button id="show-more" hidden>Show more</button>
+  <div id="sidebar-foot">
+    <button id="refresh">Refresh</button>
+    <label><input type="checkbox" id="follow" checked> Follow activity</label>
+    <span id="status"></span>
+  </div>
+</aside>
 <div id="activity">
   <div id="activity-head">
     <span class="pulse"></span><span>live activity</span>
@@ -181,7 +206,8 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
   </div>
   <div id="feed"></div>
 </div>
-<div id="legend">
+<details id="legend">
+  <summary>Legend</summary>
   <h4>Entity type</h4>
   <div id="legend-types"></div>
   <div class="section">
@@ -192,7 +218,7 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
     <h4>Activity</h4>
     <div id="legend-activity"></div>
   </div>
-</div>
+</details>
 <div id="agent-panels">
   <div id="usage-trend" class="collapsed">
     <div id="usage-trend-head">
@@ -224,30 +250,36 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
     </div>
   </div>
 </div>
-<div id="panel">
-  <button id="panel-close">&times;</button>
+<div id="panel" class="open">
+  <section id="home" aria-label="Open work"></section>
+  <section id="detail" hidden>
+  <button id="panel-close" aria-label="Close">&times;</button>
   <h2 id="p-name"></h2>
   <h3 id="p-type"></h3>
   <div id="p-status"></div>
-  <div id="p-created" style="font-size:11px;color:#484f58;margin-bottom:12px"></div>
+  <div id="p-created" style="font-size:11px;color: var(--muted);margin-bottom:12px"></div>
   <div id="p-votes" style="font-size:11px;margin-bottom:6px"></div>
   <div id="p-vote-buttons" style="margin-bottom:12px;display:flex;gap:8px">
     <button id="vote-up" style="padding:2px 10px;font-size:12px">+1</button>
     <button id="vote-down" style="padding:2px 10px;font-size:12px">-1</button>
   </div>
-  <div id="p-paths"></div>
+  <div id="p-project"></div>
+  <div id="p-relations"></div>
+  <details id="p-paths" hidden></details>
   <div id="p-obs"></div>
+  </section>
 </div>
 <svg></svg>
 <canvas id="graph-canvas" hidden></canvas>
 <script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="/visualise/lib.js"></script>
 <script>
 const TYPE_COLOURS = {
   project: "#58a6ff", feature: "#3fb950", task: "#d29922",
   "user-preferences": "#bc8cff", pattern: "#f778ba",
   knowledge: "#56d364"
 };
-const fallbackColour = "#8b949e";
+const fallbackColour = "#8b949e", MUTED_COLOUR = "#8b949e";
 const statusColours = {
   planned: "#484f58", "in-progress": "#d29922",
   blocked: "#f85149", resolved: "#3fb950", archived: "#484f58"
@@ -255,17 +287,18 @@ const statusColours = {
 const KIND_COLOURS = { read: "#58a6ff", create: "#3fb950", update: "#d29922", delete: "#f85149" };
 
 const svg = d3.select("svg");
-const width = () => window.innerWidth;
-const height = () => window.innerHeight;
+const width = () => svg.node().clientWidth || window.innerWidth;
+const height = () => svg.node().clientHeight || window.innerHeight;
 const g = svg.append("g");
 const linkLayer = g.append("g");
 const labelLayer = g.append("g");
 const nodeLayer = g.append("g");
 
-let lastUserInteract = 0, refitView = false, refitTicks = 0;
+let focusIds = null, lastUserInteract = 0, refitView = true, refitTicks = 0;
 const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, FIT_MS = 600, REFIT_TICKS = 10, ZOOM_MIN = 0.2, ZOOM_MAX = 4, ZOOM_FIT_MARGIN = 0.9, ZOOM_FLOOR = 0.01;
 const LARGE_GRAPH_NODES = 500, LINK_LABEL_MIN_ZOOM = FOLLOW_SCALE, NODE_LABELS_MIN = 12, NODE_LABELS_MAX = 300, NODE_LABELS_HARD_MAX = 1000, PROJECT_LABELS_MAX = 60, LABEL_ALL_ZOOM = 2.5, LABEL_CELL_WIDTHS = 16, LABEL_CELL_HEIGHTS = 1.4, LABEL_CHAR_EM = 0.56;
-const LINK_COLOUR = "#6e7681", LINK_OPACITY = 0.55, LINK_SCREEN_PX = 1.25;
+const SEARCH_DIM = 0.25, LINK_COLOUR = "#6e7681", LINK_HIGHLIGHT = "#58a6ff", LINK_OPACITY = 0.55, LINK_SCREEN_PX = 1.25;
+const touchesSelection = l => l.source.id === selectedNode || l.target.id === selectedNode;
 const DRAG_TICK_SHARE = 0.6, HIT_SLACK_PX = 4, NODE_RADIUS_MAX = 30;
 const canvas = document.getElementById("graph-canvas"), ctx = canvas.getContext("2d");
 let canvasMode = false, zoomMin = ZOOM_MIN, viewTransform = d3.zoomIdentity;
@@ -314,7 +347,7 @@ const nodeKey = (project, name) => project + "\u0000" + name;
 const connectedIds = relations => new Set(relations.flatMap(r => [nodeKey(r.project, r.source), nodeKey(r.project, r.target)]));
 
 const panel = document.getElementById("panel");
-document.getElementById("panel-close").onclick = () => { panel.classList.remove("open"); selectedNode = null; updateSelection(); };
+document.getElementById("panel-close").onclick = () => { location.hash = VisLib.formatRoute({ project: shownProject, name: "" }); };
 
 async function postVote(url, payload) {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -377,18 +410,22 @@ async function loadProjectPaths() {
   updateControlsPath();
 }
 
+let knownProjects = new Set();
+const selectedProject = () => knownProjects.has(document.getElementById("project").value) ? document.getElementById("project").value : "";
+
 function updateControlsPath() {
-  const project = document.getElementById("project").value;
-  const paths = project ? (pathsByProject[project] || []) : [];
+  const paths = shownProject ? (pathsByProject[shownProject] || []) : [];
   document.getElementById("controls-path").textContent = paths.join("  -  ");
 }
 
 async function loadProjects() {
   const res = await fetch("/api/projects");
   const projects = await res.json();
-  const sel = document.getElementById("project");
-  sel.innerHTML = '<option value="">All projects</option>' + projects.map(p => `<option value="${p}">${p}</option>`).join("");
+  knownProjects = new Set(projects);
+  const list = document.getElementById("project-list");
+  list.replaceChildren(...projects.map(p => Object.assign(document.createElement("option"), { value: p })));
   loadProjectPaths();
+  applyRoute();
   fetchGraph();
 }
 
@@ -411,20 +448,38 @@ function buildLegend() {
 }
 buildLegend();
 
+let graphLoad = null, graphStale = false;
 async function fetchGraph() {
-  const project = document.getElementById("project").value;
-  const url = project ? `/api/graph?project=${encodeURIComponent(project)}` : "/api/graph";
+  if (graphLoad) { graphStale = true; return graphLoad; }
+  graphLoad = loadGraph().finally(() => {
+    graphLoad = null;
+    if (graphStale) { graphStale = false; fetchGraph(); }
+  });
+  return graphLoad;
+}
+
+async function loadGraph() {
   try {
-    const res = await fetch(url);
-    const data = await res.json();
-    document.getElementById("status").textContent = `${data.entities.length} nodes, ${data.relations.length} edges`;
-    const connected = connectedIds(data.relations);
-    const orphanCount = data.entities.filter(e => !connected.has(nodeKey(e.project, e.name)) && e.entity_type !== "project").length;
-    if (orphanCount) document.getElementById("status").textContent += `, ${orphanCount} orphan${orphanCount > 1 ? "s" : ""}`;
-    const demotedCount = data.entities.filter(e => (e.vote_score || 0) < 0).length;
-    if (demotedCount) document.getElementById("status").textContent += `, ${demotedCount} demoted`;
-    if (JSON.stringify(data) !== JSON.stringify(currentData)) { currentData = data; render(data); }
+    const firstLoad = !currentData;
+    currentData = await (await fetch("/api/graph")).json();
+    buildTypeChips();
+    showGraph();
+    if (firstLoad) applyRoute(); else { renderList(); renderHome(); }
   } catch (e) { document.getElementById("status").textContent = "error: " + e.message; }
+}
+
+function showGraph() {
+  const project = shownProject;
+  const data = project
+    ? { entities: currentData.entities.filter(e => e.project === project), relations: currentData.relations.filter(r => r.project === project) }
+    : currentData;
+  document.getElementById("status").textContent = `${data.entities.length} nodes, ${data.relations.length} edges`;
+  const connected = connectedIds(data.relations);
+  const orphanCount = data.entities.filter(e => !connected.has(nodeKey(e.project, e.name)) && e.entity_type !== "project").length;
+  if (orphanCount) document.getElementById("status").textContent += `, ${orphanCount} orphan${orphanCount > 1 ? "s" : ""}`;
+  const demotedCount = data.entities.filter(e => (e.vote_score || 0) < 0).length;
+  if (demotedCount) document.getElementById("status").textContent += `, ${demotedCount} demoted`;
+  render(data);
 }
 
 const nodeRadius = d => 5 + Math.min((relCount.get(d.id) || 0) * 2, NODE_RADIUS_MAX - 5);
@@ -576,7 +631,31 @@ function render(data) {
   applyDemotedRings();  // flag nodes the dream (or a manual vote) demoted
 }
 
-function selectNode(d) { selectedNode = d.id; showPanel(d); updateSelection(); }
+function selectNode(d) { location.hash = VisLib.formatRoute(d); }
+function openEntity(d) {
+  selectedNode = nodeKey(d.project, d.name); showPanel(d); updateSelection();
+  const near = new Set([selectedNode, ...links.filter(touchesSelection).flatMap(l => [l.source.id, l.target.id])]);
+  refitView = false;
+  if (simulation && simulation.alpha() > simulation.alphaMin()) focusIds = near;
+  else fitView(nodes.filter(n => near.has(n.id)), FIT_MS);
+}
+function closePanel() {
+  document.body.classList.remove("detail-open");
+  panelDatum = null; selectedNode = null; updateSelection();
+  document.getElementById("detail").hidden = true;
+  document.getElementById("home").hidden = false;
+  renderHome();
+}
+
+function renderHome() {
+  if (!currentData || panelDatum) return;
+  const groups = VisLib.openWork(currentData.entities, shownProject);
+  document.getElementById("home").innerHTML = `<h2>Open work</h2>` + (groups.length ? groups.map(g =>
+    `<h4>${escapeHtml(g.project)}</h4>` + g.entities.map(e =>
+      `<div class="work"><a href="${escapeHtml(VisLib.formatRoute(e))}">${escapeHtml(e.name)}</a>`
+      + `<span class="sub">${escapeHtml(e.status)} · updated ${escapeHtml((e.updated_at || "").slice(0, 10))}</span></div>`).join("")).join("")
+    : `<p class="work">Nothing in progress or blocked.</p>`);
+}
 
 const SLOW_DRAW_MS = 20, SLOW_DRAW_SKIP = 2;
 let lastDrawAt = 0, drawGap = 0, drewLastTick = false;
@@ -671,9 +750,15 @@ function drawCanvas() {
   });
   ctx.stroke();
   ctx.globalAlpha = 1;
+  if (selectedNode) {
+    ctx.strokeStyle = LINK_HIGHLIGHT; ctx.lineWidth = 2 * linkPx();
+    ctx.beginPath();
+    links.filter(touchesSelection).forEach(l => { ctx.moveTo(l.source.x, l.source.y); ctx.lineTo(l.target.x, l.target.y); });
+    ctx.stroke();
+  }
   ctx.textBaseline = "alphabetic";
   if (!linkLabelsHidden()) {
-    ctx.font = `9px ${CANVAS_FONT}`; ctx.fillStyle = "#484f58";
+    ctx.font = `9px ${CANVAS_FONT}`; ctx.fillStyle = MUTED_COLOUR;
     links.forEach(l => {
       if (outcode(l.source.x, l.source.y) & outcode(l.target.x, l.target.y)) return;
       ctx.fillText(l.type, (l.source.x + l.target.x) / 2, (l.source.y + l.target.y) / 2);
@@ -682,6 +767,7 @@ function drawCanvas() {
   const visible = nodes.filter(d => !outcode(d.x, d.y));
   visible.forEach(d => {
     const r = nodeRadius(d);
+    ctx.globalAlpha = searchRankByName.size && !searchRankByName.has(d.id) ? SEARCH_DIM : 1;
     ctx.beginPath(); ctx.arc(d.x, d.y, r, 0, 2 * Math.PI);
     ctx.fillStyle = TYPE_COLOURS[d.entity_type] || fallbackColour; ctx.fill();
     const demoted = (d.vote_score || 0) < 0;
@@ -690,8 +776,9 @@ function drawCanvas() {
     else if (orphans.has(d.id)) drawNodeRing(d, r, "#f85149", 1.5, [4, 2]);
     else drawNodeRing(d, r, d.status ? statusColours[d.status] || "#30363d" : "#30363d", 1.5, []);
     if (demoted) drawNodeRing(d, r + 3, "#d29922", 1.5, [2, 2]);
-    if (searchRankByName.has(d.id)) drawNodeRing(d, r + 6, "#58a6ff", 1.5, []);
+    if (searchRankByName.has(d.id)) drawNodeRing(d, r + 6, "#58a6ff", 3, []);
   });
+  ctx.globalAlpha = 1;
   labelledNodes(outcode).forEach(d => {
     const project = d.entity_type === "project";
     ctx.font = `${project ? "600 " : ""}${10 / Math.min(t.k, 1)}px ${CANVAS_FONT}`; ctx.fillStyle = project ? "#c9d1d9" : "#8b949e";
@@ -714,6 +801,7 @@ function syncSvg() {
 function settled() {
   updateZoomExtent();
   if (refitView) { refitView = false; fitView(nodes, FIT_MS); }
+  else if (focusIds) { fitView(nodes.filter(n => focusIds.has(n.id)), FIT_MS); focusIds = null; }
   if (largeGraph()) drawCanvas();
   else { syncSvg(); updateSvgLabels(); }
 }
@@ -731,18 +819,24 @@ function tickFrame() {
   drawCanvas();
   tickFrameId = requestAnimationFrame(tickFrame);
 }
+let dragHeated = false;
+function heatDrag() {
+  dragHeated = true;
+  simulation.alphaTarget(0.3);
+  if (!largeGraph()) simulation.restart();
+  else if (!tickLoop) { simulation.stop(); tickLoop = true; tickFrameId = requestAnimationFrame(tickFrame); }
+}
 function dragStart(e) {
   refitView = false; svg.interrupt();
-  if (!e.active) {
-    simulation.alphaTarget(0.3);
-    if (!largeGraph()) simulation.restart();
-    else if (!tickLoop) { simulation.stop(); tickLoop = true; tickFrameId = requestAnimationFrame(tickFrame); }
-  }
+  dragHeated = false;
   e.subject.fx = e.subject.x; e.subject.fy = e.subject.y;
 }
-function dragged(e) { e.subject.fx = e.subject.x = e.x; e.subject.fy = e.subject.y = e.y; }
+function dragged(e) {
+  if (!dragHeated) heatDrag();
+  e.subject.fx = e.subject.x = e.x; e.subject.fy = e.subject.y = e.y;
+}
 function dragEnd(e) {
-  if (!e.active && simulation) {
+  if (!e.active && simulation && dragHeated) {
     simulation.alphaTarget(0);
     if (!tickLoop) simulation.restart();
   }
@@ -762,17 +856,22 @@ function showPanel(d) {
   document.getElementById("p-name").textContent = d.name;
   document.getElementById("p-type").textContent = d.entity_type;
   const sb = document.getElementById("p-status");
-  sb.innerHTML = d.status ? `<span class="status-badge" style="color:${statusColours[d.status] || '#c9d1d9'}">${d.status}</span>` : "";
+  sb.innerHTML = d.status ? `<span class="status-badge" style="border:1px solid ${statusColours[d.status] || '#30363d'}">${escapeHtml(d.status)}</span>` : "";
   document.getElementById("p-created").textContent = d.created_at ? `Created: ${new Date(d.created_at + "Z").toLocaleString()}` + (d.updated_at && d.updated_at !== d.created_at ? ` | Updated: ${new Date(d.updated_at + "Z").toLocaleString()}` : "") : "";
   renderVotes(d.vote_score);
-  const paths = pathsByProject[d.project] || [];
-  document.getElementById("p-paths").innerHTML = paths.length
-    ? `<h4>On disk (${d.project})</h4>` + paths.map(p => `<div class="path">${p.replace(/</g,"&lt;")}</div>`).join("")
-    : "";
+  const entityLink = (project, name) => `<a href="${escapeHtml(VisLib.formatRoute({ project, name }))}">${escapeHtml(name || project)}</a>`;
+  document.getElementById("p-project").innerHTML = `in ${entityLink(d.project, "")}`;
+  const relations = currentData ? VisLib.neighbourhood(currentData.relations, d.project, d.name) : [];
+  document.getElementById("p-relations").innerHTML = relations.map(g =>
+    `<h4>${escapeHtml(g.type)} (${g.direction === "out" ? "to" : "from"})</h4>` + g.names.map(n => entityLink(d.project, n)).join("")).join("");
+  const paths = pathsByProject[d.project] || [], pathBox = document.getElementById("p-paths");
+  pathBox.hidden = !paths.length;
+  pathBox.innerHTML = `<summary>On disk (${paths.length})</summary>` + paths.map(p => `<div class="path">${escapeHtml(p)}</div>`).join("");
   renderObservations(d);
   loadObservations(d);
-  document.getElementById("results").classList.remove("open");
-  panel.classList.add("open");
+  document.getElementById("home").hidden = true;
+  document.getElementById("detail").hidden = false;
+  document.body.classList.add("detail-open");
 }
 
 async function loadObservations(d) {
@@ -846,17 +945,27 @@ function renderObservations(d) {
 
 function updateSelection() {
   if (nodeSel) nodeSel.attr("class", nodeClass);
+  if (linkSel) linkSel.classed("hl", touchesSelection);
   if (canvasMode) drawCanvas();
 }
 
-document.getElementById("project").onchange = () => { refitView = true; currentData = null; stopTickLoop(); canvasPulses = []; if (simulation) { simulation.stop(); simulation = null; } setCanvasMode(false); updateControlsPath(); fetchGraph(); runSearch(); };
+let shownProject = "";
+function setProject(project) {
+  document.getElementById("project").value = project;
+  if (project === shownProject) return;
+  shownProject = project;
+  refitView = true; stopTickLoop(); canvasPulses = []; if (simulation) { simulation.stop(); simulation = null; } setCanvasMode(false); updateControlsPath();
+  if (currentData) showGraph();
+  renderHome();
+  runSearch();
+}
+document.getElementById("project").onchange = () => {
+  const project = selectedProject();
+  document.getElementById("project").value = project;
+  location.hash = VisLib.formatRoute({ project, name: "" });
+};
 document.getElementById("refresh").onclick = fetchGraph;
 
-let timer = setInterval(fetchGraph, 2000);
-document.getElementById("auto").onchange = function() {
-  clearInterval(timer);
-  if (this.checked) timer = setInterval(fetchGraph, 2000);
-};
 
 const tally = { read: 0, create: 0, update: 0, delete: 0 };
 function renderTally() {
@@ -957,6 +1066,7 @@ async function fetchActivity() {
     const data = await res.json();
     if (data.seq === lastSeq) return;
     lastSeq = data.seq;
+    if (VisLib.shouldRefetchGraph(data.events)) fetchGraph();
     for (const ev of data.events) {
       tally[ev.kind] = (tally[ev.kind] || 0) + 1;
       ev.entities.forEach(name => pulseNode(name, ev));
@@ -992,11 +1102,12 @@ function clearSearchRings() {
 
 function applySearchRings() {
   clearSearchRings();
+  svg.classed("searching", searchRankByName.size > 0);
   if (!nodeSel || !searchRankByName.size) return;
   nodeSel.filter(d => searchRankByName.has(d.id)).each(function(d) {
     const grp = d3.select(this), r = nodeRadius(d);
     grp.classed("search-hit", true);
-    grp.append("circle").attr("class", "search-ring").attr("r", r + 6).attr("stroke-width", 1.5);
+    grp.append("circle").attr("class", "search-ring").attr("r", r + 6).attr("stroke-width", 3);
     grp.append("text").attr("class", "search-badge").attr("dx", -(r + 14)).attr("dy", -(r + 6))
       .text(searchRankByName.get(d.id));
   });
@@ -1013,44 +1124,116 @@ function applyDemotedRings() {
   });
 }
 
+const STATUSES = ["planned", "in-progress", "blocked", "resolved", "archived"];
+const LIST_PAGE = 100, SEARCH_DEBOUNCE_MS = 200;
+let listLimit = LIST_PAGE, listRows = [], searchSeq = 0, searchTimer = 0;
+const escapeHtml = text => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+const searchText = () => document.getElementById("search").value.trim();
+const chipValues = id => new Set([...document.querySelectorAll(`#${id} .chip[aria-pressed="true"]`)].map(c => c.dataset.value));
+
+function buildChips(id, values) {
+  const pressed = chipValues(id);
+  document.getElementById(id).replaceChildren(...values.map(value => {
+    const chip = Object.assign(document.createElement("button"), { className: "chip", textContent: value });
+    chip.dataset.value = value;
+    chip.setAttribute("aria-pressed", String(pressed.has(value)));
+    return chip;
+  }));
+}
+const buildTypeChips = () => buildChips("type-chips", [...new Set(currentData.entities.map(e => e.entity_type))].sort());
+buildChips("status-chips", STATUSES);
+for (const id of ["type-chips", "status-chips"]) document.getElementById(id).onclick = e => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
+  listLimit = LIST_PAGE;
+  renderList();
+};
+
+function renderList() {
+  const searching = !!searchText();
+  const source = searching ? searchHits
+    : currentData ? currentData.entities.slice().sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || "")) : [];
+  listRows = VisLib.filterEntities(source, { project: shownProject, types: chipValues("type-chips"), statuses: chipValues("status-chips") });
+  document.getElementById("list-summary").textContent = searching
+    ? `${listRows.length} shown, filtered from top ${searchHits.length} matches`
+    : `${listRows.length} entities, newest first`;
+  const route = VisLib.parseRoute(location.hash);
+  const shown = listRows.slice(0, listLimit), selected = shown.findIndex(h => h.project === route.project && h.name === route.name);
+  document.getElementById("entity-list").innerHTML = shown.map((h, i) => {
+    const snip = searching && h.observations && h.observations[0] ? `<span class="snip">${escapeHtml(h.observations[0].content)}</span>` : "";
+    const sub = [h.entity_type, h.project, h.status].filter(Boolean).join(" · ");
+    return `<li role="option" tabindex="${i === Math.max(selected, 0) ? 0 : -1}" aria-selected="${i === selected}" data-project="${escapeHtml(h.project)}" data-name="${escapeHtml(h.name)}">`
+      + (h.rank ? `<span class="rank">${h.rank}</span>` : "")
+      + `<span class="nm">${escapeHtml(h.name)}</span><span class="sub">${escapeHtml(sub)}</span>${snip}</li>`;
+  }).join("");
+  const more = document.getElementById("show-more");
+  more.hidden = listRows.length <= listLimit;
+  more.textContent = `Show more (${listRows.length - listLimit} left)`;
+}
+document.getElementById("show-more").onclick = () => { listLimit += LIST_PAGE; renderList(); };
+
 function renderResults(hits) {
   searchHits = hits;
   searchRankByName = new Map(hits.map(h => [nodeKey(h.project, h.name), h.rank]));
-  document.getElementById("results-count").textContent = hits.length + (hits.length === 1 ? " match" : " matches");
-  document.getElementById("results-list").innerHTML = hits.map(h => {
-    const snip = ((h.observations[0] && h.observations[0].content) || "").replace(/</g, "&lt;");
-    const votes = h.vote_score ? `${h.vote_score > 0 ? "+" : ""}${h.vote_score} votes` : null;
-    const sub = [h.entity_type, h.project, h.status, votes].filter(Boolean).join(" · ");
-    return `<div class="hit" data-project="${h.project.replace(/"/g, "&quot;")}" data-name="${h.name.replace(/"/g, "&quot;")}">`
-      + `<span class="rank">${h.rank}</span>`
-      + `<span class="meta"><span class="nm">${h.name.replace(/</g, "&lt;")}</span>`
-      + `<span class="sub"> ${sub}</span><span class="snip">${snip}</span></span></div>`;
-  }).join("");
-  document.getElementById("results").classList.add("open");
   applySearchRings();
+  if (canvasMode) drawCanvas();
+  listLimit = LIST_PAGE;
+  renderList();
 }
 
 async function runSearch() {
-  const q = document.getElementById("search").value.trim();
-  if (!q) { document.getElementById("results").classList.remove("open"); searchRankByName = new Map(); clearSearchRings(); return; }
-  const project = document.getElementById("project").value;
+  const q = searchText(), seq = ++searchSeq;
+  if (!q) { renderResults([]); return; }
   const params = new URLSearchParams({ q });
-  if (project) params.set("project", project);
+  if (shownProject) params.set("project", shownProject);
   if (document.getElementById("search-all").checked) params.set("match_all", "true");
-  try { renderResults((await (await fetch("/api/search?" + params)).json()).entities); }
-  catch (e) { /* transient; keep previous results */ }
+  try {
+    const { entities } = await (await fetch("/api/search?" + params)).json();
+    if (seq === searchSeq) renderResults(entities);
+  } catch (e) { /* transient; keep previous results */ }
 }
 
-document.getElementById("search").onkeydown = (e) => { if (e.key === "Enter") runSearch(); };
+document.getElementById("search").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS); };
 document.getElementById("search-all").onchange = runSearch;
-document.getElementById("results-list").onclick = (e) => {
-  const row = e.target.closest(".hit");
-  if (!row) return;
-  const node = nodes.find(n => n.id === nodeKey(row.dataset.project, row.dataset.name));
-  if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
-  else { showPanel(searchHits.find(h => h.project === row.dataset.project && h.name === row.dataset.name)); }
-  document.getElementById("results").classList.remove("open");
+document.getElementById("entity-list").onclick = (e) => {
+  const row = e.target.closest("li");
+  if (row) location.hash = VisLib.formatRoute(row.dataset);
 };
+
+const findEntity = (project, name) => nodes.find(n => n.id === nodeKey(project, name))
+  || (currentData && currentData.entities.find(e => e.project === project && e.name === name));
+function applyRoute() {
+  const { project, name } = VisLib.parseRoute(location.hash);
+  if (!name) { setProject(knownProjects.has(project) ? project : ""); closePanel(); }
+  else {
+    if (shownProject && shownProject !== project) setProject(project);
+    const entity = findEntity(project, name);
+    if (entity) openEntity(entity);
+  }
+  renderList();
+}
+window.addEventListener("hashchange", applyRoute);
+
+const listItems = () => [...document.querySelectorAll("#entity-list li")];
+document.addEventListener("keydown", e => {
+  const typing = e.target.matches("input, textarea, select");
+  if (e.key === "/" && !typing) { e.preventDefault(); document.getElementById("search").focus(); return; }
+  if (e.key === "Escape") {
+    if (panelDatum) location.hash = VisLib.formatRoute({ project: shownProject, name: "" });
+    else if (typing) e.target.blur();
+    return;
+  }
+  const inList = e.target.closest("#entity-list") || e.target.id === "search";
+  if (!inList) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const items = listItems(), next = VisLib.moveSelection(items.indexOf(e.target), e.key === "ArrowDown" ? 1 : -1, items.length);
+    if (next >= 0) { items.forEach((item, i) => item.tabIndex = i === next ? 0 : -1); items[next].focus(); }
+  } else if (e.key === "Enter" && e.target.matches("#entity-list li")) {
+    location.hash = VisLib.formatRoute(e.target.dataset);
+  }
+});
 
 const pendingFetches = new Map();
 function dedupFetch(url, fetchImpl) {
@@ -1157,21 +1340,28 @@ function renderDream(d) {
     } else if (lp.ok) {
       lines.push(`<div class="line">Nothing changed last pass.</div>`);
     } else {
-      lines.push(`<div class="line" style="color:#6e7681">${(lp.audit_text || "").replace(/</g, "&lt;")}</div>`);
+      lines.push(`<div class="line" style="color: var(--muted)">${(lp.audit_text || "").replace(/</g, "&lt;")}</div>`);
     }
   }
   body.innerHTML = lines.join("");
 }
 
+let lastPassTs;
 async function fetchDream() {
-  try { renderDream(await (await dedupFetch("/api/dream", () => fetch("/api/dream"))).json()); }
+  try {
+    const d = await (await dedupFetch("/api/dream", () => fetch("/api/dream"))).json();
+    const passTs = d.last_pass ? d.last_pass.ts : null;
+    if (VisLib.shouldRefetchGraph([], lastPassTs, passTs)) fetchGraph();
+    lastPassTs = passTs;
+    renderDream(d);
+  }
   catch (e) { /* transient poll failure; retry next tick */ }
 }
 document.getElementById("dream-body").onclick = (e) => {
   const row = e.target.closest(".dm");
   if (!row) return;
   const node = nodes.find(n => n.id === nodeKey(row.dataset.project, row.dataset.name));
-  if (node) { selectedNode = node.id; showPanel(node); updateSelection(); }
+  if (node) selectNode(node);
 };
 
 const dreamButtons = [...document.querySelectorAll("#dream-actions button")];

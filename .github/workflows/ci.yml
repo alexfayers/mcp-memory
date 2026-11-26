@@ -51,6 +51,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - run: just test -vv --cov=.
+      - run: just js-test
       - uses: py-cov-action/python-coverage-comment-action@v4.7
         with:
           ANNOTATE_MISSING_LINES: true
@@ -71,6 +72,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - run: just test -vv --cov=.
+      - run: just js-test
 
   benchmark:
     if: github.event_name == 'pull_request' && github.head_ref != 'release-please--branches--main'

@@ -1,7 +1,7 @@
 sibling_llm_prompts := `d="$(dirname "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")")/llm-prompts"; [ -d "$d" ] && printf %s "$d"; true`
 uv_run := if sibling_llm_prompts == "" { "uv run" } else { "uv run --with-editable " + quote(sibling_llm_prompts) }
 
-@_default: lint type-check naming-check test
+@_default: lint type-check naming-check test js-test
 
 lint:
     {{uv_run}} ruff check --fix src/ tests/
@@ -21,6 +21,9 @@ naming-check-final:
 
 test *args:
     {{uv_run}} pytest {{args}}
+
+js-test:
+    node --test tests/js/
 
 baseline:
     {{uv_run}} python -m tests.eval.regen_baseline

@@ -155,6 +155,30 @@ class TestVisualisePage:
         assert "mcp-memory graph" in resp.text
 
     @pytest.mark.anyio
+    async def test_serves_the_ui_logic_module(self, client: httpx.AsyncClient) -> None:
+        page = await client.get("/visualise")
+        resp = await client.get("/visualise/lib.js")
+        assert resp.status_code == 200
+        assert "javascript" in resp.headers["content-type"]
+        assert "shouldRefetchGraph" in resp.text
+        assert '<script src="/visualise/lib.js"></script>' in page.text
+
+    @pytest.mark.anyio
+    async def test_reloads_the_graph_only_on_writes(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "setInterval(fetchGraph" not in resp.text
+        assert "JSON.stringify(currentData)" not in resp.text
+        assert "VisLib.shouldRefetchGraph(" in resp.text
+
+    @pytest.mark.anyio
+    async def test_supports_keyboard_focus_and_narrow_screens(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert ":focus-visible" in resp.text
+        assert "@media (max-width: 767px)" in resp.text
+        assert "VisLib.moveSelection(" in resp.text
+        assert 'e.key === "/"' in resp.text
+
+    @pytest.mark.anyio
     async def test_includes_the_dream_card(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert 'id="dream"' in resp.text
@@ -238,7 +262,7 @@ class TestVisualisePage:
         self, client: httpx.AsyncClient
     ) -> None:
         resp = await client.get("/visualise")
-        assert 'getElementById("project").onchange = () => { refitView = true;' in resp.text
+        assert "shownProject = project;\n  refitView = true;" in resp.text
         assert "if (refitView) { refitView = false; fitView(nodes, FIT_MS); }" in resp.text
         assert "{ lastUserInteract = Date.now(); refitView = false; }" in resp.text
         assert "function dragStart(e) {\n  refitView = false; svg.interrupt();" in resp.text
@@ -261,6 +285,13 @@ class TestVisualisePage:
         resp = await client.get("/visualise")
         assert "if (!tickLoop) simulation.restart()" in resp.text
         assert "start - tickAt >= tickCost / DRAG_TICK_SHARE" in resp.text
+
+    @pytest.mark.anyio
+    async def test_heats_the_layout_only_once_a_held_node_moves(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        drag_start = resp.text.split("function dragStart(e) {", 1)[1].split("\n}", 1)[0]
+        assert "alphaTarget" not in drag_start
+        assert "function dragged(e) {\n  if (!dragHeated) heatDrag();" in resp.text
 
     @pytest.mark.anyio
     async def test_project_change_cancels_the_drag_animation_loop(self, client: httpx.AsyncClient) -> None:
