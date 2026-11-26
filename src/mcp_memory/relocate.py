@@ -11,7 +11,7 @@ _PLIST_DB_RE = re.compile(
 )
 _SYSTEMD_DB_RE = re.compile(r"^Environment=MCP_MEMORY_DB_PATH=(.+)$", re.MULTILINE)
 
-_SIDECAR_SUFFIXES = ("-wal", "-shm")
+SIDECAR_SUFFIXES = ("-wal", "-shm")
 
 
 def parse_db_path_from_plist(content: str) -> str | None:
@@ -69,7 +69,7 @@ def relocate_db(source: Path, target: Path) -> int:
     moved = _entity_count(source)
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    for suffix in _SIDECAR_SUFFIXES:
+    for suffix in SIDECAR_SUFFIXES:
         stale = Path(f"{target}{suffix}")
         if stale.exists():
             stale.unlink()
@@ -78,7 +78,7 @@ def relocate_db(source: Path, target: Path) -> int:
     source.replace(target)
 
     # Move any remaining WAL sidecars alongside the main file so un-checkpointed commits survive.
-    for suffix in _SIDECAR_SUFFIXES:
+    for suffix in SIDECAR_SUFFIXES:
         leftover = Path(f"{source}{suffix}")
         if leftover.exists():
             leftover.replace(Path(f"{target}{suffix}"))

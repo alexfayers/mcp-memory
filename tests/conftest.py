@@ -9,6 +9,8 @@ from starlette.testclient import TestClient
 
 from mcp_memory import (
     api_client,
+    cli,
+    config,
     eval as ranking_eval,
     server,
 )
@@ -24,6 +26,14 @@ if TYPE_CHECKING:
 def _isolate_db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the config-resolved database and its on-disk markers at a per-test directory."""
     monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_service_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the installed-service files at a per-test directory, so no test reads or stops the real service."""
+    for module in (cli, config):
+        monkeypatch.setattr(module, "_LAUNCHD_PLIST", tmp_path / "service" / "com.mcp-memory.plist")
+        monkeypatch.setattr(module, "_SYSTEMD_UNIT", tmp_path / "service" / "mcp-memory.service")
 
 
 class FakeApi:

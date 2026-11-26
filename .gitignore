@@ -10,3 +10,4 @@ dist/
 *.egg-info/
 tests/eval/baseline.json
 .bench-*.json
+.deps/

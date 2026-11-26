@@ -32,7 +32,7 @@
 
 ## Service
 
-`setup-service` installs a launchd job on macOS or a systemd unit on Linux (needs sudo). It takes `--port` (default 8000) and `--db-path` (default `~/.local/share/mcp-memory/memory.db`). Re-running it without `--port` keeps the installed service's port.
+`setup-service` installs a launchd job on macOS or a systemd unit on Linux (needs sudo). It takes `--port` (default 8000) and `--db-path` (default `MCP_MEMORY_DB_PATH`, else `mcp-memory/data/memory.db` in the llm-prompts root). Re-running it without `--port` keeps the installed service's port.
 
 It refuses to replace a `com.mcp-memory` job that launchd loaded from another plist, and on Linux an existing unit while HOME is not your real home.
 
@@ -101,7 +101,7 @@ Replaces the local database with a backup. Stop the server first. Backups are wr
 mcp-memory utils migrate-db [--source <path>]
 ```
 
-The hook plugin does not inherit `MCP_MEMORY_DB_PATH`, so a service installed with a custom `--db-path` and the plugin read different databases. `utils migrate-db` stops the service, moves the database to the default path (refusing to overwrite a non-empty target) and repoints the service at it. It finds the current path from the installed service unless you pass `--source`.
+The hook plugin does not inherit `MCP_MEMORY_DB_PATH`, so a service installed with a custom `--db-path` and the plugin read different databases. `utils migrate-db` stops the service, moves the database to the default path (refusing to overwrite a non-empty target) and repoints the service at it. It finds the current path from the installed service unless you pass `--source`. With no service and `MCP_MEMORY_DB_PATH` set, it keeps that database where it is. With no service, it stops when a server is running. A move from the old default `~/.local/share/mcp-memory` also copies the other files of that folder once, and keeps the old files. Until the move, the server and the hooks keep using the database at the old default path. `llm-prompts update` runs `utils migrate-db` after an mcp-memory update.
 
 ## Visualiser
 
