@@ -304,13 +304,13 @@ ADD_OBSERVATIONS_DESC = (
     "workarounds. Rationale goes in its own observation. "
     "Memory holds the why: for what changed or how it works, read the code and git log/git blame. "
     "Past ~30 observations, extract focused pattern/ entities. "
-    "The server timestamps each observation; do NOT embed a date in the text. "
+    "Do NOT embed a date: the server timestamps each observation. "
     "provenance: user (the user said, asked, decided or corrected it), observed (you read or ran it) or "
     "inferred (unchecked). One provenance per call. "
-    "triggers make a hook surface the observations. Each trigger is {kind, value, tool?}, kind one of: "
-    "pattern (regex over a tool call's input JSON, optionally for one tool, e.g. execute_command or an MCP tool "
-    "name) blocks the first matching call, path (repo-relative glob) injects on the first read or edit of a "
-    "matching file, mention (regex over your own turn text) injects after the turn."
+    "triggers ({kind, value, tool?}) make a hook surface the observations: pattern (regex over a tool call's "
+    "input JSON, optionally for one tool) blocks the first matching call, path (repo-relative glob) injects on "
+    "the first read or edit of a match, mention (regex over your turn text) injects after the turn, change "
+    "(a git patch-id --stable) injects before editing lines blamed to it."
 )
 DELETE_OBSERVATIONS_DESC = (
     "Soft-delete observations by exact content (observations) and/or content_hash (observationHashes - cheaper). "
