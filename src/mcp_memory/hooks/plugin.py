@@ -887,6 +887,9 @@ class MemoryPlugin(HooksPlugin):
         recalled = recall(str(kwargs.get("task_id", "")), kwargs, "pattern")
         if recalled:
             return HookResult(block=recalled)
+        return _with_recalled(self._gate_tool_use(**kwargs), kwargs, "change")
+
+    def _gate_tool_use(self, **kwargs: object) -> HookResult | None:
         agent_type = str(kwargs.get("agent_type", ""))
         if _is_exempt_agent(agent_type):
             return None

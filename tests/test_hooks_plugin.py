@@ -9,7 +9,9 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
+import shutil
 import socket
+import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -2322,3 +2324,55 @@ class TestRecallTriggers:
         assert injected is not None
         assert "Deploys need the release checklist." in injected.notes[0]
         assert repeat is None
+
+    def _change_repo(self, root: Path) -> Path:
+        """Commit `app.py` twice in a git repo at `root`, trigger on the second commit, then amend it."""
+
+        def git(*args: str, stdin: str | None = None) -> str:
+            command = [str(shutil.which("git")), "-c", "user.name=t", "-c", "user.email=t@example.com", *args]
+            return subprocess.run(command, check=True, cwd=root, input=stdin, capture_output=True, text=True).stdout
+
+        source = root / "app.py"
+        git("init")
+        source.write_text("one\ntwo\n")
+        git("add", "app.py")
+        git("commit", "-m", "base")
+        source.write_text("one\nTWO\n")
+        git("commit", "-am", "fix")
+        patch_id = git("patch-id", "--stable", stdin=git("show")).split()[0]
+        self._trigger("TWO must stay upper case.", kind="change", value=patch_id)
+        git("commit", "--amend", "-m", "fix, rebased")
+        return source
+
+    @staticmethod
+    def _edit(plugin: MemoryPlugin, source: Path, old: str) -> HookResult | None:
+        diff = f"------- SEARCH\n{old}\n=======\nx\n+++++++ REPLACE"
+        return plugin.on_hook(
+            "PreToolUse", task_id="t1", tool_name="replace_in_file", parameters={"path": str(source), "diff": diff}
+        )
+
+    def test_a_change_injects_before_an_edit_of_its_lines_after_a_rebase(
+        self, live_plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        source = self._change_repo(tmp_path)
+
+        assert self._edit(live_plugin, source, "one") is None
+        injected = self._edit(live_plugin, source, "TWO")
+        assert injected is not None
+        assert "TWO must stay upper case." in injected.notes[0]
+
+    def test_a_change_ignores_an_edit_whose_search_text_is_not_in_the_file(
+        self, live_plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        source = self._change_repo(tmp_path)
+
+        assert self._edit(live_plugin, source, "three") is None
+
+    def test_a_change_gives_no_note_for_an_edit_outside_a_git_repo(
+        self, live_plugin: MemoryPlugin, tmp_path: Path
+    ) -> None:
+        self._trigger("Unused.", kind="change", value="0" * 40)
+        source = tmp_path / "app.py"
+        source.write_text("one\n")
+
+        assert self._edit(live_plugin, source, "one") is None

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 import json
 from pathlib import Path, PurePosixPath
 import re
+import shutil
+import subprocess
 import time
 from typing import TYPE_CHECKING
 
@@ -29,6 +31,9 @@ _SERVER_TIMEOUT_SECONDS = 1.0
 _REFRESH_SECONDS = 5.0
 _MAX_MATCHED_CHARS = 20_000
 _MAX_RECALLED = 2
+_GIT_TIMEOUT_SECONDS = 2.0
+_BLAMED_COMMIT = re.compile(r"^([0-9a-f]{40,64}) \d+ \d+", re.MULTILINE)
+_SEARCH_BLOCK = re.compile(r"------- SEARCH\n(.*?)\n=======", re.DOTALL)
 _RECALL_BLOCK = (
     "RECALLED MEMORY: this call matches a recall trigger. Check the call against these observations,"
     " then run it again if it still holds. The repeat call runs:\n{observations}"
@@ -38,12 +43,17 @@ _RECALL_NOTE = "RECALLED MEMORY: these observations match what you are working o
 
 @dataclass(frozen=True)
 class Facts:
-    """What a hook event exposes to triggers: the tool, its input JSON, the files it touches and the turn text."""
+    """What a hook event exposes to triggers.
+
+    That is the tool, its input JSON, the files it touches, the turn text and the patch-ids of the changes
+    an edit replaces.
+    """
 
     tool: str = ""
     input_json: str = ""
     paths: tuple[str, ...] = ()
     text: str = ""
+    changes: frozenset[str] = frozenset()
 
 
 def facts(event: Mapping[str, object]) -> Facts:
@@ -74,6 +84,75 @@ def _turn_text(event: Mapping[str, object]) -> str:
     return get_protocol().transcript.turn_assistant_text(transcript_path)
 
 
+def _git(directory: Path, *args: str, stdin: str | None = None) -> str:
+    """Return a git command's output, or an empty string if it fails."""
+    git = shutil.which("git")
+    if git is None:
+        return ""
+    run = subprocess.run(
+        [git, *args],
+        check=False,
+        cwd=directory,
+        input=stdin,
+        capture_output=True,
+        text=True,
+        timeout=_GIT_TIMEOUT_SECONDS,
+    )
+    return run.stdout if run.returncode == 0 else ""
+
+
+def _patch_ids_path() -> Path:
+    """Return the path to the local map of commit sha to patch-id, next to the memory database."""
+    return get_data_dir() / "recall-patch-ids.json"
+
+
+def _patch_ids(directory: Path, shas: set[str]) -> frozenset[str]:
+    """Return the `git patch-id --stable` of each commit, reading and adding to the local map."""
+    path = _patch_ids_path()
+    try:
+        known = json.loads(path.read_text())
+    except (OSError, ValueError):
+        known = {}
+    if not isinstance(known, dict):
+        known = {}
+    missing = sorted(shas - known.keys())
+    if missing:
+        shown = _git(directory, "show", "--no-color", *missing)
+        for line in _git(directory, "patch-id", "--stable", stdin=shown).splitlines():
+            patch_id, sha = line.split()
+            known[sha] = patch_id
+        with contextlib.suppress(OSError):
+            write_json_atomic(path, known)
+    return frozenset(str(known[sha]) for sha in shas if sha in known) - {""}
+
+
+def _edited_changes(event: Mapping[str, object]) -> frozenset[str]:
+    """Return the patch-ids of the commits that last changed the lines a file edit replaces.
+
+    An edit that names no replaced text, such as a whole-file write, replaces every line of the file.
+    An edit whose replaced text is not in the file replaces nothing.
+    """
+    raw = event.get("parameters")
+    if event.get("tool_name") not in FILE_EDIT_TOOLS or not isinstance(raw, dict):
+        return frozenset()
+    edit = FileEditParameters.build(raw)
+    roots = event.get("workspace_roots")
+    path = Path(str(roots[0]) if isinstance(roots, list) and roots else "", edit.path)
+    if not edit.path or not path.is_file():
+        return frozenset()
+    text = path.read_text(encoding="utf-8")
+    searches = _SEARCH_BLOCK.findall(edit.diff)
+    ranges: list[str] = []
+    for search in searches:
+        start = text.find(search)
+        if start >= 0:
+            ranges += ["-L", f"{text.count(chr(10), 0, start) + 1},+{search.count(chr(10)) + 1}"]
+    if searches and not ranges:
+        return frozenset()
+    blame = _git(path.parent, "blame", "--porcelain", *ranges, "--", path.name)
+    return _patch_ids(path.parent, {sha for sha in _BLAMED_COMMIT.findall(blame) if sha.strip("0")})
+
+
 def _path_matches(path: str, glob: str) -> bool:
     """Return True if a repo-relative glob matches the path or any trailing part of it."""
     parts = PurePosixPath(path).parts
@@ -82,6 +161,8 @@ def _path_matches(path: str, glob: str) -> bool:
 
 def _row_matches(row: TriggerRow, found: Facts) -> bool:
     value = str(row["value"])
+    if row["kind"] == "change":
+        return value in found.changes
     if row["kind"] == "path":
         return any(_path_matches(path, value) for path in found.paths)
     try:
@@ -140,7 +221,7 @@ def recall(task_id: str, event: Mapping[str, object], kind: str) -> str | None:
     """
     try:
         return _recall(task_id, event, kind)
-    except (KeyError, TypeError, ValueError, OSError):
+    except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError):
         return None
 
 
@@ -148,7 +229,10 @@ def _recall(task_id: str, event: Mapping[str, object], kind: str) -> str | None:
     rows = trigger_rows()
     if not any(row.get("kind") == kind for row in rows):
         return None
-    matched = matches(rows, facts(event), kind)
+    found = facts(event)
+    if kind == "change":
+        found = replace(found, changes=_edited_changes(event))
+    matched = matches(rows, found, kind)
     by_hash = {str(row["content_hash"]): row for row in matched}
     taken = take_unseen(task_id, f"recalled_{kind}", list(by_hash), _MAX_RECALLED)
     if not taken:

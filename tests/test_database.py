@@ -1266,7 +1266,12 @@ class TestObservations:
 
     @pytest.mark.parametrize(
         "trigger",
-        [{"kind": "nope", "value": "x"}, {"kind": "mention", "value": "("}, {"kind": "path", "value": ""}],
+        [
+            {"kind": "nope", "value": "x"},
+            {"kind": "mention", "value": "("},
+            {"kind": "path", "value": ""},
+            {"kind": "change", "value": "not-a-patch-id"},
+        ],
     )
     def test_an_invalid_trigger_is_refused(self, store: Storage, trigger: dict[str, str]) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])

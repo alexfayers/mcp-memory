@@ -42,9 +42,11 @@ def validate_provenance(provenance: str | None) -> None:
 
 
 # The action each trigger kind takes when it matches.
-TRIGGER_ACTIONS = {"pattern": "block", "path": "inject", "mention": "inject"}
+TRIGGER_ACTIONS = {"pattern": "block", "path": "inject", "mention": "inject", "change": "inject"}
 _REGEX_TRIGGER_KINDS = frozenset({"pattern", "mention"})
 MAX_TRIGGER_CHARS = 200
+# A `git patch-id --stable` id: a SHA-1 or SHA-256 hex digest.
+_PATCH_ID = re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
 # A quantified group that itself holds a quantifier, such as (a+)+, can backtrack exponentially.
 _NESTED_QUANTIFIER = re.compile(r"\([^()]*[+*}][^()]*\)[+*{]")
 
@@ -53,7 +55,7 @@ def validate_triggers(triggers: list[dict[str, str]]) -> list[tuple[str, str, st
     """Return each trigger as (kind, value, tool, action), raising ValueError for an invalid one.
 
     A trigger needs a known kind and a non-empty value. A pattern or mention value must compile as a regex,
-    and only a pattern may name a tool.
+    a change value must be a patch-id, and only a pattern may name a tool.
     """
     rows: list[tuple[str, str, str, str]] = []
     for trigger in triggers:
@@ -66,6 +68,8 @@ def validate_triggers(triggers: list[dict[str, str]]) -> list[tuple[str, str, st
             raise ValueError("Only a pattern trigger may name a tool")
         if len(value) > MAX_TRIGGER_CHARS:
             raise ValueError(f"A trigger value must be at most {MAX_TRIGGER_CHARS} characters")
+        if kind == "change" and not _PATCH_ID.fullmatch(value):
+            raise ValueError(f"Invalid change trigger '{value}': expected a `git patch-id --stable` id")
         if kind in _REGEX_TRIGGER_KINDS:
             if _NESTED_QUANTIFIER.search(value):
                 raise ValueError(f"Invalid {kind} trigger regex '{value}': nested quantifiers can hang the hook")
