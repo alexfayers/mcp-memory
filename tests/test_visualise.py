@@ -287,6 +287,13 @@ class TestVisualisePage:
         assert "start - tickAt >= tickCost / DRAG_TICK_SHARE" in resp.text
 
     @pytest.mark.anyio
+    async def test_heats_the_layout_only_once_a_held_node_moves(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        drag_start = resp.text.split("function dragStart(e) {", 1)[1].split("\n}", 1)[0]
+        assert "alphaTarget" not in drag_start
+        assert "function dragged(e) {\n  if (!dragHeated) heatDrag();" in resp.text
+
+    @pytest.mark.anyio
     async def test_project_change_cancels_the_drag_animation_loop(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert "stopTickLoop(); canvasPulses = [];" in resp.text

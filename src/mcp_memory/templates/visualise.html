@@ -819,18 +819,24 @@ function tickFrame() {
   drawCanvas();
   tickFrameId = requestAnimationFrame(tickFrame);
 }
+let dragHeated = false;
+function heatDrag() {
+  dragHeated = true;
+  simulation.alphaTarget(0.3);
+  if (!largeGraph()) simulation.restart();
+  else if (!tickLoop) { simulation.stop(); tickLoop = true; tickFrameId = requestAnimationFrame(tickFrame); }
+}
 function dragStart(e) {
   refitView = false; svg.interrupt();
-  if (!e.active) {
-    simulation.alphaTarget(0.3);
-    if (!largeGraph()) simulation.restart();
-    else if (!tickLoop) { simulation.stop(); tickLoop = true; tickFrameId = requestAnimationFrame(tickFrame); }
-  }
+  dragHeated = false;
   e.subject.fx = e.subject.x; e.subject.fy = e.subject.y;
 }
-function dragged(e) { e.subject.fx = e.subject.x = e.x; e.subject.fy = e.subject.y = e.y; }
+function dragged(e) {
+  if (!dragHeated) heatDrag();
+  e.subject.fx = e.subject.x = e.x; e.subject.fy = e.subject.y = e.y;
+}
 function dragEnd(e) {
-  if (!e.active && simulation) {
+  if (!e.active && simulation && dragHeated) {
     simulation.alphaTarget(0);
     if (!tickLoop) simulation.restart();
   }
