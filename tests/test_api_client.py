@@ -84,3 +84,16 @@ class TestRoute:
         args = {"data": document, "projects": ["proj"], "dry_run": False}
         assert api_client.call("import", args)["entities_new"] == 1
         assert dest.entities.exists_in("task/t", "proj")
+
+    def test_recall_triggers_send_rows_only_when_the_etag_changes(
+        self, store: Storage, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(server, "_db", store)
+        store.entities.create("proj", [{"name": "task/t", "entityType": "task", "observations": ["fact"]}])
+        store.observations.add("proj", "task/t", ["fact"], triggers=[{"kind": "mention", "value": "deploy"}])
+
+        first = api_client.call("recall-triggers", {"etag": None})
+        assert [row["value"] for row in first["rows"]] == ["deploy"]
+        assert api_client.call("recall-triggers", {"etag": first["etag"]}) == {"etag": first["etag"]}
+        store.observations.vote("proj", "task/t", 1, content="fact")
+        assert api_client.call("recall-triggers", {"etag": first["etag"]})["rows"][0]["vote_score"] == 1

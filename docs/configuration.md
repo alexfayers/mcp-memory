@@ -46,6 +46,8 @@ Stopping needs a `task/` write only after wide work: a `git commit`, edits to mo
 
 The `MEMORY CHECK` reminder comes after a weighted count of 8 since the first file edit, with a block at 10.
 
+Observation triggers (see `add_observations`) apply to every agent, including subagents and calls nested in a wrapper tool. A `pattern` trigger blocks the first matching call once per agent, and the repeat call runs. A `path` trigger adds its observations after the first read or edit of a matching file, and a `mention` trigger adds them when a turn ends, on frontends with a transcript reader. Each observation is shown once per agent, at most 2 per match, best-voted first. The plugin keeps a copy of the trigger rows next to the database and asks the server on each call only whether they changed.
+
 Another cline-hooks plugin can add workspace markers by implementing the `memory_workspace_markers` hook. It returns a `frozenset[str]` of directory names:
 
 ```python

@@ -836,4 +836,22 @@ MIGRATIONS: list[Migration] = [
         # A row marks the one-time provenance backfill as done for this database.
         statements=["CREATE TABLE provenance_backfill (ran_at DATETIME DEFAULT CURRENT_TIMESTAMP)"],
     ),
+    Migration(
+        version=31,
+        statements=[
+            # Recall triggers: when a hook should surface an observation. kind is pattern, path or mention,
+            # validated in Python. tool is '' for any tool. Not in the FTS projection.
+            """CREATE TABLE observation_triggers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                observation_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                value TEXT NOT NULL,
+                tool TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(observation_id, kind, value, tool),
+                FOREIGN KEY (observation_id) REFERENCES observations(id) ON DELETE CASCADE
+            )""",
+        ],
+    ),
 ]

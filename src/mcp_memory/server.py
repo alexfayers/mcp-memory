@@ -24,6 +24,7 @@ from .api import register_api_routes
 from .config import get_backup_enabled, get_backup_interval_seconds, get_db_path, get_sweep_interval_seconds
 from .dedupe import dedupe_read
 from .models import (
+    TRIGGER_ACTIONS,
     VALID_PROVENANCES,
     VALID_RELATION_TYPES,
     Entity,
@@ -142,6 +143,20 @@ _RELATION_INPUTS = Annotated[
     WithJsonSchema({
         "type": "array",
         "items": _object_schema(["source", "target", "type"], ["source", "target", "type"]),
+    }),
+]
+_TRIGGER_INPUTS = Annotated[
+    list[dict[str, str]],
+    WithJsonSchema({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": list(TRIGGER_ACTIONS)},
+                **dict.fromkeys(["value", "tool"], _STRING_SCHEMA),
+            },
+            "required": ["kind", "value"],
+        },
     }),
 ]
 _ENTITY_INPUTS = Annotated[
@@ -291,7 +306,11 @@ ADD_OBSERVATIONS_DESC = (
     "Past ~30 observations, extract focused pattern/ entities. "
     "The server timestamps each observation; do NOT embed a date in the text. "
     "provenance: user (the user said, asked, decided or corrected it), observed (you read or ran it) or "
-    "inferred (unchecked). One provenance per call."
+    "inferred (unchecked). One provenance per call. "
+    "triggers make a hook surface the observations: pattern (regex over a tool call's input JSON, optionally "
+    "for one tool, e.g. execute_command or an MCP tool name) blocks the first matching call, path (repo-relative "
+    "glob) injects on the first read or edit of a matching file, mention (regex over your own turn text) injects "
+    "after the turn."
 )
 DELETE_OBSERVATIONS_DESC = (
     "Soft-delete observations by exact content (observations) and/or content_hash (observationHashes - cheaper). "
@@ -304,7 +323,7 @@ EDIT_OBSERVATION_DESC = (
     "Prefer oldText: its single exact match is replaced with newText; without oldText, newText "
     "replaces the whole content. Returns the new content_hash. Raises if nothing matches, "
     "oldText matches more than once, or the result duplicates another observation. "
-    "Pass provenance only if the origin changes."
+    "Pass provenance only if the origin changes. Passed triggers (see add_observations) replace the observation's."
 )
 TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
     "Soft-delete all observations on an entity except those in keep_hashes (content_hash). "
@@ -1281,14 +1300,20 @@ def get_entity_with_relations(
 
 
 def _add_observations(
-    project: str, entity_name: str, observations: list[str], provenance: str | None, is_dream: bool
+    project: str,
+    entity_name: str,
+    observations: list[str],
+    provenance: str | None,
+    is_dream: bool,
+    *,
+    triggers: list[dict[str, str]] | None,
 ) -> list[str]:
     """Add observations, refusing a dream's provenance and giving its copies their source's provenance."""
     db = _get_db()
     if is_dream and provenance is not None:
         raise ValueError(_DREAM_PROVENANCE_REFUSAL)
     with db.transaction():
-        hashes = db.observations.add(project, entity_name, observations, provenance)
+        hashes = db.observations.add(project, entity_name, observations, provenance, triggers=triggers)
         if is_dream:
             db.observations.inherit_provenance(project, entity_name, observations)
     return hashes
@@ -1308,12 +1333,16 @@ def add_observations(
     entityName: str,
     observations: list[str],
     provenance: str | None = None,
+    *,
+    triggers: _TRIGGER_INPUTS | None = None,
     ctx: Context | None = None,
 ) -> dict[str, object]:
     """Append deduplicated observations to an existing entity; a dream's copies take provenance from their source."""
     try:
         _reject_status_observations(observations)
-        hashes = _add_observations(project, entityName, observations, provenance, dream.is_dream_request(ctx))
+        hashes = _add_observations(
+            project, entityName, observations, provenance, dream.is_dream_request(ctx), triggers=triggers
+        )
         return {
             "message": f"Added {len(hashes)} observations to '{entityName}'.",
             "count": len(hashes),
@@ -1369,11 +1398,14 @@ def edit_observation(
     oldText: str | None = None,
     *,
     provenance: str | None = None,
+    triggers: _TRIGGER_INPUTS | None = None,
 ) -> dict[str, object]:
     """Edit one observation in place, addressed by content_hash."""
     try:
         db = _get_db()
-        new_hash = db.observations.edit(project, entityName, observationHash, newText, oldText, provenance=provenance)
+        new_hash = db.observations.edit(
+            project, entityName, observationHash, newText, oldText, provenance=provenance, triggers=triggers
+        )
         return {"message": f"Edited observation on '{entityName}'.", "hash": new_hash}
     except Exception as e:
         return {"error": str(e)}

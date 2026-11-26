@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
+import hashlib
+import json
 from pathlib import Path
 import textwrap
 from typing import TYPE_CHECKING, Any
@@ -135,6 +137,13 @@ def _import(db: Storage, args: dict[str, Any]) -> dict[str, Any]:
     return asdict(summary)
 
 
+def _recall_triggers(db: Storage, args: dict[str, Any]) -> dict[str, Any]:
+    """Return the trigger rows and their etag, or only the etag when it matches the caller's."""
+    rows = db.observations.trigger_rows()
+    etag = hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+    return {"etag": etag} if args["etag"] == etag else {"etag": etag, "rows": rows}
+
+
 async def _eval(db: Storage, args: dict[str, Any]) -> dict[str, Any]:
     return asdict(await evaluate_cached_async(db, args["k"], args["since"], args["min_content_tokens"]))
 
@@ -150,6 +159,7 @@ _OPERATIONS: dict[str, Callable[[Storage, dict[str, Any]], Any]] = {
     "export": lambda db, _args: export_database(db),
     "import": _import,
     "dream-heavy": lambda _db, _args: heavy_dreaming_runnable(),
+    "recall-triggers": _recall_triggers,
 }
 
 

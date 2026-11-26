@@ -8,6 +8,7 @@ from mcp_memory.config import get_max_observation_chars
 from mcp_memory.models import (
     is_protected_observation,
     validate_provenance,
+    validate_triggers,
     validate_vote,
 )
 from mcp_memory.storage.pure.rows import (
@@ -61,9 +62,21 @@ class ObservationRepository:
         kept = budget_observations(full, budget)
         return kept, len(full) - len(kept)
 
-    def add(self, project: str, entity_name: str, observations: list[str], provenance: str | None = None) -> list[str]:
-        """Append deduplicated observations, returning their hashes; a duplicate takes a higher-ranked provenance."""
+    def add(
+        self,
+        project: str,
+        entity_name: str,
+        observations: list[str],
+        provenance: str | None = None,
+        *,
+        triggers: list[dict[str, str]] | None = None,
+    ) -> list[str]:
+        """Append deduplicated observations, returning their hashes; a duplicate takes a higher-ranked provenance.
+
+        Every observation in the call, new or duplicate, gains the triggers.
+        """
         validate_provenance(provenance)
+        trigger_rows = validate_triggers(triggers or [])
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, entity_name, project_id)
         if entity_id is None:
@@ -83,8 +96,33 @@ class ObservationRepository:
                 [(entity_id, obs, hash_observation(obs), provenance) for obs in new_observations],
             )
             raise_provenance(self._conn, [(provenance, row["id"]) for row in rows if row["content"] in observations])
+            if trigger_rows:
+                ids = self._conn.query_all(
+                    "SELECT id FROM observations WHERE entity_id = ? AND deleted_at IS NULL "
+                    f"AND content IN ({placeholders(len(observations))})",
+                    (entity_id, *observations),
+                )
+                self._add_triggers([row["id"] for row in ids], trigger_rows)
 
         return [hash_observation(obs) for obs in new_observations]
+
+    def _add_triggers(self, observation_ids: list[int], triggers: list[tuple[str, str, str, str]]) -> None:
+        self._conn.write_many(
+            "INSERT OR IGNORE INTO observation_triggers (observation_id, kind, value, tool, action) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(observation_id, *trigger) for observation_id in observation_ids for trigger in triggers],
+        )
+
+    def trigger_rows(self) -> list[dict[str, object]]:
+        """Return every live observation's triggers with the observation they surface, best-voted first."""
+        rows = self._conn.query_all(
+            "SELECT t.kind, t.value, t.tool, t.action, p.name AS project, e.name AS entity, "
+            "o.content, o.content_hash, o.vote_score FROM observation_triggers t "
+            "JOIN observations o ON o.id = t.observation_id JOIN entities e ON e.id = o.entity_id "
+            "JOIN projects p ON p.id = e.project_id WHERE o.deleted_at IS NULL AND e.deleted_at IS NULL "
+            "ORDER BY o.vote_score DESC, t.id"
+        )
+        return [dict(row) for row in rows]
 
     def delete(
         self,
@@ -302,14 +340,16 @@ class ObservationRepository:
         old_text: str | None = None,
         *,
         provenance: str | None = None,
+        triggers: list[dict[str, str]] | None = None,
     ) -> str:
         """Rewrite one observation in place, addressed by content_hash, returning its new content_hash.
 
         Without old_text, new_text replaces the whole content; with it, new_text replaces the single
         occurrence of old_text. The observation keeps its id, vote score, timestamp and, unless
-        provenance is passed, its provenance.
+        provenance is passed, its provenance. Passed triggers replace the observation's triggers.
         """
         validate_provenance(provenance)
+        trigger_rows = None if triggers is None else validate_triggers(triggers)
         if old_text is not None and not old_text:
             raise ValueError("oldText must not be empty")
         project_id = get_or_create_project_id(self._conn, project)
@@ -330,12 +370,15 @@ class ObservationRepository:
         if not new_content.strip():
             raise ValueError("Edited observation must not be empty")
         reject_status_observation(new_content)
-        if new_content == content and provenance is None:
-            return content_hash
-
         new_hash = hash_observation(new_content)
         if new_hash != content_hash and any(obs.content_hash == new_hash for obs in self.for_entity(entity_id)):
             raise ValueError("Edit duplicates an existing observation; use delete_observations or merge_observations")
+        if trigger_rows is not None:
+            with self._conn.transaction():
+                self._conn.write("DELETE FROM observation_triggers WHERE observation_id = ?", (row["id"],))
+                self._add_triggers([row["id"]], trigger_rows)
+        if new_content == content and provenance is None:
+            return content_hash
 
         with self._conn.transaction():
             refresh_for_entity(self._conn, entity_id, delete=True)

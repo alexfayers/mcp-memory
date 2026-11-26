@@ -41,6 +41,35 @@ def validate_provenance(provenance: str | None) -> None:
         raise ValueError(f"Invalid provenance '{provenance}'. Must be one of: {VALID_PROVENANCES}")
 
 
+# The action each trigger kind takes when it matches.
+TRIGGER_ACTIONS = {"pattern": "block", "path": "inject", "mention": "inject"}
+_REGEX_TRIGGER_KINDS = frozenset({"pattern", "mention"})
+
+
+def validate_triggers(triggers: list[dict[str, str]]) -> list[tuple[str, str, str, str]]:
+    """Return each trigger as (kind, value, tool, action), raising ValueError for an invalid one.
+
+    A trigger needs a known kind and a non-empty value. A pattern or mention value must compile as a regex,
+    and only a pattern may name a tool.
+    """
+    rows: list[tuple[str, str, str, str]] = []
+    for trigger in triggers:
+        kind, value, tool = trigger.get("kind", ""), trigger.get("value", ""), trigger.get("tool") or ""
+        if kind not in TRIGGER_ACTIONS:
+            raise ValueError(f"Invalid trigger kind '{kind}'. Must be one of: {tuple(TRIGGER_ACTIONS)}")
+        if not value:
+            raise ValueError("A trigger needs a non-empty value")
+        if tool and kind != "pattern":
+            raise ValueError("Only a pattern trigger may name a tool")
+        if kind in _REGEX_TRIGGER_KINDS:
+            try:
+                re.compile(value)
+            except re.error as exc:
+                raise ValueError(f"Invalid {kind} trigger regex '{value}': {exc}") from exc
+        rows.append((kind, value, tool, TRIGGER_ACTIONS[kind]))
+    return rows
+
+
 VALID_RELATION_TYPES = (
     "implements",
     "depends-on",
