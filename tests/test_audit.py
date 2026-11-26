@@ -663,6 +663,10 @@ class TestRedundantLabels:
             ("Observed: cache is cold", "observed", "2026-11-26 10:00:00"),
             ("Observed: tests are slow", "inferred", "2026-11-26 10:00:00"),
             ("The cert expires 2027-01-01", "observed", "2026-11-26 10:00:00"),
+            ("User wants dark mode, not light", "user", "2026-11-26 10:00:00"),
+            ("User decision, not a guess - keep it", "user", "2026-11-26 10:00:00"),
+            ("Observed - the cache was cold", "observed", "2026-11-26 10:00:00"),
+            ("5 mayday: drill plan", None, "2026-11-26 10:00:00"),
             ("User prefers tabs", "user", "2026-11-26 10:00:00"),
         )
 
@@ -674,7 +678,7 @@ class TestRedundantLabels:
             "deploy ran",
             "cache is cold",
         }
-        assert report["dated_labels"] == []
+        assert report["review_labels"] == []
 
     def test_a_date_other_than_the_creation_day_needs_review(self, store: Storage) -> None:
         _seed_labelled(store, ("2026-01-05: kickoff", None, "2026-11-26 10:00:00"))
@@ -682,7 +686,75 @@ class TestRedundantLabels:
         report = api._audit(store, {"project": "proj", "plan": False})
 
         assert report["redundant_labels"] == []
-        assert [f["cleaned"] for f in report["dated_labels"]] == ["kickoff"]
+        assert [f["cleaned"] for f in report["review_labels"]] == ["kickoff"]
+
+    def test_a_label_whose_cleaned_text_already_exists_needs_a_reviewed_merge(
+        self, store: Storage, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _seed_labelled(
+            store,
+            ("Observed: X is slow", "observed", "2026-11-26 10:00:00"),
+            ("X is slow", "observed", "2026-11-26 10:00:00"),
+        )
+
+        steps = api._audit(store, {"project": "proj", "plan": True})["steps"]
+        applied = api._audit(store, {"project": "proj", "plan": False, "apply": True})["applied"]
+
+        assert [(s["tool"], s["arguments"], s["needs_review"]) for s in steps if "Hash" in str(s["arguments"])] == [
+            (
+                "merge_observations",
+                {
+                    "project": "proj",
+                    "entityName": "task/labels",
+                    "sourceHash": hash_observation("Observed: X is slow"),
+                    "targetHash": hash_observation("X is slow"),
+                },
+                True,
+            )
+        ]
+        assert applied == []
+        assert "skipped safe plan step" not in caplog.text
+        assert api._audit(store, {"project": "proj", "plan": False})["redundant_labels"] == []
+
+    def test_a_label_on_a_status_line_is_not_reported(self, store: Storage) -> None:
+        _seed_labelled(store, ("2026-11-26: status: done", None, "2026-11-26 10:00:00"))
+
+        report = api._audit(store, {"project": "proj", "plan": False})
+
+        assert report["redundant_labels"] == report["review_labels"] == []
+
+    def test_plan_emits_one_edit_step_per_label(self, store: Storage) -> None:
+        _seed_labelled(
+            store,
+            ("Observed: cache is cold", "observed", "2026-11-26 10:00:00"),
+            ("2026-01-05: kickoff", None, "2026-11-26 10:00:00"),
+        )
+
+        steps = api._audit(store, {"project": "proj", "plan": True})["steps"]
+
+        assert [(s["arguments"]["newText"], s["needs_review"]) for s in steps if s["tool"] == "edit_observation"] == [
+            ("cache is cold", False),
+            ("kickoff", True),
+        ]
+
+    def test_apply_rewrites_safe_labels_in_place_and_is_idempotent(self, store: Storage) -> None:
+        _seed_labelled(
+            store,
+            ("User decision on 26 Nov: Use uv", "user", "2026-11-26 10:00:00"),
+            ("2026-01-05: kickoff", None, "2026-11-26 10:00:00"),
+        )
+        _vote_obs(store, "task/labels", "User decision on 26 Nov: Use uv", 2)
+
+        applied = api._audit(store, {"project": "proj", "plan": False, "apply": True})["applied"]
+        again = api._audit(store, {"project": "proj", "plan": False, "apply": True})["applied"]
+
+        assert applied == ["[proj/task/labels] - relabelled observation: Use uv (auto)"]
+        assert again == []
+        assert _contents(store) == {"Use uv", "2026-01-05: kickoff"}
+        assert {o.content: o.vote_score for o in store.reads.get_entity("proj", "task/labels").observations}[
+            "Use uv"
+        ] == 2
+        assert api._audit(store, {"project": "proj", "plan": False})["redundant_labels"] == []
 
 
 class TestAuditCommand:

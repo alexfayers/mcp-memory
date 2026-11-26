@@ -37,6 +37,10 @@ def _apply_step(db: Storage, step: Step) -> str:
             f"[{project}/{r['source']}] - linked {r['relationType']} -> {r['target']}: {reason} (auto)"
             for r in relations
         )
+    if tool == "edit_observation":
+        name, new_text = cast("str", args["entityName"]), cast("str", args["newText"])
+        db.observations.edit(project, name, cast("str", args["observationHash"]), new_text)
+        return f"[{project}/{name}] - relabelled observation: {new_text} (auto)"
     raise ValueError(f"Unsupported plan step tool '{tool}'")
 
 
