@@ -1901,6 +1901,25 @@ class TestTombstoneVisibility:
 
 
 class TestMergeEntities:
+    def test_merging_keeps_the_source_triggers_on_the_target(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["x"]},
+                {"name": "canon", "entityType": "task", "observations": ["shared"]},
+            ],
+        )
+        store.observations.add("proj", "dup", ["shared", "only-source"], triggers=[{"kind": "mention", "value": "m"}])
+        store.entities.merge("proj", "dup", "canon")
+        rows = sorted((row["entity"], row["content"]) for row in store.observations.trigger_rows())
+        assert rows == [("canon", "only-source"), ("canon", "shared")]
+
+    def test_merging_observations_keeps_the_source_triggers_on_the_target(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
+        store.observations.add("proj", "e1", ["a"], triggers=[{"kind": "mention", "value": "m"}])
+        store.observations.merge("proj", "e1", hash_observation("a"), hash_observation("b"))
+        assert [row["content"] for row in store.observations.trigger_rows()] == ["b"]
+
     def test_observations_merged_and_deduped(self, store: Storage) -> None:
         store.entities.create(
             "proj",

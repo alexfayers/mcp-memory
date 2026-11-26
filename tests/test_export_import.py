@@ -70,6 +70,23 @@ class TestProvenanceRoundTrip:
         provenances = {o.content: o.provenance for o in target.reads.get_entity("proj", "task/t").observations}
         assert provenances == {"d": None, "said": "user"}
 
+    def test_export_then_import_keeps_triggers(self, tmp_path: Path) -> None:
+        db = _make_db(tmp_path / "src.db")
+        trigger = {"kind": "pattern", "value": "push", "tool": "execute_command"}
+        db.observations.add("proj", "task/t", ["d", "new"], triggers=[trigger])
+        out = tmp_path / "export.json"
+        export_database(db, out)
+        db.connection.close()
+
+        target = open_writable(tmp_path / "dst.db")
+        target.entities.create("proj", [{"name": "task/t", "entityType": "task", "observations": ["d"]}])
+        import_projects(target, load_export(out), ["proj"], dry_run=False)
+        rows = target.observations.trigger_rows()
+        assert sorted((row["content"], row["value"], row["tool"]) for row in rows) == [
+            ("d", "push", "execute_command"),
+            ("new", "push", "execute_command"),
+        ]
+
     def test_importing_a_duplicate_raises_its_provenance(self, tmp_path: Path) -> None:
         db = _make_db(tmp_path / "src.db")
         db.observations.add("proj", "task/t", ["said"], provenance="user")

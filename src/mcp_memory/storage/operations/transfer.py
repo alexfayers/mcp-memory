@@ -6,7 +6,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from mcp_memory.migrations.runner import schema_version
-from mcp_memory.models import normalize_relation_type
+from mcp_memory.models import normalize_relation_type, validate_triggers
 from mcp_memory.storage.pure.rows import build_entity
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT
 from mcp_memory.storage.services.ids import (
@@ -17,6 +17,7 @@ from mcp_memory.storage.services.ids import (
     get_or_create_relation_type_id,
 )
 from mcp_memory.storage.services.provenance import raise_provenance
+from mcp_memory.storage.services.triggers import add_triggers
 
 if TYPE_CHECKING:
     from mcp_memory.models import Relation
@@ -213,22 +214,25 @@ class Transfer:
                     (entity_id, content_hash),
                 )
                 raise_provenance(self._conn, [(obs.get("provenance"), row["id"]) for row in rows])
+                add_triggers(self._conn, [row["id"] for row in rows], validate_triggers(obs.get("triggers", [])))
                 continue
             new_count += 1
             created_at, provenance = obs.get("created_at"), obs.get("provenance")
             if created_at is None:
-                self._conn.write(
+                cursor = self._conn.write(
                     "INSERT INTO observations (entity_id, content, content_hash, vote_score, provenance) "
                     "VALUES (?, ?, ?, ?, ?)",
                     (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), provenance),
                 )
             else:
-                self._conn.write(
+                cursor = self._conn.write(
                     "INSERT INTO observations "
                     "(entity_id, content, content_hash, vote_score, created_at, provenance) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (entity_id, obs["content"], content_hash, obs.get("vote_score", 0), created_at, provenance),
                 )
+            if cursor.lastrowid is not None:
+                add_triggers(self._conn, [cursor.lastrowid], validate_triggers(obs.get("triggers", [])))
             existing.add(content_hash)
         return new_count, duplicate_count
 

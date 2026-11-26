@@ -22,6 +22,7 @@ from mcp_memory.storage.pure.sql import placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
 from mcp_memory.storage.services.provenance import raise_provenance
+from mcp_memory.storage.services.triggers import add_triggers, copy_triggers, triggers_of
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -102,16 +103,9 @@ class ObservationRepository:
                     f"AND content IN ({placeholders(len(observations))})",
                     (entity_id, *observations),
                 )
-                self._add_triggers([row["id"] for row in ids], trigger_rows)
+                add_triggers(self._conn, [row["id"] for row in ids], trigger_rows)
 
         return [hash_observation(obs) for obs in new_observations]
-
-    def _add_triggers(self, observation_ids: list[int], triggers: list[tuple[str, str, str, str]]) -> None:
-        self._conn.write_many(
-            "INSERT OR IGNORE INTO observation_triggers (observation_id, kind, value, tool, action) "
-            "VALUES (?, ?, ?, ?, ?)",
-            [(observation_id, *trigger) for observation_id in observation_ids for trigger in triggers],
-        )
 
     def trigger_rows(self) -> list[dict[str, object]]:
         """Return every live observation's triggers with the observation they surface, best-voted first."""
@@ -328,6 +322,7 @@ class ObservationRepository:
                 [(max(int(r["vote_score"]) for r in sources), t["id"]) for t in targets],
             )
             raise_provenance(self._conn, [(s["provenance"], t["id"]) for t in targets for s in sources])
+            copy_triggers(self._conn, [(s["id"], t["id"]) for t in targets for s in sources])
             hashes = self._soft_delete(entity_id, "content_hash = ?", [source_hash])
         return {"merged": len(hashes), "hashes": hashes}
 
@@ -376,7 +371,7 @@ class ObservationRepository:
         if trigger_rows is not None:
             with self._conn.transaction():
                 self._conn.write("DELETE FROM observation_triggers WHERE observation_id = ?", (row["id"],))
-                self._add_triggers([row["id"]], trigger_rows)
+                add_triggers(self._conn, [row["id"]], trigger_rows)
         if new_content == content and provenance is None:
             return content_hash
 
@@ -404,7 +399,7 @@ class ObservationRepository:
     def export_rows(self, entity_id: int) -> list[dict[str, object]]:
         """Return an entity's observations as export dicts, best-first, preserving created_at."""
         rows = self._conn.query_all(
-            "SELECT content, content_hash, vote_score, created_at, provenance FROM observations "
+            "SELECT id, content, content_hash, vote_score, created_at, provenance FROM observations "
             "WHERE entity_id = ? AND deleted_at IS NULL ORDER BY vote_score DESC, id",
             (entity_id,),
         )
@@ -415,6 +410,7 @@ class ObservationRepository:
                 "vote_score": int(row["vote_score"]),
                 "created_at": row["created_at"],
                 "provenance": row["provenance"],
+                **({"triggers": triggers} if (triggers := triggers_of(self._conn, row["id"])) else {}),
             }
             for row in rows
         ]
