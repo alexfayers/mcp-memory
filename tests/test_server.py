@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
-from datetime import UTC, datetime
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -21,7 +20,6 @@ from mcp_memory.models import Relation
 from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _GLOBAL_PROJECT, _ensure_project_root, _validate_and_extract_relations
 from mcp_memory.storage import open_writable
-from mcp_memory.storage.pure import rows
 from mcp_memory.storage.pure.rows import hash_observation
 from tests import obs_contents, soft_delete_store
 
@@ -889,12 +887,8 @@ class TestStatusObservationsRejected:
         assert "set_entity_status" in result["error"]
         assert server_db.reads.search("proj", "fine")["entities"] == []
 
-    def test_a_status_observation_behind_todays_date_label_is_rejected(
-        self, entity: Storage, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        today = datetime(2026, 9, 8, tzinfo=UTC)
-        monkeypatch.setattr(rows, "datetime", SimpleNamespace(now=lambda **_: today))
-        text = f"{today:%Y-%m-%d}: status: resolved"
+    def test_a_status_observation_behind_a_date_label_is_rejected(self, entity: Storage) -> None:
+        text = "2026-09-08: status: resolved"
         assert "set_entity_status" in tools.add_observations("proj", "task/e1", [text])["error"]
         created = tools.create_entities("proj", [{"name": "task/e3", "entityType": "task", "observations": [text]}])
         assert "set_entity_status" in created["error"]

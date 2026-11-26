@@ -33,7 +33,7 @@ from .models import (
 )
 from .payload import compact_json
 from .storage import GraphResult, NodeList, open_writable
-from .storage.pure.rows import reject_status_observation, strip_today_date_prefix
+from .storage.pure.rows import reject_status_observation, strip_redundant_label
 from .storage.repositories.entities import KEEP_USER_TOMBSTONES
 from .visualise import register_visualise_routes
 
@@ -586,7 +586,7 @@ def _reject_status_observations(observations: list[str] | None) -> None:
         return
     for text in observations:
         if isinstance(text, str):
-            reject_status_observation(strip_today_date_prefix(text))
+            reject_status_observation(strip_redundant_label(text))
 
 
 def _validate_entity_type_and_name(project: str, entity_type: object, name: str) -> None:

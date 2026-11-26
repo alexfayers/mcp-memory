@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 import shutil
@@ -1047,11 +1047,10 @@ class TestMemoryPluginDatePrefixNudge:
         assert result is not None
         assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
 
-    def test_does_not_flag_yesterday_prefixed_observation(
+    def test_flags_a_date_inside_a_label(
         self,
         plugin: MemoryPlugin,
     ) -> None:
-        yesterday = (datetime.now(tz=UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
         result = plugin.on_hook(
             "PreToolUse",
             task_id="t1",
@@ -1059,10 +1058,11 @@ class TestMemoryPluginDatePrefixNudge:
             parameters={
                 "project": "global",
                 "entityName": "foo",
-                "observations": [f"{yesterday}: fact"],
+                "observations": ["Design preference (26 Nov): fact"],
             },
         )
-        assert result is None
+        assert result is not None
+        assert any("Design preference (26 Nov): fact" in note for note in result.notes)
 
     def test_does_not_flag_date_without_separator(
         self,

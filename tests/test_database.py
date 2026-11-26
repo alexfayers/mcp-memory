@@ -18,7 +18,7 @@ from mcp_memory.path_resolver import normalize_path
 from mcp_memory.server import _wire_entity
 from mcp_memory.storage import open_readonly, open_writable
 from mcp_memory.storage.connection import Connection
-from mcp_memory.storage.pure.rows import budget_observations, hash_observation, strip_today_date_prefix
+from mcp_memory.storage.pure.rows import budget_observations, hash_observation
 from mcp_memory.storage.pure.sql import parse_date
 from mcp_memory.storage.repositories.telemetry import TelemetryRepository
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
@@ -2943,42 +2943,62 @@ def _obs(*contents: str) -> list[Observation]:
     return [Observation(content=c, content_hash=hash_observation(c), vote_score=0) for c in contents]
 
 
-class TestStripTodayDatePrefix:
-    """Only today's date, with an explicit separator and non-empty remainder, is stripped."""
+def _write_observation(store: Storage, via: str, text: str, provenance: str | None = None) -> list[str]:
+    """Store `text` through one public write path and return the entity's observation contents."""
+    if via == "create_entities":
+        entity = {"name": "e1", "entityType": "task", "observations": [text], "provenance": provenance}
+        store.entities.create("proj", [entity])
+    else:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["seed"]}])
+        if via == "add_observations":
+            store.observations.add("proj", "e1", [text], provenance)
+        else:
+            store.observations.edit("proj", "e1", hash_observation("seed"), text, provenance=provenance)
+    return [c for c in obs_contents(store.reads.get_entity("proj", "e1")) if c != "seed"]
 
+
+_WRITE_PATHS = ["create_entities", "add_observations", "edit_observation"]
+
+
+class TestStripRedundantLabel:
+    """A date, time or provenance label the observation's own fields already carry is stripped on write."""
+
+    @pytest.mark.parametrize("via", _WRITE_PATHS)
     @pytest.mark.parametrize(
         ("content", "expected"),
         [
             ("2026-09-08: text", "text"),
             ("2026-09-08 - text", "text"),
             ("2026-09-08, text", "text"),
+            ("2020-01-05: text", "text"),
+            ("26 Nov: text", "text"),
+            ("(26 Nov): text", "text"),
+            ("Nov 26, 2026: text", "text"),
+            ("2026-11-26 11:14Z: text", "text"),
+            ("11:14Z: text", "text"),
+            ("Design preference (26 Nov): text", "Design preference: text"),
+            ("Decision on 26 Nov: text", "Decision: text"),
+            ("Note (26 Nov 11:14Z): text", "Note: text"),
         ],
     )
-    def test_strips_todays_date_with_a_separator(self, content: str, expected: str) -> None:
-        assert strip_today_date_prefix(content, today="2026-09-08") == expected
+    def test_strips_a_date_or_time_label(self, store: Storage, via: str, content: str, expected: str) -> None:
+        assert _write_observation(store, via, content) == [expected]
 
+    @pytest.mark.parametrize("via", _WRITE_PATHS)
     @pytest.mark.parametrize(
         "content",
         [
-            "2026-09-07: text",
             "2026-09-08 text",
             "20260908: text",
             "2026-09-08-2026-09-09 range",
-            "2026-09-08: ",
             "the date was 2026-09-08: text",
+            "the cert expires 2027-01-01",
+            "Cert expiry 2027-01-01: renew early",
+            "Meeting moved (26 Nov) to Friday",
         ],
     )
-    def test_leaves_content_untouched(self, content: str) -> None:
-        assert strip_today_date_prefix(content, today="2026-09-08") == content
-
-
-class TestStripTodayDatePrefixIntegration:
-    def test_add_observations_strips_a_todays_date_prefix(self, store: Storage) -> None:
-        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
-        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
-        hashes = store.observations.add("proj", "e1", [f"{today}: fact"])
-        assert hashes == [hash_observation("fact")]
-        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["a", "fact"]
+    def test_keeps_a_date_that_is_part_of_the_fact(self, store: Storage, via: str, content: str) -> None:
+        assert _write_observation(store, via, content) == [content]
 
     def test_add_observations_dedupes_against_an_existing_bare_observation(self, store: Storage) -> None:
         today = datetime.now(tz=UTC).strftime("%Y-%m-%d")

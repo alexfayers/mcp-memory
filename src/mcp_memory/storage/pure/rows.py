@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import hashlib
 import re
 import sqlite3
 
 from mcp_memory.models import Entity, Observation, Relation
 
-_TODAY_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ \t]*[:,-][ \t]+")
+_MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?"
+_DATE = rf"(?:\d{{4}}-\d{{2}}-\d{{2}}|\d{{1,2}}\s+{_MONTH}(?:\s+\d{{4}})?|{_MONTH}\s+\d{{1,2}}(?:,?\s+\d{{4}})?)"
+_TIME = r"\d{1,2}:\d{2}(?::\d{2})?\s*(?:Z|UTC)?"
+_STAMP = rf"(?:{_DATE}(?:[T\s]+{_TIME})?|{_TIME})"
+_STAMP_LABEL_RE = re.compile(rf"^\(?{_STAMP}\)?[ \t]*[:,-][ \t]+(?=\S)", re.IGNORECASE)
+_STAMPED_LABEL_RE = re.compile(
+    rf"^(?P<label>[^\n:]{{1,60}}?)\s*(?:\(\s*{_STAMP}\s*\)|\b(?:on|at)\s+{_STAMP})\s*:\s+(?=\S)", re.IGNORECASE
+)
 _STATUS_OBSERVATION = re.compile(r"\s*status:", re.IGNORECASE)
 
 
@@ -27,22 +33,18 @@ def hash_observation(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
 
 
-def strip_today_date_prefix(content: str, today: str | None = None) -> str:
-    """Strip a leading "<today's date><separator>" label, since created_at already carries it.
+def strip_redundant_label(content: str) -> str:
+    """Strip a leading date or time label, since created_at already carries it.
 
-    Only strips when the captured date equals `today` (UTC, defaults to the current date) and
-    the remainder after the required separator and whitespace is non-empty - a bare date with
-    no separator (e.g. "2026-09-08 was the day...") is left untouched as real content, and a
-    past date is left untouched as real history rather than a redundant label.
+    Strips a label that is only a date or time ("26 Nov: fact"), and a date or time in
+    parentheses or after "on"/"at" at the end of a longer label ("Decision (26 Nov): fact"
+    becomes "Decision: fact"). A date elsewhere in the text is real content and stays.
     """
-    match = _TODAY_DATE_PREFIX_RE.match(content)
-    if match is None:
-        return content
-    if today is None:
-        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
-    if match.group(1) != today:
-        return content
-    return content[match.end() :] or content
+    if match := _STAMP_LABEL_RE.match(content):
+        return content[match.end() :]
+    if match := _STAMPED_LABEL_RE.match(content):
+        return f"{match['label']}: {content[match.end() :]}"
+    return content
 
 
 def budget_observations(observations: list[Observation], max_chars: int) -> list[Observation]:

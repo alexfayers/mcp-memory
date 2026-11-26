@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable
 import contextlib
-from datetime import UTC, datetime
 import itertools
 import json
 import os
@@ -58,7 +57,7 @@ from mcp_memory.hooks.tracker import (
 )
 from mcp_memory.nudge_count import NudgeKind
 from mcp_memory.path_resolver import match_project_for_path
-from mcp_memory.storage.pure.rows import strip_today_date_prefix
+from mcp_memory.storage.pure.rows import strip_redundant_label
 from mcp_memory.tool_names import DEDUPED_READ_TOOLS, MUTATING_TOOLS, READ_ONLY_TOOLS
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(MUTATING_TOOLS)
@@ -408,7 +407,7 @@ _SCOPE_MISMATCH_WARNING = (
 )
 
 _DATE_PREFIX_WARNING = (
-    "REDUNDANT DATE PREFIX: {count} observation(s) in this call start with today's date"
+    "REDUNDANT DATE PREFIX: {count} observation(s) in this call start with a date or time label"
     " (first: `{example}`). The server records each observation's timestamp itself and strips"
     " this prefix on write, so it only wastes text. Drop the date and keep the fact."
 )
@@ -467,11 +466,8 @@ _DATE_PREFIX_EXAMPLE_CHARS = 80
 
 
 def _date_prefix_note(tool_name: str, parameters: dict[str, object]) -> str | None:
-    """Return a nudge when observations carry a date prefix the server would strip."""
-    today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
-    flagged = [
-        text for text in _observation_texts(tool_name, parameters) if strip_today_date_prefix(text, today=today) != text
-    ]
+    """Return a nudge when observations carry a label the server would strip."""
+    flagged = [text for text in _observation_texts(tool_name, parameters) if strip_redundant_label(text) != text]
     if not flagged:
         return None
     example = flagged[0][:_DATE_PREFIX_EXAMPLE_CHARS]
