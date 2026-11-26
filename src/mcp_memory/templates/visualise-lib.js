@@ -34,7 +34,17 @@
       .sort((a, b) => a.type.localeCompare(b.type) || a.direction.localeCompare(b.direction));
   };
 
-  const lib = { shouldRefetchGraph, filterEntities, formatRoute, parseRoute, neighbourhood };
+  const OPEN_STATUSES = new Set(["in-progress", "blocked"]);
+  const openWork = (entities, project = "") => {
+    const groups = new Map();
+    entities
+      .filter(e => OPEN_STATUSES.has(e.status) && (!project || e.project === project))
+      .sort((a, b) => (a.updated_at || "").localeCompare(b.updated_at || ""))
+      .forEach(e => { if (!groups.has(e.project)) groups.set(e.project, []); groups.get(e.project).push(e); });
+    return [...groups].map(([name, list]) => ({ project: name, entities: list })).sort((a, b) => a.project.localeCompare(b.project));
+  };
+
+  const lib = { shouldRefetchGraph, filterEntities, formatRoute, parseRoute, neighbourhood, openWork };
   if (typeof module !== "undefined") module.exports = lib;
   else root.VisLib = lib;
 })(this);

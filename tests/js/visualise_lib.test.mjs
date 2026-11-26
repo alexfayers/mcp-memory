@@ -82,3 +82,20 @@ test("neighbourhood groups an entity's direct relations by type and direction", 
 test("neighbourhood is empty for an entity with no relations", () => {
   assert.deepEqual(lib.neighbourhood([], "p", "x"), []);
 });
+
+test("openWork groups in-progress and blocked entities by project, oldest update first", () => {
+  const at = (name, status, project, updated_at) => ({ ...entity(name, "task", status, project), updated_at });
+  const entities = [
+    at("new", "in-progress", "p", "2026-03-01 00:00:00"),
+    at("old", "blocked", "p", "2026-01-01 00:00:00"),
+    at("done", "resolved", "p", "2025-01-01 00:00:00"),
+    at("other", "in-progress", "a", "2026-02-01 00:00:00"),
+  ];
+  const groups = lib.openWork(entities).map(g => ({ project: g.project, names: names(g.entities) }));
+  assert.deepEqual(groups, [{ project: "a", names: ["other"] }, { project: "p", names: ["old", "new"] }]);
+});
+
+test("openWork keeps only the chosen project", () => {
+  const entities = [entity("x", "task", "blocked", "p"), entity("y", "task", "blocked", "q")];
+  assert.deepEqual(lib.openWork(entities, "q").map(g => g.project), ["q"]);
+});

@@ -7,11 +7,11 @@
 <link rel="icon" href="data:,">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-:root { --sidebar: 320px; }
+:root { --sidebar: 320px; --panel: 340px; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; overflow: hidden; }
 select, button { background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
 select:hover, button:hover { border-color: #58a6ff; }
-#panel { position: fixed; right: 0; top: 0; width: 340px; height: 100%; background: #161b22; border-left: 1px solid #30363d; padding: 16px; overflow-y: auto; transform: translateX(100%); transition: transform 0.2s; z-index: 10; }
+#panel { position: fixed; right: 0; top: 0; width: var(--panel); height: 100%; background: #161b22; border-left: 1px solid #30363d; padding: 16px; overflow-y: auto; transform: translateX(100%); transition: transform 0.2s; z-index: 10; }
 #panel.open { transform: translateX(0); }
 #panel h2 { font-size: 15px; margin-bottom: 4px; color: #58a6ff; word-break: break-all; }
 #panel h3 { font-size: 12px; color: #484f58; margin-bottom: 12px; }
@@ -33,7 +33,7 @@ select:hover, button:hover { border-color: #58a6ff; }
 #panel .obs.armed .obs-vote { opacity: 1; }
 #panel .obs-merge-btn.armed { color: #58a6ff; border-color: #58a6ff; }
 #panel-close { position: absolute; top: 8px; right: 8px; background: none; border: none; color: #484f58; cursor: pointer; font-size: 18px; }
-svg, #graph-canvas { position: fixed; top: 0; left: var(--sidebar); width: calc(100vw - var(--sidebar)); height: 100vh; }
+svg, #graph-canvas { position: fixed; top: 0; left: var(--sidebar); width: calc(100vw - var(--sidebar) - var(--panel)); height: 100vh; }
 #graph-canvas { pointer-events: none; }
 svg.canvas-mode g { visibility: hidden; }
 .link { stroke-width: var(--link-px, 1px); }
@@ -92,6 +92,11 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 #entity-list .sub { color: #8b949e; display: block; }
 #entity-list .snip { color: #8b949e; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #sidebar-foot { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: #8b949e; font-size: 11px; }
+#home h2 { font-size: 15px; margin-bottom: 8px; color: #c9d1d9; }
+#home h4 { font-size: 12px; color: #c9d1d9; margin: 10px 0 2px; }
+#home .work { font-size: 12px; padding: 2px 0; }
+#home .work a { word-break: break-all; }
+#home .work .sub { color: #8b949e; font-size: 11px; display: block; }
 #p-project { font-size: 12px; color: #8b949e; margin-bottom: 8px; }
 #panel a { color: #58a6ff; text-decoration: none; }
 #panel a:hover { text-decoration: underline; }
@@ -104,7 +109,7 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 .node.search-hit circle:first-of-type { stroke: #58a6ff !important; stroke-width: 3; }
 .search-ring { fill: none; stroke: #58a6ff; stroke-opacity: 0.9; pointer-events: none; }
 .search-badge { fill: #58a6ff; font-size: 9px; font-weight: 700; pointer-events: none; }
-#agent-panels { position: fixed; bottom: 12px; right: 12px; z-index: 10; width: 300px; max-width: 40vw;
+#agent-panels { position: fixed; bottom: 12px; right: calc(var(--panel) + 12px); z-index: 10; width: 300px; max-width: 40vw;
   max-height: calc(100vh - 24px); display: flex; flex-direction: column; gap: 8px;
   overflow-y: auto; }
 #dream { background: rgba(22,27,34,0.9); border: 1px solid #30363d; border-radius: 6px;
@@ -233,8 +238,10 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
     </div>
   </div>
 </div>
-<div id="panel">
-  <button id="panel-close">&times;</button>
+<div id="panel" class="open">
+  <section id="home" aria-label="Open work"></section>
+  <section id="detail" hidden>
+  <button id="panel-close" aria-label="Close">&times;</button>
   <h2 id="p-name"></h2>
   <h3 id="p-type"></h3>
   <div id="p-status"></div>
@@ -248,6 +255,7 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
   <div id="p-relations"></div>
   <details id="p-paths" hidden></details>
   <div id="p-obs"></div>
+  </section>
 </div>
 <svg></svg>
 <canvas id="graph-canvas" hidden></canvas>
@@ -444,7 +452,7 @@ async function loadGraph() {
     currentData = await (await fetch("/api/graph")).json();
     buildTypeChips();
     showGraph();
-    if (firstLoad) applyRoute(); else renderList();
+    if (firstLoad) applyRoute(); else { renderList(); renderHome(); }
   } catch (e) { document.getElementById("status").textContent = "error: " + e.message; }
 }
 
@@ -619,7 +627,22 @@ function openEntity(d) {
   if (simulation && simulation.alpha() > simulation.alphaMin()) focusIds = near;
   else fitView(nodes.filter(n => near.has(n.id)), FIT_MS);
 }
-function closePanel() { panel.classList.remove("open"); selectedNode = null; updateSelection(); }
+function closePanel() {
+  panelDatum = null; selectedNode = null; updateSelection();
+  document.getElementById("detail").hidden = true;
+  document.getElementById("home").hidden = false;
+  renderHome();
+}
+
+function renderHome() {
+  if (!currentData || panelDatum) return;
+  const groups = VisLib.openWork(currentData.entities, shownProject);
+  document.getElementById("home").innerHTML = `<h2>Open work</h2>` + (groups.length ? groups.map(g =>
+    `<h4>${escapeHtml(g.project)}</h4>` + g.entities.map(e =>
+      `<div class="work"><a href="${escapeHtml(VisLib.formatRoute(e))}">${escapeHtml(e.name)}</a>`
+      + `<span class="sub">${escapeHtml(e.status)} · updated ${escapeHtml((e.updated_at || "").slice(0, 10))}</span></div>`).join("")).join("")
+    : `<p class="work">Nothing in progress or blocked.</p>`);
+}
 
 const SLOW_DRAW_MS = 20, SLOW_DRAW_SKIP = 2;
 let lastDrawAt = 0, drawGap = 0, drewLastTick = false;
@@ -825,7 +848,8 @@ function showPanel(d) {
   pathBox.innerHTML = `<summary>On disk (${paths.length})</summary>` + paths.map(p => `<div class="path">${escapeHtml(p)}</div>`).join("");
   renderObservations(d);
   loadObservations(d);
-  panel.classList.add("open");
+  document.getElementById("home").hidden = true;
+  document.getElementById("detail").hidden = false;
 }
 
 async function loadObservations(d) {
@@ -910,6 +934,7 @@ function setProject(project) {
   shownProject = project;
   refitView = true; stopTickLoop(); canvasPulses = []; if (simulation) { simulation.stop(); simulation = null; } setCanvasMode(false); updateControlsPath();
   if (currentData) showGraph();
+  renderHome();
   runSearch();
 }
 document.getElementById("project").onchange = () => {
