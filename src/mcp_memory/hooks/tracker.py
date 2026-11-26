@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 import fcntl
 import json
 import logging
 from pathlib import Path
 import uuid
+
+from cline_hooks.core.state import PluginStateStore
 
 from mcp_memory.config import get_data_dir
 
@@ -29,7 +32,27 @@ def _lock_path() -> Path:
     return _state_path().with_suffix(".lock")
 
 
-_StateData = dict[str, float | str | list[str]]
+_CONTEXT_FILE = "memory-tracker-context.json"
+
+
+@dataclass
+class _ContextState:
+    """What a task has done in its current context."""
+
+    count: float = 0.0
+    turn: int = 0
+    window: str = ""
+    flags: list[str] = field(default_factory=list)
+    scope_blocked: list[str] = field(default_factory=list)
+    seen: dict[str, list[str]] = field(default_factory=dict)
+
+
+def _context_store() -> PluginStateStore[_ContextState]:
+    """Return the store of state that follows the task's context, next to the memory database."""
+    return PluginStateStore(_CONTEXT_FILE, _ContextState, get_data_dir() / _CONTEXT_FILE)
+
+
+_StateData = dict[str, str | bool]
 
 
 @contextmanager
@@ -59,28 +82,26 @@ def _write(data: _StateData) -> None:
 
 def increment(task_id: str, amount: float = 1.0) -> float:
     """Increment the tool-call counter for a task and return the new value."""
-    with _locked():
-        data = _read()
-        count = data.get(task_id, 0)
-        new_count = (count if isinstance(count, (int, float)) else 0) + amount
-        data[task_id] = new_count
-        _write(data)
-        return new_count
+
+    def add(state: _ContextState) -> float:
+        state.count += amount
+        return state.count
+
+    return _context_store().update(task_id, add)
 
 
 def reset(task_id: str) -> None:
     """Reset the tool-call counter to zero after a memory write."""
-    with _locked():
-        data = _read()
-        data[task_id] = 0
-        _write(data)
+
+    def zero(state: _ContextState) -> None:
+        state.count = 0.0
+
+    _context_store().update(task_id, zero)
 
 
 def should_block(task_id: str, threshold: float = _MEMORY_BLOCK_THRESHOLD) -> bool:
     """Return True if the counter has reached the blocking threshold."""
-    with _locked():
-        count = _read().get(task_id, 0)
-    return isinstance(count, (int, float)) and count >= threshold
+    return _context_store().get(task_id).count >= threshold
 
 
 def should_warn(task_id: str, threshold: float = _MEMORY_WARN_THRESHOLD) -> bool:
@@ -90,6 +111,7 @@ def should_warn(task_id: str, threshold: float = _MEMORY_WARN_THRESHOLD) -> bool
 
 def clear(task_id: str) -> None:
     """Remove the counter and any scoped entries for a completed task."""
+    _context_store().reset(task_id)
     with _locked():
         data = _read()
         prefix = f"{task_id}:"
@@ -102,36 +124,37 @@ def clear(task_id: str) -> None:
 
 def tick_turn(task_id: str, amount: int = 1) -> int:
     """Add to the task's context-window turn counter and return it."""
-    return int(increment(f"{task_id}:turn", amount))
+
+    def add(state: _ContextState) -> int:
+        state.turn += amount
+        return state.turn
+
+    return _context_store().update(task_id, add)
 
 
 def get_window(task_id: str) -> str:
     """Return the task's context window id, minting it on first use."""
-    with _locked():
-        data = _read()
-        window_id = data.setdefault(f"{task_id}:window", uuid.uuid4().hex)
-        _write(data)
-        return str(window_id)
+
+    def mint(state: _ContextState) -> str:
+        state.window = state.window or uuid.uuid4().hex
+        return state.window
+
+    return _context_store().update(task_id, mint)
 
 
 def has_scope_blocked(task_id: str, project: str) -> bool:
     """Return True if a scope mismatch block has already fired for this project."""
-    with _locked():
-        blocked = _read().get(f"{task_id}:scope_blocked", [])
-    return isinstance(blocked, list) and project in blocked
+    return project in _context_store().get(task_id).scope_blocked
 
 
 def mark_scope_blocked(task_id: str, project: str) -> None:
     """Record that a scope mismatch block has fired for a project."""
-    with _locked():
-        data = _read()
-        blocked = data.get(f"{task_id}:scope_blocked", [])
-        if not isinstance(blocked, list):
-            blocked = []
-        if project not in blocked:
-            blocked.append(project)
-        data[f"{task_id}:scope_blocked"] = blocked
-        _write(data)
+
+    def mark(state: _ContextState) -> None:
+        if project not in state.scope_blocked:
+            state.scope_blocked.append(project)
+
+    _context_store().update(task_id, mark)
 
 
 def get_scope(task_id: str) -> str | None:
@@ -151,48 +174,59 @@ def set_scope(task_id: str, project: str) -> None:
 
 def has_edited(task_id: str) -> bool:
     """Return True if the task has made a file edit."""
-    with _locked():
-        return _read().get(f"{task_id}:edited") is True
+    return has_flag(task_id, "edited")
 
 
 def mark_edited(task_id: str) -> None:
     """Record that the task has made a file edit."""
-    with _locked():
-        data = _read()
-        data[f"{task_id}:edited"] = True
-        _write(data)
+    mark_flag(task_id, "edited", per_session=True)
 
 
 def has_flag(task_id: str, name: str) -> bool:
     """Return True if the task's flag with this name is set."""
+    if name in _context_store().get(task_id).flags:
+        return True
     with _locked():
         return _read().get(f"{task_id}:{name}") is True
 
 
-def mark_flag(task_id: str, name: str) -> None:
-    """Set the task's flag with this name."""
-    with _locked():
-        data = _read()
-        data[f"{task_id}:{name}"] = True
-        _write(data)
+def mark_flag(task_id: str, name: str, *, per_session: bool = False) -> None:
+    """Set the task's flag with this name, for the whole session or else for the current context."""
+    if per_session:
+        with _locked():
+            data = _read()
+            data[f"{task_id}:{name}"] = True
+            _write(data)
+        return
+
+    def mark(state: _ContextState) -> None:
+        if name not in state.flags:
+            state.flags.append(name)
+
+    _context_store().update(task_id, mark)
 
 
 def claim_edit_path(task_id: str, path: str) -> bool:
     """Return True if this path is the task's first edited file or was already claimed as it."""
+
+    key = f"{task_id}:edit_path"
     with _locked():
         data = _read()
-        key = f"{task_id}:edit_path"
-        if key not in data:
-            data[key] = path
-            _write(data)
-        return data[key] == path
+        claimed = data.setdefault(key, path)
+        _write(data)
+    return claimed == path
 
 
 def reset_work(task_id: str, names: tuple[str, ...]) -> None:
     """Forget the task's current piece of work: its edited path and these flags."""
+
+    def forget(state: _ContextState) -> None:
+        state.flags = [flag for flag in state.flags if flag not in names]
+
+    _context_store().update(task_id, forget)
     with _locked():
         data = _read()
-        keys = [key for name in ("edit_path", *names) if (key := f"{task_id}:{name}") in data]
+        keys = [key for name in (*names, "edit_path") if (key := f"{task_id}:{name}") in data]
         for key in keys:
             del data[key]
         if keys:
@@ -201,14 +235,12 @@ def reset_work(task_id: str, names: tuple[str, ...]) -> None:
 
 def take_unseen(task_id: str, name: str, items: list[str], limit: int) -> list[str]:
     """Return up to limit items the task has not yet taken under this name, and record them as taken."""
-    with _locked():
-        data = _read()
-        key = f"{task_id}:{name}"
-        seen = data.get(key, [])
-        if not isinstance(seen, list):
-            seen = []
+
+    def take(state: _ContextState) -> list[str]:
+        seen = state.seen.get(name, [])
         taken = [item for item in items if item not in seen][:limit]
         if taken:
-            data[key] = [*seen, *taken]
-            _write(data)
+            state.seen[name] = [*seen, *taken]
         return taken
+
+    return _context_store().update(task_id, take)

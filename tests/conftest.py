@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from cline_hooks.core import state as hook_state
 import pytest
 from starlette.testclient import TestClient
 
@@ -34,6 +35,13 @@ def _isolate_service_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     for module in (cli, config):
         monkeypatch.setattr(module, "_LAUNCHD_PLIST", tmp_path / "service" / "com.mcp-memory.plist")
         monkeypatch.setattr(module, "_SYSTEMD_UNIT", tmp_path / "service" / "mcp-memory.service")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_hook_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start each test with no hook context and keep its context anchors in a per-test directory."""
+    monkeypatch.setattr(hook_state, "_ANCHORS_DIR", tmp_path / "context-anchors")
+    monkeypatch.setattr(hook_state, "_context", hook_state._HookContext())
 
 
 class FakeApi:

@@ -951,12 +951,12 @@ class MemoryPlugin(HooksPlugin):
         if _is_file_edit(tool_name):
             mark_edited(task_id)
         if _is_wide_work(task_id, tool_name, parameters):
-            mark_flag(task_id, _WIDE_WORK)
+            mark_flag(task_id, _WIDE_WORK, per_session=True)
 
         if _is_memory_write(tool_name, parameters):
             if not _is_error_result(kwargs.get("tool_result")):
                 if _writes_task(_task_scope(task_id, workspace_roots), tool_name, parameters):
-                    mark_flag(task_id, _WROTE_TASK)
+                    mark_flag(task_id, _WROTE_TASK, per_session=True)
                 reset(task_id)
                 record_write()
             return None
