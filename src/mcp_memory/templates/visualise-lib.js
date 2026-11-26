@@ -44,7 +44,13 @@
     return [...groups].map(([name, list]) => ({ project: name, entities: list })).sort((a, b) => a.project.localeCompare(b.project));
   };
 
-  const lib = { shouldRefetchGraph, filterEntities, formatRoute, parseRoute, neighbourhood, openWork };
+  const moveSelection = (index, delta, length) => {
+    if (!length) return -1;
+    if (index < 0) return delta > 0 ? 0 : length - 1;
+    return Math.min(length - 1, Math.max(0, index + delta));
+  };
+
+  const lib = { shouldRefetchGraph, filterEntities, formatRoute, parseRoute, neighbourhood, openWork, moveSelection };
   if (typeof module !== "undefined") module.exports = lib;
   else root.VisLib = lib;
 })(this);

@@ -171,6 +171,14 @@ class TestVisualisePage:
         assert "VisLib.shouldRefetchGraph(" in resp.text
 
     @pytest.mark.anyio
+    async def test_supports_keyboard_focus_and_narrow_screens(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert ":focus-visible" in resp.text
+        assert "@media (max-width: 767px)" in resp.text
+        assert "VisLib.moveSelection(" in resp.text
+        assert 'e.key === "/"' in resp.text
+
+    @pytest.mark.anyio
     async def test_includes_the_dream_card(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert 'id="dream"' in resp.text

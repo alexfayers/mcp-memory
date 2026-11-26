@@ -99,3 +99,15 @@ test("openWork keeps only the chosen project", () => {
   const entities = [entity("x", "task", "blocked", "p"), entity("y", "task", "blocked", "q")];
   assert.deepEqual(lib.openWork(entities, "q").map(g => g.project), ["q"]);
 });
+
+test("moveSelection enters the list from either end and stops at its edges", () => {
+  assert.equal(lib.moveSelection(-1, 1, 3), 0);
+  assert.equal(lib.moveSelection(-1, -1, 3), 2);
+  assert.equal(lib.moveSelection(0, -1, 3), 0);
+  assert.equal(lib.moveSelection(1, 1, 3), 2);
+  assert.equal(lib.moveSelection(2, 1, 3), 2);
+});
+
+test("moveSelection selects nothing in an empty list", () => {
+  assert.equal(lib.moveSelection(-1, 1, 0), -1);
+});
