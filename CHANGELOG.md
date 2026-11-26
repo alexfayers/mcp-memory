@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/alexfayers/mcp-memory/compare/v0.4.0...v0.5.0) (2026-11-26)
+
+
+### Features
+
+* **observations:** record where each observation came from ([#208](https://github.com/alexfayers/mcp-memory/issues/208)) ([3785a6f](https://github.com/alexfayers/mcp-memory/commit/3785a6f2d554a87ded9e7c7219f966bafce3d449))
+
+
+### Miscellaneous Chores
+
+* sync shared files from llm-prompts-ci ([#233](https://github.com/alexfayers/mcp-memory/issues/233)) ([0d43838](https://github.com/alexfayers/mcp-memory/commit/0d43838b972ac73c3997d9348902a4c88f3891fd))
+
 ## [0.4.0](https://github.com/alexfayers/mcp-memory/compare/v0.3.2...v0.4.0) (2026-11-24)
 
 
