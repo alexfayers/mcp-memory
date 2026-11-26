@@ -15,7 +15,7 @@ from mcp_memory import (
     dream_status,
     eval as eval_module,
 )
-from mcp_memory.models import Relation
+from mcp_memory.models import MAX_VOTE_MAGNITUDE, Relation
 from mcp_memory.storage.pure.rows import hash_observation
 from mcp_memory.visualise import (
     get_all_graph_data,
@@ -28,6 +28,8 @@ from mcp_memory.visualise import (
 
 if TYPE_CHECKING:
     from mcp_memory.storage import Storage
+
+INVALID_VOTE_ERROR = {"error": f"vote must be a nonzero integer from -{MAX_VOTE_MAGNITUDE} to {MAX_VOTE_MAGNITUDE}"}
 
 
 @pytest.fixture(autouse=True)
@@ -868,6 +870,14 @@ class TestApiVote:
         assert resp.json()["vote_score"] == 1
 
     @pytest.mark.anyio
+    @pytest.mark.parametrize("vote", [MAX_VOTE_MAGNITUDE, -MAX_VOTE_MAGNITUDE])
+    async def test_full_magnitude_accepted(self, client: httpx.AsyncClient, store: Storage, vote: int) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": vote})
+        assert resp.status_code == 200
+        assert resp.json()["vote_score"] == vote
+
+    @pytest.mark.anyio
     async def test_vote_records_activity_and_ripples(self, client: httpx.AsyncClient, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
         await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": 1})
@@ -881,10 +891,10 @@ class TestApiVote:
     @pytest.mark.anyio
     async def test_invalid_vote_value_rejected(self, client: httpx.AsyncClient, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
-        for bad in (5, 0):
+        for bad in (MAX_VOTE_MAGNITUDE + 1, -(MAX_VOTE_MAGNITUDE + 1), 0):
             resp = await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": bad})
             assert resp.status_code == 400
-            assert resp.json() == {"error": "vote must be 1 or -1"}
+            assert resp.json() == INVALID_VOTE_ERROR
         graph = (await client.get("/api/graph", params={"project": "proj"})).json()
         assert graph["entities"][0]["vote_score"] == 0
         assert (await client.get("/api/activity")).json() == {"events": [], "seq": 0}
@@ -894,7 +904,7 @@ class TestApiVote:
         store.entities.create("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
         resp = await client.post("/api/vote", json={"project": "proj", "name": "e1", "vote": True})
         assert resp.status_code == 400
-        assert resp.json() == {"error": "vote must be 1 or -1"}
+        assert resp.json() == INVALID_VOTE_ERROR
 
     @pytest.mark.anyio
     async def test_unknown_entity_returns_404(self, client: httpx.AsyncClient) -> None:
@@ -956,6 +966,17 @@ class TestApiVoteObservation:
         assert events[0]["entities"] == ["e1"]
 
     @pytest.mark.anyio
+    @pytest.mark.parametrize("vote", [MAX_VOTE_MAGNITUDE, -MAX_VOTE_MAGNITUDE])
+    async def test_full_magnitude_accepted(self, client: httpx.AsyncClient, store: Storage, vote: int) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
+        resp = await client.post(
+            "/api/vote-observation",
+            json={"project": "proj", "name": "e1", "observationHash": hash_observation("o"), "vote": vote},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["vote_score"] == vote
+
+    @pytest.mark.anyio
     async def test_missing_observation_field_returns_400(self, client: httpx.AsyncClient, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "pattern", "observations": ["o"]}])
         resp = await client.post("/api/vote-observation", json={"project": "proj", "name": "e1", "vote": 1})
@@ -971,11 +992,11 @@ class TestApiVoteObservation:
                 "project": "proj",
                 "name": "e1",
                 "observationHash": hash_observation("o"),
-                "vote": 5,
+                "vote": MAX_VOTE_MAGNITUDE + 1,
             },
         )
         assert resp.status_code == 400
-        assert resp.json() == {"error": "vote must be 1 or -1"}
+        assert resp.json() == INVALID_VOTE_ERROR
 
     @pytest.mark.anyio
     async def test_unknown_observation_returns_404(self, client: httpx.AsyncClient, store: Storage) -> None:

@@ -12,6 +12,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from . import activity, dream, dream_status
 from .eval import evaluate_cached_async
 from .metrics import usage_over_time
+from .models import MAX_VOTE_MAGNITUDE
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -156,9 +157,7 @@ async def _parse_vote_body(
     """Validate a vote request body shared by /api/vote and /api/vote-observation.
 
     Returns ``(project, name, vote, observation_hash)`` on success (observation_hash is None
-    unless required), or a 400 JSONResponse. This HTTP API intentionally restricts votes to
-    +1/-1, matching the visualizer UI's only-+1/-1 buttons, even though the underlying DB and
-    MCP ``vote`` tool now accept the wider -3..3 magnitude range.
+    unless required), or a 400 JSONResponse.
     """
     try:
         body = await request.json()
@@ -174,8 +173,11 @@ async def _parse_vote_body(
     observation_hash = body.get("observationHash")
     if require_hash and not isinstance(observation_hash, str):
         return JSONResponse({"error": "observationHash is required"}, status_code=400)
-    if not isinstance(vote, int) or isinstance(vote, bool) or vote not in {1, -1}:
-        return JSONResponse({"error": "vote must be 1 or -1"}, status_code=400)
+    if not isinstance(vote, int) or isinstance(vote, bool) or vote == 0 or abs(vote) > MAX_VOTE_MAGNITUDE:
+        return JSONResponse(
+            {"error": f"vote must be a nonzero integer from -{MAX_VOTE_MAGNITUDE} to {MAX_VOTE_MAGNITUDE}"},
+            status_code=400,
+        )
     return project, name, vote, (observation_hash if require_hash else None)
 
 
