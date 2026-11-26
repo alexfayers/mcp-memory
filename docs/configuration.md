@@ -51,6 +51,7 @@ Environment variables. The server reads the first table. The hook plugin reads t
 | `MCP_MEMORY_READONLY_AGENTS` | Extra agent types exempt from the memory-update gate | `Explore`, `Plan` |
 | `MCP_MEMORY_EDIT_TOOLS` | Extra file-edit tool names, counted at reduced weight toward the gate | `replace_in_file`, `write_to_file` |
 | `MCP_MEMORY_WRAPPER_TOOLS` | Extra tools that run other tool calls. Counted as one call, unless their input names a memory write tool | `codemode` |
+| `MCP_MEMORY_ALLOW_SUBAGENT_WRITES` | Set to any value to let subagents and teammates write memory. Unset, their memory writes are blocked and their reads still run | unset |
 | `MCP_MEMORY_UNCOUNTED_TOOLS` | Extra bookkeeping tools that are not counted toward the gate | the frontend's bookkeeping, skill and message tools |
 
 Stopping needs a `task/` write only after wide work: a `git commit`, edits to more than one file, a presented plan or a writer delegation. Stop is blocked once per piece of work.
