@@ -64,3 +64,21 @@ test("parseRoute reads a project-only or empty hash", () => {
 test("parseRoute ignores a malformed escape", () => {
   assert.deepEqual(lib.parseRoute("#%E0%A4%A"), { project: "", name: "" });
 });
+
+test("neighbourhood groups an entity's direct relations by type and direction", () => {
+  const relations = [
+    { source: "task/a", target: "feature/f", relation_type: "implements", project: "p" },
+    { source: "task/b", target: "feature/f", relation_type: "implements", project: "p" },
+    { source: "feature/f", target: "project/p", relation_type: "part-of", project: "p" },
+    { source: "task/a", target: "task/b", relation_type: "depends-on", project: "p" },
+    { source: "feature/f", target: "project/q", relation_type: "part-of", project: "q" },
+  ];
+  assert.deepEqual(lib.neighbourhood(relations, "p", "feature/f"), [
+    { type: "implements", direction: "in", names: ["task/a", "task/b"] },
+    { type: "part-of", direction: "out", names: ["project/p"] },
+  ]);
+});
+
+test("neighbourhood is empty for an entity with no relations", () => {
+  assert.deepEqual(lib.neighbourhood([], "p", "x"), []);
+});

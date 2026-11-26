@@ -37,6 +37,7 @@ svg, #graph-canvas { position: fixed; top: 0; left: var(--sidebar); width: calc(
 #graph-canvas { pointer-events: none; }
 svg.canvas-mode g { visibility: hidden; }
 .link { stroke-width: var(--link-px, 1px); }
+.link.hl { stroke: #58a6ff; stroke-opacity: 1; stroke-width: calc(2 * var(--link-px, 1px)); }
 svg.labels-off .link-label, svg.gradual-labels .node:not(.labelled) text:not(.search-badge) { display: none; }
 svg.gradual-labels .node.labelled text:not(.search-badge) { font-size: var(--label-px); }
 .link-label { font-size: 9px; fill: #484f58; pointer-events: none; }
@@ -91,8 +92,14 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 #entity-list .sub { color: #8b949e; display: block; }
 #entity-list .snip { color: #8b949e; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #sidebar-foot { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: #8b949e; font-size: 11px; }
+#p-project { font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+#panel a { color: #58a6ff; text-decoration: none; }
+#panel a:hover { text-decoration: underline; }
+#p-relations { margin-bottom: 12px; font-size: 12px; }
+#p-relations h4, #p-paths summary { font-size: 11px; color: #8b949e; margin: 6px 0 2px; }
+#p-relations a { display: block; word-break: break-all; padding: 1px 0; }
 #p-paths { margin-bottom: 12px; }
-#p-paths h4 { font-size: 11px; color: #484f58; margin-bottom: 4px; }
+#p-paths summary { cursor: pointer; }
 #p-paths .path { font-size: 11px; color: #8b949e; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; padding: 2px 0; }
 .node.search-hit circle:first-of-type { stroke: #58a6ff !important; stroke-width: 3; }
 .search-ring { fill: none; stroke: #58a6ff; stroke-opacity: 0.9; pointer-events: none; }
@@ -237,7 +244,9 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
     <button id="vote-up" style="padding:2px 10px;font-size:12px">+1</button>
     <button id="vote-down" style="padding:2px 10px;font-size:12px">-1</button>
   </div>
-  <div id="p-paths"></div>
+  <div id="p-project"></div>
+  <div id="p-relations"></div>
+  <details id="p-paths" hidden></details>
   <div id="p-obs"></div>
 </div>
 <svg></svg>
@@ -265,10 +274,11 @@ const linkLayer = g.append("g");
 const labelLayer = g.append("g");
 const nodeLayer = g.append("g");
 
-let lastUserInteract = 0, refitView = true, refitTicks = 0;
+let focusIds = null, lastUserInteract = 0, refitView = true, refitTicks = 0;
 const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, FIT_MS = 600, REFIT_TICKS = 10, ZOOM_MIN = 0.2, ZOOM_MAX = 4, ZOOM_FIT_MARGIN = 0.9, ZOOM_FLOOR = 0.01;
 const LARGE_GRAPH_NODES = 500, LINK_LABEL_MIN_ZOOM = FOLLOW_SCALE, NODE_LABELS_MIN = 12, NODE_LABELS_MAX = 300, NODE_LABELS_HARD_MAX = 1000, PROJECT_LABELS_MAX = 60, LABEL_ALL_ZOOM = 2.5, LABEL_CELL_WIDTHS = 16, LABEL_CELL_HEIGHTS = 1.4, LABEL_CHAR_EM = 0.56;
-const LINK_COLOUR = "#6e7681", LINK_OPACITY = 0.55, LINK_SCREEN_PX = 1.25;
+const LINK_COLOUR = "#6e7681", LINK_HIGHLIGHT = "#58a6ff", LINK_OPACITY = 0.55, LINK_SCREEN_PX = 1.25;
+const touchesSelection = l => l.source.id === selectedNode || l.target.id === selectedNode;
 const DRAG_TICK_SHARE = 0.6, HIT_SLACK_PX = 4, NODE_RADIUS_MAX = 30;
 const canvas = document.getElementById("graph-canvas"), ctx = canvas.getContext("2d");
 let canvasMode = false, zoomMin = ZOOM_MIN, viewTransform = d3.zoomIdentity;
@@ -602,7 +612,13 @@ function render(data) {
 }
 
 function selectNode(d) { location.hash = VisLib.formatRoute(d); }
-function openEntity(d) { selectedNode = nodeKey(d.project, d.name); showPanel(d); updateSelection(); }
+function openEntity(d) {
+  selectedNode = nodeKey(d.project, d.name); showPanel(d); updateSelection();
+  const near = new Set([selectedNode, ...links.filter(touchesSelection).flatMap(l => [l.source.id, l.target.id])]);
+  refitView = false;
+  if (simulation && simulation.alpha() > simulation.alphaMin()) focusIds = near;
+  else fitView(nodes.filter(n => near.has(n.id)), FIT_MS);
+}
 function closePanel() { panel.classList.remove("open"); selectedNode = null; updateSelection(); }
 
 const SLOW_DRAW_MS = 20, SLOW_DRAW_SKIP = 2;
@@ -698,6 +714,12 @@ function drawCanvas() {
   });
   ctx.stroke();
   ctx.globalAlpha = 1;
+  if (selectedNode) {
+    ctx.strokeStyle = LINK_HIGHLIGHT; ctx.lineWidth = 2 * linkPx();
+    ctx.beginPath();
+    links.filter(touchesSelection).forEach(l => { ctx.moveTo(l.source.x, l.source.y); ctx.lineTo(l.target.x, l.target.y); });
+    ctx.stroke();
+  }
   ctx.textBaseline = "alphabetic";
   if (!linkLabelsHidden()) {
     ctx.font = `9px ${CANVAS_FONT}`; ctx.fillStyle = "#484f58";
@@ -741,6 +763,7 @@ function syncSvg() {
 function settled() {
   updateZoomExtent();
   if (refitView) { refitView = false; fitView(nodes, FIT_MS); }
+  else if (focusIds) { fitView(nodes.filter(n => focusIds.has(n.id)), FIT_MS); focusIds = null; }
   if (largeGraph()) drawCanvas();
   else { syncSvg(); updateSvgLabels(); }
 }
@@ -792,10 +815,14 @@ function showPanel(d) {
   sb.innerHTML = d.status ? `<span class="status-badge" style="color:${statusColours[d.status] || '#c9d1d9'}">${d.status}</span>` : "";
   document.getElementById("p-created").textContent = d.created_at ? `Created: ${new Date(d.created_at + "Z").toLocaleString()}` + (d.updated_at && d.updated_at !== d.created_at ? ` | Updated: ${new Date(d.updated_at + "Z").toLocaleString()}` : "") : "";
   renderVotes(d.vote_score);
-  const paths = pathsByProject[d.project] || [];
-  document.getElementById("p-paths").innerHTML = paths.length
-    ? `<h4>On disk (${d.project})</h4>` + paths.map(p => `<div class="path">${p.replace(/</g,"&lt;")}</div>`).join("")
-    : "";
+  const entityLink = (project, name) => `<a href="${escapeHtml(VisLib.formatRoute({ project, name }))}">${escapeHtml(name || project)}</a>`;
+  document.getElementById("p-project").innerHTML = `in ${entityLink(d.project, "")}`;
+  const relations = currentData ? VisLib.neighbourhood(currentData.relations, d.project, d.name) : [];
+  document.getElementById("p-relations").innerHTML = relations.map(g =>
+    `<h4>${escapeHtml(g.type)} (${g.direction === "out" ? "to" : "from"})</h4>` + g.names.map(n => entityLink(d.project, n)).join("")).join("");
+  const paths = pathsByProject[d.project] || [], pathBox = document.getElementById("p-paths");
+  pathBox.hidden = !paths.length;
+  pathBox.innerHTML = `<summary>On disk (${paths.length})</summary>` + paths.map(p => `<div class="path">${escapeHtml(p)}</div>`).join("");
   renderObservations(d);
   loadObservations(d);
   panel.classList.add("open");
@@ -872,6 +899,7 @@ function renderObservations(d) {
 
 function updateSelection() {
   if (nodeSel) nodeSel.attr("class", nodeClass);
+  if (linkSel) linkSel.classed("hl", touchesSelection);
   if (canvasMode) drawCanvas();
 }
 

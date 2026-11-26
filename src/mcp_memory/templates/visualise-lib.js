@@ -21,7 +21,20 @@
     } catch (e) { return { project: "", name: "" }; }
   };
 
-  const lib = { shouldRefetchGraph, filterEntities, formatRoute, parseRoute };
+  const neighbourhood = (relations, project, name) => {
+    const groups = new Map();
+    for (const r of relations) {
+      if (r.project !== project || (r.source !== name && r.target !== name)) continue;
+      const direction = r.source === name ? "out" : "in", key = r.relation_type + "\u0000" + direction;
+      if (!groups.has(key)) groups.set(key, { type: r.relation_type, direction, names: [] });
+      groups.get(key).names.push(direction === "out" ? r.target : r.source);
+    }
+    return [...groups.values()]
+      .map(g => ({ ...g, names: g.names.sort() }))
+      .sort((a, b) => a.type.localeCompare(b.type) || a.direction.localeCompare(b.direction));
+  };
+
+  const lib = { shouldRefetchGraph, filterEntities, formatRoute, parseRoute, neighbourhood };
   if (typeof module !== "undefined") module.exports = lib;
   else root.VisLib = lib;
 })(this);
