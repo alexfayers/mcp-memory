@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_3352f668749ccb62_models_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.5">coverage.py v7.17.5</a>,
-            created at 2026-11-26 12:22 +0000
+            created at 2026-11-26 14:59 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -918,7 +918,25 @@
     <p class="run run2"><span class="n"><a id="t836" href="#t836">836</a></span><span class="t">        <span class="com"># A row marks the one-time provenance backfill as done for this database.</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t837" href="#t837">837</a></span><span class="t">        <span class="nam">statements</span><span class="op">=</span><span class="op">[</span><span class="str">&quot;CREATE TABLE provenance_backfill (ran_at DATETIME DEFAULT CURRENT_TIMESTAMP)&quot;</span><span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t838" href="#t838">838</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t839" href="#t839">839</a></span><span class="t"><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t839" href="#t839">839</a></span><span class="t">    <span class="nam">Migration</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t840" href="#t840">840</a></span><span class="t">        <span class="nam">version</span><span class="op">=</span><span class="num">31</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t841" href="#t841">841</a></span><span class="t">        <span class="nam">statements</span><span class="op">=</span><span class="op">[</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t842" href="#t842">842</a></span><span class="t">            <span class="com"># Recall triggers: when a hook should surface an observation. kind is pattern, path or mention,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t843" href="#t843">843</a></span><span class="t">            <span class="com"># validated in Python. tool is &#x27;&#x27; for any tool. Not in the FTS projection.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t844" href="#t844">844</a></span><span class="t">            <span class="str">&quot;&quot;&quot;CREATE TABLE observation_triggers (</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t845" href="#t845">845</a></span><span class="t"><span class="str">                id INTEGER PRIMARY KEY AUTOINCREMENT,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t846" href="#t846">846</a></span><span class="t"><span class="str">                observation_id INTEGER NOT NULL,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t847" href="#t847">847</a></span><span class="t"><span class="str">                kind TEXT NOT NULL,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t848" href="#t848">848</a></span><span class="t"><span class="str">                value TEXT NOT NULL,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t849" href="#t849">849</a></span><span class="t"><span class="str">                tool TEXT NOT NULL DEFAULT &#x27;&#x27;,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t850" href="#t850">850</a></span><span class="t"><span class="str">                action TEXT NOT NULL,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t851" href="#t851">851</a></span><span class="t"><span class="str">                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t852" href="#t852">852</a></span><span class="t"><span class="str">                UNIQUE(observation_id, kind, value, tool),</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t853" href="#t853">853</a></span><span class="t"><span class="str">                FOREIGN KEY (observation_id) REFERENCES observations(id) ON DELETE CASCADE</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t854" href="#t854">854</a></span><span class="t"><span class="str">            )&quot;&quot;&quot;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t855" href="#t855">855</a></span><span class="t">        <span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t856" href="#t856">856</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t857" href="#t857">857</a></span><span class="t"><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -928,7 +946,7 @@
             <a class="nav" href="z_3352f668749ccb62_models_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.5">coverage.py v7.17.5</a>,
-            created at 2026-11-26 12:22 +0000
+            created at 2026-11-26 14:59 +0000
         </p>
     </div>
 </footer>
