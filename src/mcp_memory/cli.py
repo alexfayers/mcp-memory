@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from dataclasses import dataclass, replace
+import functools
 import getpass
 import json
 import os
@@ -63,6 +64,7 @@ _LEGACY_AGENT_LABEL = "com.memory-agent"
 _LEGACY_AGENT_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{_LEGACY_AGENT_LABEL}.plist"
 _LEGACY_AGENT_UNIT = Path("/etc/systemd/system/memory-agent.service")
 _LEGACY_AGENT_SERVERS = ("memory-agent", "memory_agent")
+_OWN_SERVER_URL_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):\d+/mcp(?![\w/.-])")
 _TELEMETRY_OPT_OUT_ENV = ("DO_NOT_TRACK", "LLM_PROMPTS_NO_TELEMETRY")
 _KEPT_ENV_NAME_RE = re.compile("|".join([r"MCP_DREAM_\w+", *_TELEMETRY_OPT_OUT_ENV]))
 _PLIST_ENV_RE = re.compile(r"<key>(\w+)</key>\s*<string>([^<]*)</string>")
@@ -414,6 +416,21 @@ def _stop_service() -> bool:
     return False
 
 
+def _remove_service() -> bool:
+    """Stop the service and delete its plist or systemd unit. Returns True if a service was found."""
+    if not _stop_service():
+        return False
+    if platform.system() == "Darwin":
+        _LAUNCHD_PLIST.unlink()
+        print(f"Removed launchd service: {_LAUNCHD_PLIST}")
+    else:
+        subprocess.run(["sudo", "systemctl", "disable", _SYSTEMD_UNIT.name], check=False)
+        subprocess.run(["sudo", "rm", str(_SYSTEMD_UNIT)], check=True)
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
+        print(f"Removed systemd service: {_SYSTEMD_UNIT}")
+    return True
+
+
 def _cmd_restart() -> None:
     """Restart the running mcp-memory service, or report that none is installed."""
     system = platform.system()
@@ -738,21 +755,70 @@ def _cmd_import(args: argparse.Namespace) -> None:
     print(summary.render())
 
 
-def _remove_mcp_servers(mcp_path: Path, servers_key: str, names: tuple[str, ...] = _LEGACY_AGENT_SERVERS) -> bool:
-    """Delete the named entries from an MCP config file, leaving all else intact."""
+def _is_own_entry(entry: object) -> bool:
+    """Return whether an MCP config entry points at an mcp-memory server, as install writes it."""
+    return isinstance(entry, dict) and any(
+        isinstance(entry.get(key), str) and bool(_OWN_SERVER_URL_RE.fullmatch(entry[key]))
+        for key in ("url", "serverUrl")
+    )
+
+
+def _any_entry(_entry: object) -> bool:
+    return True
+
+
+def _remove_mcp_servers(
+    mcp_path: Path,
+    servers_key: str,
+    names: tuple[str, ...] = _LEGACY_AGENT_SERVERS,
+    owned: Callable[[object], bool] = _any_entry,
+) -> bool:
+    """Delete the named entries that `owned` accepts from an MCP config file, leaving all else intact."""
     if not mcp_path.exists() or mcp_path.stat().st_size == 0:
         return False
     config = load_jsonc_object(mcp_path)
     servers = config.get(servers_key)
     if not isinstance(servers, dict):
         return False
-    stale = [name for name in names if name in servers]
+    stale = [name for name in names if name in servers and owned(servers[name])]
     for name in stale:
         del servers[name]
     if stale:
         mcp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
         print(f"Removed {', '.join(stale)} MCP server from {mcp_path}.")
     return bool(stale)
+
+
+def _strip_kiro_servers(
+    agent: dict[str, Any], names: tuple[str, ...], owned: Callable[[object], bool] = _any_entry
+) -> list[str]:
+    """Delete the named servers and their tool entries from a Kiro agent config, returning what was removed.
+
+    A server whose entry `owned` rejects keeps its entry and tool entries.
+    """
+    servers = agent.get("mcpServers", {})
+    names = tuple(name for name in names if name not in servers or owned(servers[name]))
+    removed = [name for name in names if name in servers]
+    for name in removed:
+        del agent["mcpServers"][name]
+    stale_tools = {f"@{name}" for name in names}
+    for key in ("allowedTools", "tools"):
+        if stale_tools & set(agent.get(key, [])):
+            agent[key] = [tool for tool in agent[key] if tool not in stale_tools]
+            removed.append(key)
+    return removed
+
+
+def _remove_kiro_servers(agent_path: Path) -> bool:
+    """Remove the memory server from a Kiro agent config. Returns True if it was found."""
+    if not agent_path.exists():
+        return False
+    agent = load_jsonc_object(agent_path)
+    removed = _strip_kiro_servers(agent, ("memory",), _is_own_entry)
+    if removed:
+        agent_path.write_text(json.dumps(agent, indent=2) + "\n", encoding="utf-8")
+        print(f"Removed memory entries ({', '.join(removed)}) from {agent_path}.")
+    return bool(removed)
 
 
 def _cmd_install_kiro(args: argparse.Namespace) -> None:
@@ -767,14 +833,7 @@ def _cmd_install_kiro(args: argparse.Namespace) -> None:
     agent = json.loads(agent_path.read_text(encoding="utf-8"))
     changed = False
 
-    removed = [name for name in _LEGACY_AGENT_SERVERS if name in agent.get("mcpServers", {})]
-    for name in removed:
-        del agent["mcpServers"][name]
-    stale_tools = {f"@{name}" for name in _LEGACY_AGENT_SERVERS}
-    for key in ("allowedTools", "tools"):
-        if stale_tools & set(agent.get(key, [])):
-            agent[key] = [tool for tool in agent[key] if tool not in stale_tools]
-            removed.append(key)
+    removed = _strip_kiro_servers(agent, _LEGACY_AGENT_SERVERS)
     if removed:
         changed = True
         print(f"Removed retired memory-agent entries ({', '.join(removed)}) from {agent_path}.")
@@ -843,24 +902,62 @@ def _register_claude_code_server(claude_bin: str, name: str, url: str) -> None:
         print(f"Added {rule} to permissions.allow.")
 
 
-def _remove_legacy_claude_code_servers(claude_bin: str) -> None:
-    """Remove the retired memory-agent servers and their allow rules from Claude Code."""
-    for name in _LEGACY_AGENT_SERVERS:
-        registered = subprocess.run([claude_bin, "mcp", "get", name], capture_output=True, check=False)
-        if registered.returncode == 0:
-            subprocess.run([claude_bin, "mcp", "remove", "--scope", "user", name], check=False)
-            print(f"Removed retired {name} MCP server from Claude Code.")
+def _is_own_listing(listing: str) -> bool:
+    """Return whether an agent CLI's `mcp get` output points at an mcp-memory server."""
+    return bool(_OWN_SERVER_URL_RE.search(listing))
+
+
+def _any_listing(_listing: str) -> bool:
+    return True
+
+
+def _remove_cli_servers(
+    cli_bin: str, remove: tuple[str, ...], names: tuple[str, ...], label: str, owned: Callable[[str], bool]
+) -> dict[str, bool]:
+    """Remove the named servers `owned` accepts with an agent's `mcp` CLI.
+
+    Returns each registered name mapped to whether it was removed.
+    """
+    result: dict[str, bool] = {}
+    for name in names:
+        registered = subprocess.run([cli_bin, "mcp", "get", name], capture_output=True, text=True, check=False)
+        if registered.returncode != 0:
+            continue
+        result[name] = (
+            owned(registered.stdout) and subprocess.run([cli_bin, "mcp", *remove, name], check=False).returncode == 0
+        )
+        if result[name]:
+            print(f"Removed {name} MCP server from {label}.")
+    return result
+
+
+def _remove_claude_code_servers(
+    claude_bin: str | None, names: tuple[str, ...], owned: Callable[[str], bool] = _any_listing
+) -> bool:
+    """Remove the named servers `owned` accepts and their allow rules from Claude Code.
+
+    Without `claude_bin`, only the allow rules are removed. Returns True if anything was removed.
+    """
+    registered = (
+        _remove_cli_servers(claude_bin, ("remove", "--scope", "user"), names, "Claude Code", owned)
+        if claude_bin
+        else {}
+    )
+    found = any(registered.values())
 
     settings_path = Path.home() / ".claude" / "settings.json"
     if not settings_path.exists():
-        return
-    settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    allow = settings.get("permissions", {}).get("allow", [])
-    stale = {f"mcp__{name}__*" for name in _LEGACY_AGENT_SERVERS}
-    if stale & set(allow):
-        settings["permissions"]["allow"] = [rule for rule in allow if rule not in stale]
+        return found
+    settings = load_jsonc_object(settings_path)
+    permissions = settings.get("permissions", {})
+    allow = permissions.get("allow", []) if isinstance(permissions, dict) else []
+    stale = {f"mcp__{name}__*" for name in names if registered.get(name, True)}
+    if isinstance(permissions, dict) and stale & set(allow):
+        permissions["allow"] = [rule for rule in allow if rule not in stale]
         settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-        print(f"Removed retired memory-agent rules from permissions.allow in {settings_path}.")
+        print(f"Removed {', '.join(sorted(stale & set(allow)))} from permissions.allow in {settings_path}.")
+        found = True
+    return found
 
 
 def _cmd_install_claude_code() -> None:
@@ -870,7 +967,7 @@ def _cmd_install_claude_code() -> None:
         print("error: claude not found on PATH", file=sys.stderr)
         sys.exit(1)
 
-    _remove_legacy_claude_code_servers(claude_bin)
+    _remove_claude_code_servers(claude_bin, _LEGACY_AGENT_SERVERS)
     _register_claude_code_server(claude_bin, "memory", f"http://localhost:{resolve_port()}/mcp")
 
 
@@ -889,13 +986,9 @@ def _register_codex_server(codex_bin: str, name: str, url: str) -> None:
         print(f"Added {name} MCP server to Codex (url: {url}).")
 
 
-def _remove_legacy_codex_servers(codex_bin: str) -> None:
-    """Remove the retired memory-agent servers from Codex."""
-    for name in _LEGACY_AGENT_SERVERS:
-        registered = subprocess.run([codex_bin, "mcp", "get", name], capture_output=True, check=False)
-        if registered.returncode == 0:
-            subprocess.run([codex_bin, "mcp", "remove", name], check=False)
-            print(f"Removed retired {name} MCP server from Codex.")
+def _remove_codex_servers(codex_bin: str, names: tuple[str, ...], owned: Callable[[str], bool] = _any_listing) -> bool:
+    """Remove the named servers `owned` accepts from Codex. Returns True if any were removed."""
+    return any(_remove_cli_servers(codex_bin, ("remove",), names, "Codex", owned).values())
 
 
 def _cmd_install_codex() -> None:
@@ -905,7 +998,7 @@ def _cmd_install_codex() -> None:
         print("error: codex not found on PATH", file=sys.stderr)
         sys.exit(1)
 
-    _remove_legacy_codex_servers(codex_bin)
+    _remove_codex_servers(codex_bin, _LEGACY_AGENT_SERVERS)
     _register_codex_server(codex_bin, "memory", f"http://127.0.0.1:{resolve_port()}/mcp")
 
 
@@ -924,11 +1017,16 @@ def _register_antigravity_server(agy_bin: str, name: str, url: str) -> None:
         print(f"Added {name} MCP server to Antigravity (url: {url}).")
 
 
+def _antigravity_mcp_config_path() -> Path:
+    """Return Antigravity's MCP config file."""
+    return Path.home() / ".gemini" / "config" / "mcp_config.json"
+
+
 def _cmd_install_antigravity() -> None:
     """Register the memory data server in Antigravity."""
     agy_bin = shutil.which("agy")
     url = f"http://localhost:{resolve_port()}/mcp"
-    mcp_path = Path.home() / ".gemini" / "config" / "mcp_config.json"
+    mcp_path = _antigravity_mcp_config_path()
     _remove_mcp_servers(mcp_path, "mcpServers")
     if agy_bin:
         _register_antigravity_server(agy_bin, "memory", url)
@@ -1075,6 +1173,40 @@ def _cmd_install_opencode() -> None:
         sys.exit(1)
 
 
+def _cmd_teardown(args: argparse.Namespace) -> None:
+    """Undo setup-service and install: remove the service and the memory server entries, keeping the database."""
+    name = ("memory",)
+    steps: list[tuple[object, Callable[[], bool]]] = [
+        (
+            Path.home() / ".claude" / "settings.json",
+            functools.partial(_remove_claude_code_servers, shutil.which("claude"), name, _is_own_listing),
+        ),
+    ]
+    if codex_bin := shutil.which("codex"):
+        steps.append(("Codex", functools.partial(_remove_codex_servers, codex_bin, name, _is_own_listing)))
+    for path, key in [
+        (_antigravity_mcp_config_path(), "mcpServers"),
+        (_pi_mcp_config_path(), "mcpServers"),
+        (_default_copilot_mcp_config_path(), "servers"),
+    ]:
+        steps.append((path, functools.partial(_remove_mcp_servers, path, key, name, _is_own_entry)))
+    if args.kiro_agent_config:
+        kiro = Path(args.kiro_agent_config).expanduser()
+        steps.append((kiro, functools.partial(_remove_kiro_servers, kiro)))
+    found = [_remove_service()]
+    skipped = False
+    for label, remove in steps:
+        try:
+            found.append(remove())
+        except (OSError, TypeError, ValueError):
+            print(f"warning: could not update {label}, skipped it", file=sys.stderr)
+            skipped = True
+    if skipped:
+        sys.exit(1)
+    if not any(found):
+        print("Nothing to tear down.")
+
+
 def _add_utils_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Add the `utils` command group of maintenance and diagnostic subcommands."""
     utils = sub.add_parser("utils", help="Maintenance and diagnostic commands")
@@ -1207,6 +1339,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=resolve_port(),
         help=f"HTTP port (default: MCP_MEMORY_PORT, else the installed service's port, else {_DEFAULT_PORT})",
     )
+    teardown = sub.add_parser(
+        "teardown", help="Remove the background service and the memory MCP server from agent config (keeps data)"
+    )
+    teardown.add_argument("--kiro-agent-config", help="Path to a Kiro agent JSON file to remove the server from.")
+
     uninstall = sub.add_parser("uninstall", help="Remove the memory MCP server from agent config")
     uninstall.add_argument("target", choices=["copilot"], help="Agent to uninstall from.")
     uninstall.add_argument(
@@ -1273,6 +1410,8 @@ def main() -> None:
         _cmd_import(args)
     elif args.command == "install":
         _cmd_install(args, parser)
+    elif args.command == "teardown":
+        _cmd_teardown(args)
     elif args.command == "uninstall":
         _cmd_uninstall_copilot(args)
     else:
