@@ -18,6 +18,7 @@ import pytest
 pytest.importorskip("cline_hooks")
 
 from cline_hooks.core.plugin import HooksPlugin, collect_hook_results, hookimpl, load_plugins, plugins_override
+from cline_hooks.core.state import set_hook_context
 from cline_hooks.core.vocabulary import BOOKKEEPING_TOOLS, FILE_EDIT_TOOLS, MESSAGE_TOOLS, SKILL_TOOLS
 from cline_hooks.frontends.claude_code.protocol import ClaudeCodeProtocol
 from cline_hooks.plugins.startup_blocks import RESERVE_CHARS, StartupBlocksPlugin
@@ -2247,6 +2248,23 @@ class TestStopNeedsTaskAfterWideWork:
         entity = {"name": "task/x", "entityType": "task", "observations": ["x"]}
         self._post(live_plugin, "mcp__memory__create_entities", project="proj", entities=[entity])
         assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    def test_a_task_write_lets_wide_work_stop_after_a_rewind_past_the_write(self, live_plugin: MemoryPlugin) -> None:
+        set_hook_context("t1", "a1", ["a1"])
+        self._post(live_plugin, "plan_mode_respond")
+        set_hook_context("t1", "a2", ["a1", "a2"])
+        entity = {"name": "task/x", "entityType": "task", "observations": ["x"]}
+        self._post(live_plugin, "mcp__memory__create_entities", project="proj", entities=[entity])
+        set_hook_context("t1", "a3", ["a1", "a3"])
+        assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+    def test_wide_work_still_blocks_stop_after_a_rewind_past_it(self, live_plugin: MemoryPlugin) -> None:
+        set_hook_context("t1", "a1", ["a1"])
+        self._post(live_plugin, "execute_command", command="git commit -m x")
+        set_hook_context("t1", "a2", ["a2"])
+        blocked = live_plugin.on_hook("Stop", task_id="t1")
+        assert blocked is not None
+        assert "task/" in (blocked.block or "")
 
     def test_a_small_fix_stops_without_a_task(self, live_plugin: MemoryPlugin) -> None:
         self._post(live_plugin, "replace_in_file", path="a.py")

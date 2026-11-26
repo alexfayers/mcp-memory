@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
+from cline_hooks.core.state import set_hook_context
 import pytest
 
 from mcp_memory.hooks import tracker
@@ -17,6 +18,61 @@ def _sandbox_state(tmp_path: Path) -> Iterator[None]:
     """Point the tracker's state file at a temp directory."""
     with patch.object(tracker, "get_data_dir", return_value=tmp_path):
         yield
+
+
+def _rewound(record: Callable[[], object]) -> None:
+    """Record state at one point in the context, then rewind past that point."""
+    set_hook_context("t1", "a1", ["a1"])
+    record()
+    set_hook_context("t1", "a2", ["a2"])
+
+
+class TestContextAnchors:
+    @pytest.mark.parametrize(
+        ("record", "recorded"),
+        [
+            (lambda: tracker.increment("t1", 10), lambda: tracker.should_block("t1")),
+            (lambda: tracker.tick_turn("t1"), lambda: tracker.tick_turn("t1", 0) > 0),
+            (lambda: tracker.mark_flag("t1", "wide"), lambda: tracker.has_flag("t1", "wide")),
+            (
+                lambda: tracker.mark_scope_blocked("t1", "repo-a"),
+                lambda: tracker.has_scope_blocked("t1", "repo-a"),
+            ),
+            (
+                lambda: tracker.take_unseen("t1", "recalled", ["h1"], 1),
+                lambda: not tracker.take_unseen("t1", "recalled", ["h1"], 1),
+            ),
+        ],
+        ids=["count", "turn", "flag", "scope_blocked", "seen"],
+    )
+    def test_context_state_is_forgotten_once_its_anchor_leaves_the_context(
+        self, record: Callable[[], object], recorded: Callable[[], bool]
+    ) -> None:
+        _rewound(record)
+        assert not recorded()
+
+    def test_the_window_changes_once_its_anchor_leaves_the_context(self) -> None:
+        set_hook_context("t1", "a1", ["a1"])
+        window = tracker.get_window("t1")
+        assert tracker.get_window("t1") == window
+        set_hook_context("t1", "a2", ["a2"])
+        assert tracker.get_window("t1") != window
+
+    @pytest.mark.parametrize(
+        ("record", "recorded"),
+        [
+            (lambda: tracker.set_scope("t1", "repo-a"), lambda: tracker.get_scope("t1") == "repo-a"),
+            (lambda: tracker.mark_flag("t1", "wrote", per_session=True), lambda: tracker.has_flag("t1", "wrote")),
+            (lambda: tracker.mark_edited("t1"), lambda: tracker.has_edited("t1")),
+            (lambda: tracker.claim_edit_path("t1", "a.py"), lambda: not tracker.claim_edit_path("t1", "b.py")),
+        ],
+        ids=["scope", "session_flag", "edited", "edit_path"],
+    )
+    def test_session_state_survives_a_rewind_past_it(
+        self, record: Callable[[], object], recorded: Callable[[], bool]
+    ) -> None:
+        _rewound(record)
+        assert recorded()
 
 
 class TestIncrement:
