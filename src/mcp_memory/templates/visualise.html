@@ -262,6 +262,7 @@ svg.searching .node:not(.search-hit) { opacity: 0.25; }
   <div id="p-vote-buttons" style="margin-bottom:12px;display:flex;gap:8px">
     <button id="vote-up" style="padding:2px 10px;font-size:12px">+1</button>
     <button id="vote-down" style="padding:2px 10px;font-size:12px">-1</button>
+    <label style="font-size:12px">size <select id="vote-size"></select></label>
   </div>
   <div id="p-project"></div>
   <div id="p-relations"></div>
@@ -274,6 +275,7 @@ svg.searching .node:not(.search-hit) { opacity: 0.25; }
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script src="/visualise/lib.js"></script>
 <script>
+const MAX_VOTE_MAGNITUDE = {{MAX_VOTE_MAGNITUDE}};
 const TYPE_COLOURS = {
   project: "#58a6ff", feature: "#3fb950", task: "#d29922",
   "user-preferences": "#bc8cff", pattern: "#f778ba",
@@ -369,8 +371,16 @@ async function castVote(vote) {
   } catch (e) { /* transient; leave display unchanged */ }
   finally { up.disabled = down.disabled = false; }
 }
-document.getElementById("vote-up").onclick = () => castVote(1);
-document.getElementById("vote-down").onclick = () => castVote(-1);
+const voteSizeSelect = document.getElementById("vote-size");
+const voteSize = () => Number(voteSizeSelect.value);
+for (let size = 1; size <= MAX_VOTE_MAGNITUDE; size++) voteSizeSelect.add(new Option(String(size)));
+function labelVoteButtons() {
+  document.getElementById("vote-up").textContent = `+${voteSize()}`;
+  document.getElementById("vote-down").textContent = `-${voteSize()}`;
+}
+voteSizeSelect.onchange = () => { labelVoteButtons(); if (panelDatum) renderObservations(panelDatum); };
+document.getElementById("vote-up").onclick = () => castVote(voteSize());
+document.getElementById("vote-down").onclick = () => castVote(-voteSize());
 
 const touchObservations = d => d.obsVersion = (d.obsVersion || 0) + 1;
 
@@ -915,12 +925,12 @@ function renderObservations(d) {
     scoreEl.textContent = score > 0 ? `+${score}` : `${score}`;
     const up = document.createElement("button");
     up.className = "obs-btn";
-    up.textContent = "+1";
+    up.textContent = `+${voteSize()}`;
     const down = document.createElement("button");
     down.className = "obs-btn";
-    down.textContent = "-1";
-    up.onclick = () => castObservationVote(o.content_hash, 1, [up, down]);
-    down.onclick = () => castObservationVote(o.content_hash, -1, [up, down]);
+    down.textContent = `-${voteSize()}`;
+    up.onclick = () => castObservationVote(o.content_hash, voteSize(), [up, down]);
+    down.onclick = () => castObservationVote(o.content_hash, -voteSize(), [up, down]);
     const merge = document.createElement("button");
     merge.className = "obs-btn obs-merge-btn";
     if (o.content_hash === mergeSource) {

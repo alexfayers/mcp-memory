@@ -23,7 +23,9 @@ if TYPE_CHECKING:
     from .storage import NodeList, Storage
 
 _TEMPLATES = importlib.resources.files("mcp_memory").joinpath("templates")
-_VISUALISE_HTML = _TEMPLATES.joinpath("visualise.html").read_text()
+_VISUALISE_HTML = (
+    _TEMPLATES.joinpath("visualise.html").read_text().replace("{{MAX_VOTE_MAGNITUDE}}", str(MAX_VOTE_MAGNITUDE))
+)
 _VISUALISE_LIB_JS = _TEMPLATES.joinpath("visualise-lib.js").read_text()
 
 

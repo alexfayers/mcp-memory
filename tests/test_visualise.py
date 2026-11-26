@@ -181,6 +181,12 @@ class TestVisualisePage:
         assert 'e.key === "/"' in resp.text
 
     @pytest.mark.anyio
+    async def test_offers_a_vote_size_up_to_the_max_magnitude(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert f"const MAX_VOTE_MAGNITUDE = {MAX_VOTE_MAGNITUDE};" in resp.text
+        assert 'id="vote-size"' in resp.text
+
+    @pytest.mark.anyio
     async def test_includes_the_dream_card(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert 'id="dream"' in resp.text
