@@ -7,7 +7,7 @@ import importlib.resources
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from . import activity, dream, dream_status
 from .eval import evaluate_cached_async
@@ -21,7 +21,9 @@ if TYPE_CHECKING:
     from .models import Entity, Observation, Relation
     from .storage import NodeList, Storage
 
-_VISUALISE_HTML = importlib.resources.files("mcp_memory").joinpath("templates/visualise.html").read_text()
+_TEMPLATES = importlib.resources.files("mcp_memory").joinpath("templates")
+_VISUALISE_HTML = _TEMPLATES.joinpath("visualise.html").read_text()
+_VISUALISE_LIB_JS = _TEMPLATES.joinpath("visualise-lib.js").read_text()
 
 
 def get_projects(db: Storage) -> list[str]:
@@ -334,3 +336,7 @@ def register_visualise_routes(mcp: MCPServer, get_db: Callable[[], Storage]) -> 
     @mcp.custom_route("/visualise", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
     async def visualise_page(request: Request) -> HTMLResponse:
         return HTMLResponse(_VISUALISE_HTML)
+
+    @mcp.custom_route("/visualise/lib.js", methods=["GET"], include_in_schema=False)  # type: ignore[untyped-decorator]
+    async def visualise_lib(request: Request) -> Response:
+        return Response(_VISUALISE_LIB_JS, media_type="text/javascript")

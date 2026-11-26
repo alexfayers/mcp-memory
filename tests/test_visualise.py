@@ -155,6 +155,22 @@ class TestVisualisePage:
         assert "mcp-memory graph" in resp.text
 
     @pytest.mark.anyio
+    async def test_serves_the_ui_logic_module(self, client: httpx.AsyncClient) -> None:
+        page = await client.get("/visualise")
+        resp = await client.get("/visualise/lib.js")
+        assert resp.status_code == 200
+        assert "javascript" in resp.headers["content-type"]
+        assert "shouldRefetchGraph" in resp.text
+        assert '<script src="/visualise/lib.js"></script>' in page.text
+
+    @pytest.mark.anyio
+    async def test_reloads_the_graph_only_on_writes(self, client: httpx.AsyncClient) -> None:
+        resp = await client.get("/visualise")
+        assert "setInterval(fetchGraph" not in resp.text
+        assert "JSON.stringify(currentData)" not in resp.text
+        assert "VisLib.shouldRefetchGraph(" in resp.text
+
+    @pytest.mark.anyio
     async def test_includes_the_dream_card(self, client: httpx.AsyncClient) -> None:
         resp = await client.get("/visualise")
         assert 'id="dream"' in resp.text

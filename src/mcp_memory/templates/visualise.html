@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mcp-memory graph</title>
+<link rel="icon" href="data:,">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; overflow: hidden; }
@@ -163,7 +164,6 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 <div id="controls">
   <select id="project"><option value="">All projects</option></select>
   <button id="refresh">Refresh</button>
-  <label style="font-size:12px;color:#484f58"><input type="checkbox" id="auto" checked> Auto (2s)</label>
   <label style="font-size:12px;color:#484f58"><input type="checkbox" id="follow" checked> Follow activity</label>
   <input id="search" type="text" placeholder="Search memory...">
   <label style="font-size:12px;color:#484f58"><input type="checkbox" id="search-all"> all terms</label>
@@ -241,6 +241,7 @@ svg.gradual-labels .node.labelled.project-node text:not(.search-badge) { font-we
 <svg></svg>
 <canvas id="graph-canvas" hidden></canvas>
 <script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="/visualise/lib.js"></script>
 <script>
 const TYPE_COLOURS = {
   project: "#58a6ff", feature: "#3fb950", task: "#d29922",
@@ -262,7 +263,7 @@ const linkLayer = g.append("g");
 const labelLayer = g.append("g");
 const nodeLayer = g.append("g");
 
-let lastUserInteract = 0, refitView = false, refitTicks = 0;
+let lastUserInteract = 0, refitView = true, refitTicks = 0;
 const FOLLOW_SCALE = 1.5, FOLLOW_COOLDOWN = 2500, FIT_MS = 600, REFIT_TICKS = 10, ZOOM_MIN = 0.2, ZOOM_MAX = 4, ZOOM_FIT_MARGIN = 0.9, ZOOM_FLOOR = 0.01;
 const LARGE_GRAPH_NODES = 500, LINK_LABEL_MIN_ZOOM = FOLLOW_SCALE, NODE_LABELS_MIN = 12, NODE_LABELS_MAX = 300, NODE_LABELS_HARD_MAX = 1000, PROJECT_LABELS_MAX = 60, LABEL_ALL_ZOOM = 2.5, LABEL_CELL_WIDTHS = 16, LABEL_CELL_HEIGHTS = 1.4, LABEL_CHAR_EM = 0.56;
 const LINK_COLOUR = "#6e7681", LINK_OPACITY = 0.55, LINK_SCREEN_PX = 1.25;
@@ -411,7 +412,17 @@ function buildLegend() {
 }
 buildLegend();
 
+let graphLoad = null, graphStale = false;
 async function fetchGraph() {
+  if (graphLoad) { graphStale = true; return graphLoad; }
+  graphLoad = loadGraph().finally(() => {
+    graphLoad = null;
+    if (graphStale) { graphStale = false; fetchGraph(); }
+  });
+  return graphLoad;
+}
+
+async function loadGraph() {
   const project = document.getElementById("project").value;
   const url = project ? `/api/graph?project=${encodeURIComponent(project)}` : "/api/graph";
   try {
@@ -423,7 +434,7 @@ async function fetchGraph() {
     if (orphanCount) document.getElementById("status").textContent += `, ${orphanCount} orphan${orphanCount > 1 ? "s" : ""}`;
     const demotedCount = data.entities.filter(e => (e.vote_score || 0) < 0).length;
     if (demotedCount) document.getElementById("status").textContent += `, ${demotedCount} demoted`;
-    if (JSON.stringify(data) !== JSON.stringify(currentData)) { currentData = data; render(data); }
+    currentData = data; render(data);
   } catch (e) { document.getElementById("status").textContent = "error: " + e.message; }
 }
 
@@ -852,11 +863,6 @@ function updateSelection() {
 document.getElementById("project").onchange = () => { refitView = true; currentData = null; stopTickLoop(); canvasPulses = []; if (simulation) { simulation.stop(); simulation = null; } setCanvasMode(false); updateControlsPath(); fetchGraph(); runSearch(); };
 document.getElementById("refresh").onclick = fetchGraph;
 
-let timer = setInterval(fetchGraph, 2000);
-document.getElementById("auto").onchange = function() {
-  clearInterval(timer);
-  if (this.checked) timer = setInterval(fetchGraph, 2000);
-};
 
 const tally = { read: 0, create: 0, update: 0, delete: 0 };
 function renderTally() {
@@ -957,6 +963,7 @@ async function fetchActivity() {
     const data = await res.json();
     if (data.seq === lastSeq) return;
     lastSeq = data.seq;
+    if (VisLib.shouldRefetchGraph(data.events)) fetchGraph();
     for (const ev of data.events) {
       tally[ev.kind] = (tally[ev.kind] || 0) + 1;
       ev.entities.forEach(name => pulseNode(name, ev));
@@ -1163,8 +1170,15 @@ function renderDream(d) {
   body.innerHTML = lines.join("");
 }
 
+let lastPassTs;
 async function fetchDream() {
-  try { renderDream(await (await dedupFetch("/api/dream", () => fetch("/api/dream"))).json()); }
+  try {
+    const d = await (await dedupFetch("/api/dream", () => fetch("/api/dream"))).json();
+    const passTs = d.last_pass ? d.last_pass.ts : null;
+    if (VisLib.shouldRefetchGraph([], lastPassTs, passTs)) fetchGraph();
+    lastPassTs = passTs;
+    renderDream(d);
+  }
   catch (e) { /* transient poll failure; retry next tick */ }
 }
 document.getElementById("dream-body").onclick = (e) => {
