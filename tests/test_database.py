@@ -2973,11 +2973,9 @@ class TestStripRedundantLabel:
             ("2020-01-05: text", "text"),
             ("26 Nov: text", "text"),
             ("(26 Nov): text", "text"),
-            ("Nov 26, 2026: text", "text"),
             ("2026-11-26 11:14Z: text", "text"),
             ("11:14Z: text", "text"),
             ("Design preference (26 Nov): text", "Design preference: text"),
-            ("Decision on 26 Nov: text", "Decision: text"),
             ("Note (26 Nov 11:14Z): text", "Note: text"),
         ],
     )
@@ -2995,10 +2993,48 @@ class TestStripRedundantLabel:
             "the cert expires 2027-01-01",
             "Cert expiry 2027-01-01: renew early",
             "Meeting moved (26 Nov) to Friday",
+            "Decision 12, revert the change",
+            "Junit 5: tests use the new runner",
+            "2 Decisions: A and B",
+            "Augment 3, then retry",
+            "Release on 3 Decimals: x",
         ],
     )
     def test_keeps_a_date_that_is_part_of_the_fact(self, store: Storage, via: str, content: str) -> None:
         assert _write_observation(store, via, content) == [content]
+
+    @pytest.mark.parametrize("via", _WRITE_PATHS)
+    @pytest.mark.parametrize(
+        ("content", "provenance", "expected"),
+        [
+            ("User: text", "user", "text"),
+            ("User decision: text", "user", "text"),
+            ("User decision on 26 Nov: text", "user", "text"),
+            ("Observed: text", "observed", "text"),
+            ("Inferred: text", "inferred", "text"),
+            ("User: text", "observed", "User: text"),
+            ("User: text", None, "User: text"),
+            ("User prefers dark mode", "user", "User prefers dark mode"),
+            ("User wants dark mode, not light", "user", "User wants dark mode, not light"),
+            (
+                "Observed latency spikes of 2s, mostly at night",
+                "observed",
+                "Observed latency spikes of 2s, mostly at night",
+            ),
+            ("User prefers tabs - spaces break the linter", "user", "User prefers tabs - spaces break the linter"),
+        ],
+    )
+    def test_strips_a_provenance_label_matching_the_provenance(
+        self, store: Storage, via: str, content: str, provenance: str | None, expected: str
+    ) -> None:
+        assert _write_observation(store, via, content, provenance) == [expected]
+
+    def test_edit_observation_strips_a_label_matching_the_kept_provenance(self, store: Storage) -> None:
+        store.entities.create(
+            "proj", [{"name": "e1", "entityType": "task", "observations": ["a"], "provenance": "user"}]
+        )
+        store.observations.edit("proj", "e1", hash_observation("a"), "User: b")
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["b"]
 
     def test_add_observations_dedupes_against_an_existing_bare_observation(self, store: Storage) -> None:
         today = datetime.now(tz=UTC).strftime("%Y-%m-%d")

@@ -28,9 +28,9 @@ from cline_hooks.plugins.startup_blocks import RESERVE_CHARS, StartupBlocksPlugi
 from mcp_memory import api_client, nudge_count, server
 from mcp_memory.api import _recent_memory, _safe_project
 from mcp_memory.hooks.plugin import (
-    _DATE_PREFIX_WARNING,
     _EDIT_TOOL_WEIGHT,
     _FRUSTRATION_NUDGE_TEMPLATE,
+    _REDUNDANT_LABEL_WARNING,
     ENABLE_FRUSTRATION_CHECK,
     ENABLE_PROFANITY_CHECK,
     MemoryPlugin,
@@ -1026,7 +1026,7 @@ class TestMemoryPluginDatePrefixNudge:
             },
         )
         assert result is not None
-        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+        assert any("REDUNDANT LABEL" in note for note in result.notes)
 
     def test_flags_today_prefixed_new_text_in_edit_observation(
         self,
@@ -1045,7 +1045,7 @@ class TestMemoryPluginDatePrefixNudge:
             },
         )
         assert result is not None
-        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+        assert any("REDUNDANT LABEL" in note for note in result.notes)
 
     def test_flags_a_date_inside_a_label(
         self,
@@ -1063,6 +1063,24 @@ class TestMemoryPluginDatePrefixNudge:
         )
         assert result is not None
         assert any("Design preference (26 Nov): fact" in note for note in result.notes)
+
+    def test_flags_a_label_repeating_the_provenance(
+        self,
+        plugin: MemoryPlugin,
+    ) -> None:
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="create_entities",
+            parameters={
+                "project": "global",
+                "entities": [
+                    {"name": "x", "entityType": "task", "provenance": "user", "observations": ["User decision: fact"]},
+                ],
+            },
+        )
+        assert result is not None
+        assert any("User decision: fact" in note for note in result.notes)
 
     def test_does_not_flag_date_without_separator(
         self,
@@ -1102,7 +1120,7 @@ class TestMemoryPluginDatePrefixNudge:
             },
         )
         assert result is not None
-        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+        assert any("REDUNDANT LABEL" in note for note in result.notes)
 
     def test_flags_today_prefixed_observation_via_use_mcp_tool_json_string(
         self,
@@ -1123,7 +1141,7 @@ class TestMemoryPluginDatePrefixNudge:
             },
         )
         assert result is not None
-        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+        assert any("REDUNDANT LABEL" in note for note in result.notes)
 
     def test_never_flags_merge_observations(
         self,
@@ -1181,7 +1199,7 @@ class TestMemoryPluginDatePrefixNudge:
         assert "2 observation(s)" in note
         assert f"{today}: first fact" in note
 
-    def test_combines_repeated_scope_warning_with_date_prefix_note(
+    def test_combines_repeated_scope_warning_with_redundant_label_note(
         self,
         plugin: MemoryPlugin,
         tmp_path: Path,
@@ -1217,7 +1235,7 @@ class TestMemoryPluginDatePrefixNudge:
         assert result.block is None
         assert len(result.notes) == 2
         assert any("`wrong-project`" in note for note in result.notes)
-        assert any("REDUNDANT DATE PREFIX" in note for note in result.notes)
+        assert any("REDUNDANT LABEL" in note for note in result.notes)
 
     def test_block_precedence_preserved_with_date_prefix_present(
         self,
@@ -1245,7 +1263,7 @@ class TestMemoryPluginDatePrefixNudge:
         assert result is not None
         assert result.block is not None
         assert "`wrong-project`" in result.block
-        assert result.notes == [_DATE_PREFIX_WARNING.format(count=1, example=f"{today}: fact")]
+        assert result.notes == [_REDUNDANT_LABEL_WARNING.format(count=1, example=f"{today}: fact")]
 
 
 class TestDerivesScopeFromWorkspaceRoots:

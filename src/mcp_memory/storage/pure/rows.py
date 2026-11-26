@@ -8,15 +8,20 @@ import sqlite3
 
 from mcp_memory.models import Entity, Observation, Relation
 
-_MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?"
-_DATE = rf"(?:\d{{4}}-\d{{2}}-\d{{2}}|\d{{1,2}}\s+{_MONTH}(?:\s+\d{{4}})?|{_MONTH}\s+\d{{1,2}}(?:,?\s+\d{{4}})?)"
-_TIME = r"\d{1,2}:\d{2}(?::\d{2})?\s*(?:Z|UTC)?"
-_STAMP = rf"(?:{_DATE}(?:[T\s]+{_TIME})?|{_TIME})"
-_STAMP_LABEL_RE = re.compile(rf"^\(?{_STAMP}\)?[ \t]*[:,-][ \t]+(?=\S)", re.IGNORECASE)
-_STAMPED_LABEL_RE = re.compile(
-    rf"^(?P<label>[^\n:]{{1,60}}?)\s*(?:\(\s*{_STAMP}\s*\)|\b(?:on|at)\s+{_STAMP})\s*:\s+(?=\S)", re.IGNORECASE
-)
 _STATUS_OBSERVATION = re.compile(r"\s*status:", re.IGNORECASE)
+
+_MONTH = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+    r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b"
+)
+_DATE_RE = re.compile(rf"(\d{{4}}-\d{{2}}-\d{{2}})|(\d{{1,2}}) ({_MONTH})(?: (\d{{4}}))?", re.IGNORECASE)
+_TIME_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?Z?")
+_STAMP = rf"(?:(?:{_DATE_RE.pattern})(?:[ T,]+{_TIME_RE.pattern})?|{_TIME_RE.pattern})"
+_PROVENANCE_LABEL_RE = re.compile(
+    rf"^(user|observed|inferred)(?: [a-z]+)?(?: (?:on|at) {_STAMP}| \({_STAMP}\))?: +", re.IGNORECASE
+)
+_STAMP_LABEL_RE = re.compile(rf"^\(?{_STAMP}\)? *[:,-] +", re.IGNORECASE)
+_LABEL_STAMP_RE = re.compile(rf"^[^:()\n]{{1,60}}?( \({_STAMP}\))(?=:)", re.IGNORECASE)
 
 
 def reject_status_observation(content: str) -> None:
@@ -33,18 +38,26 @@ def hash_observation(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
 
 
-def strip_redundant_label(content: str) -> str:
-    """Strip a leading date or time label, since created_at already carries it.
+def strip_redundant_labels(content: str, provenance: str | None) -> tuple[str, list[str]]:
+    """Strip leading labels that repeat a date, a time or the matching provenance, returning the text and the labels.
 
-    Strips a label that is only a date or time ("26 Nov: fact"), and a date or time in
-    parentheses or after "on"/"at" at the end of a longer label ("Decision (26 Nov): fact"
-    becomes "Decision: fact"). A date elsewhere in the text is real content and stays.
+    Handles "User decision on 26 Nov: X", "2026-11-20 11:14Z: X" and "Design preference (26 Nov): X".
+    A date inside the content itself ("the cert expires 2027-01-01") is kept, and so is an empty remainder.
     """
-    if match := _STAMP_LABEL_RE.match(content):
-        return content[match.end() :]
-    if match := _STAMPED_LABEL_RE.match(content):
-        return f"{match['label']}: {content[match.end() :]}"
-    return content
+    labels: list[str] = []
+    while True:
+        match = _PROVENANCE_LABEL_RE.match(content)
+        if (match is not None and match.group(1).lower() == provenance) or (match := _STAMP_LABEL_RE.match(content)):
+            span = match.span()
+        elif match := _LABEL_STAMP_RE.match(content):
+            span = match.span(1)
+        else:
+            return content, labels
+        rest = content[: span[0]] + content[span[1] :]
+        if not rest.strip():
+            return content, labels
+        labels.append(content[span[0] : span[1]])
+        content = rest
 
 
 def budget_observations(observations: list[Observation], max_chars: int) -> list[Observation]:

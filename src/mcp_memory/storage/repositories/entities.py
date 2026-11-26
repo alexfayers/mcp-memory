@@ -14,7 +14,7 @@ from mcp_memory.models import (
     validate_vote,
 )
 from mcp_memory.path_resolver import normalize_path
-from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_redundant_label
+from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_redundant_labels
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_entity_type_id, get_or_create_project_id
@@ -79,10 +79,10 @@ class EntityRepository:
                 name = entity_data.get("name")
                 entity_type = entity_data.get("entityType")
                 observations = cast("list[str]", entity_data.get("observations"))
-                observations = [strip_redundant_label(obs) for obs in observations]
                 status = entity_data.get("status")
                 location = entity_data.get("location")
                 provenance = entity_data.get("provenance")
+                observations = [strip_redundant_labels(obs, cast("str | None", provenance))[0] for obs in observations]
 
                 if get_entity_id(self._conn, str(name), project_id) is not None:
                     raise ValueError(

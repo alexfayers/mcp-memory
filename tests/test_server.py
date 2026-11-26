@@ -887,6 +887,13 @@ class TestStatusObservationsRejected:
         assert "set_entity_status" in result["error"]
         assert server_db.reads.search("proj", "fine")["entities"] == []
 
+    def test_a_status_observation_behind_a_provenance_label_is_rejected(self, entity: Storage) -> None:
+        text = "User: status: resolved"
+        assert "set_entity_status" in tools.add_observations("proj", "task/e1", [text], provenance="user")["error"]
+        entity_data = {"name": "task/e3", "entityType": "task", "observations": [text], "provenance": "user"}
+        assert "set_entity_status" in tools.create_entities("proj", [entity_data])["error"]
+        assert self._observations(entity) == ["seed"]
+
     def test_a_status_observation_behind_a_date_label_is_rejected(self, entity: Storage) -> None:
         text = "2026-09-08: status: resolved"
         assert "set_entity_status" in tools.add_observations("proj", "task/e1", [text])["error"]
