@@ -197,3 +197,18 @@ def reset_work(task_id: str, names: tuple[str, ...]) -> None:
             del data[key]
         if keys:
             _write(data)
+
+
+def take_unseen(task_id: str, name: str, items: list[str], limit: int) -> list[str]:
+    """Return up to limit items the task has not yet taken under this name, and record them as taken."""
+    with _locked():
+        data = _read()
+        key = f"{task_id}:{name}"
+        seen = data.get(key, [])
+        if not isinstance(seen, list):
+            seen = []
+        taken = [item for item in items if item not in seen][:limit]
+        if taken:
+            data[key] = [*seen, *taken]
+            _write(data)
+        return taken

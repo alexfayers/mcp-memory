@@ -18,6 +18,7 @@ from mcp_memory.storage.services.fts import refresh_for_entity
 from mcp_memory.storage.services.ids import get_entity_id, get_or_create_entity_type_id, get_or_create_project_id
 from mcp_memory.storage.services.integrity import orphaned_neighbors_if_entity_deleted
 from mcp_memory.storage.services.provenance import raise_provenance
+from mcp_memory.storage.services.triggers import copy_triggers
 
 if TYPE_CHECKING:
     from mcp_memory.models import EntityStatus, Relation
@@ -344,6 +345,18 @@ class EntityRepository:
                 "WHERE entity_id = ? AND deleted_at IS NULL AND content NOT IN "
                 "(SELECT content FROM observations WHERE entity_id = ? AND deleted_at IS NULL)",
                 (target_id, source_id, target_id),
+            )
+            copy_triggers(
+                self._conn,
+                [
+                    (row["source"], row["target"])
+                    for row in self._conn.query_all(
+                        "SELECT s.id AS source, t.id AS target FROM observations s JOIN observations t "
+                        "ON t.content = s.content WHERE s.entity_id = ? AND t.entity_id = ? "
+                        "AND s.deleted_at IS NULL AND t.deleted_at IS NULL",
+                        (source_id, target_id),
+                    )
+                ],
             )
             outgoing = self._conn.write(
                 "INSERT INTO relations (source_id, target_id, relation_type_id) "

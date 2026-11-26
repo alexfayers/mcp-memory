@@ -12,7 +12,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from .migrations.schema import MIGRATIONS
-from .models import Relation, validate_provenance
+from .models import Relation, validate_provenance, validate_triggers
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -101,6 +101,7 @@ def validate_export(data: dict[str, Any]) -> dict[str, Any]:
         for entity in block.get("entities", []):
             for obs in entity.get("observations", []):
                 validate_provenance(obs.get("provenance"))
+                validate_triggers(obs.get("triggers", []))
     return data
 
 

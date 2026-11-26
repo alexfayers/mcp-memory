@@ -11,7 +11,10 @@ import statistics
 import time
 from typing import TYPE_CHECKING, Any
 
-from llm_prompts import telemetry_core as core
+from llm_prompts import (
+    home,
+    telemetry_core as core,
+)
 import pytest
 
 from mcp_memory import activity, dream, metrics, nudge_count, server, telemetry
@@ -42,10 +45,7 @@ def sent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]
     monkeypatch.setattr(telemetry, "_errors", Counter())
     monkeypatch.setattr(core, "resolved_versions", functools.cache(core.resolved_versions.__wrapped__))
     monkeypatch.setenv("HOME", str(tmp_path))
-    config_dir = tmp_path / ".config" / "llm-prompts"
-    config_dir.mkdir(parents=True)
-    state = {"install_id": INSTALL_ID, "opted_out": False, "at": time.time()}
-    (config_dir / "telemetry.json").write_text(json.dumps(state), encoding="utf-8")
+    _write_state()
     events: list[dict[str, Any]] = []
     monkeypatch.setattr(core, "send", lambda event, install_id, **_: events.append({**event, "id": install_id}))
 
@@ -232,45 +232,44 @@ def test_debug_prints_the_usage_payload_and_whether_it_arrived(
     assert err.endswith("telemetry sent: True\n")
 
 
-def _write_state(tmp_path: Path, **fields: Any) -> None:
-    state_file = tmp_path / ".config" / "llm-prompts" / "telemetry.json"
+def _write_state(**fields: Any) -> None:
+    state_file = core._state_path()
+    state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(json.dumps({"install_id": INSTALL_ID, "opted_out": False, "at": time.time(), **fields}))
 
 
-def _turn_off(kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _turn_off(kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
     if kind == "env-opt-out":
         monkeypatch.setenv("DO_NOT_TRACK", "1")
     elif kind == "saved-opt-out":
-        _write_state(tmp_path, opted_out=True)
+        _write_state(opted_out=True)
     elif kind == "stale-record":
-        _write_state(tmp_path, at=time.time() - 2 * core.OPT_STATE_MAX_AGE)
+        _write_state(at=time.time() - 2 * core.OPT_STATE_MAX_AGE)
     elif kind == "no-install-id":
-        _write_state(tmp_path, install_id=None)
+        _write_state(install_id=None)
     else:
         monkeypatch.setattr(telemetry, "_core", None)
 
 
 @pytest.mark.parametrize("kind", ["env-opt-out", "saved-opt-out", "stale-record", "no-install-id", "core-missing"])
 def test_nothing_is_sent_when_telemetry_is_off(
-    store: Storage, sent: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+    store: Storage, sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
     usage = telemetry.UsageTelemetry(store)
     store.telemetry.record_tool_call("search_nodes", 10, 100, {})
-    _turn_off(kind, tmp_path, monkeypatch)
+    _turn_off(kind, monkeypatch)
 
     usage.report()
 
     assert sent == []
 
 
-def test_calls_made_while_off_are_not_sent_once_telemetry_is_on(
-    store: Storage, sent: list[dict[str, Any]], tmp_path: Path
-) -> None:
+def test_calls_made_while_off_are_not_sent_once_telemetry_is_on(store: Storage, sent: list[dict[str, Any]]) -> None:
     usage = telemetry.UsageTelemetry(store)
-    _write_state(tmp_path, opted_out=True)
+    _write_state(opted_out=True)
     store.telemetry.record_tool_call("search_nodes", 10, 100, {})
     usage.report()
-    _write_state(tmp_path)
+    _write_state()
 
     usage.report()
 
@@ -349,7 +348,8 @@ def test_report_names_a_local_checkout_without_its_path(
 ) -> None:
     checkout = tmp_path / "checkouts" / "mcp-memory"
     checkout.mkdir(parents=True)
-    config = tmp_path / ".config" / "llm-prompts" / "config.toml"
+    config = home.config_dir() / "config.toml"
+    config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(f'[[tools]]\nname = "mcp-memory"\nsource = "{checkout}"\n', encoding="utf-8")
     usage = telemetry.UsageTelemetry(store)
     store.telemetry.record_tool_call("search_nodes", 10, 100, {})
@@ -558,8 +558,7 @@ def test_usage_and_dream_events_carry_the_version_tags(
 
 def test_the_suite_is_opted_out_of_telemetry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    (tmp_path / ".config" / "llm-prompts").mkdir(parents=True)
-    _write_state(tmp_path)
+    _write_state()
     spawned: list[object] = []
     monkeypatch.setattr(core, "Popen", lambda *args, **_: spawned.append(args))
     spec = dream.TierSpec("light", lambda: True, lambda: 0.0, lambda: 1.0, _audit_pass)
@@ -752,13 +751,13 @@ def test_a_failed_eval_send_is_retried_on_the_next_idle_stretch(
 
 @pytest.mark.parametrize("kind", ["env-opt-out", "saved-opt-out", "stale-record", "no-install-id", "core-missing"])
 def test_nothing_is_scored_or_sent_when_telemetry_is_off(
-    labelled: Storage, sent: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+    labelled: Storage, sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
     def fail(*_: object, **__: object) -> None:
         raise AssertionError("scored while telemetry is off")
 
     monkeypatch.setattr(telemetry, "evaluate_cached_async", fail)
-    _turn_off(kind, tmp_path, monkeypatch)
+    _turn_off(kind, monkeypatch)
 
     _report_eval(labelled)
     assert sent == []

@@ -1223,6 +1223,57 @@ class TestObservations:
         hashes = store.observations.add("proj", "e1", ["a", "b"])
         assert hashes == [hash_observation("b")]
 
+    def test_added_triggers_list_with_their_observation_until_it_is_deleted(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        triggers = [{"kind": "pattern", "value": "rm -rf", "tool": "bash"}, {"kind": "path", "value": "src/*.py"}]
+        store.observations.add("proj", "e1", ["b"], triggers=triggers)
+        assert store.observations.trigger_rows() == [
+            {
+                "kind": "pattern",
+                "value": "rm -rf",
+                "tool": "bash",
+                "action": "block",
+                "project": "proj",
+                "entity": "e1",
+                "content": "b",
+                "content_hash": hash_observation("b"),
+                "vote_score": 0,
+            },
+            {
+                "kind": "path",
+                "value": "src/*.py",
+                "tool": "",
+                "action": "inject",
+                "project": "proj",
+                "entity": "e1",
+                "content": "b",
+                "content_hash": hash_observation("b"),
+                "vote_score": 0,
+            },
+        ]
+        store.observations.delete("proj", "e1", ["b"])
+        assert store.observations.trigger_rows() == []
+
+    def test_an_edit_with_triggers_replaces_them_and_one_without_keeps_them(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        store.observations.add("proj", "e1", ["b"], triggers=[{"kind": "mention", "value": "old"}])
+        new = [{"kind": "mention", "value": "new"}]
+        store.observations.edit("proj", "e1", hash_observation("b"), "b", triggers=new)
+        store.observations.edit("proj", "e1", hash_observation("b"), "b2")
+        assert [(row["value"], row["content"]) for row in store.observations.trigger_rows()] == [("new", "b2")]
+        store.observations.edit("proj", "e1", hash_observation("b2"), "b2", triggers=[])
+        assert store.observations.trigger_rows() == []
+
+    @pytest.mark.parametrize(
+        "trigger",
+        [{"kind": "nope", "value": "x"}, {"kind": "mention", "value": "("}, {"kind": "path", "value": ""}],
+    )
+    def test_an_invalid_trigger_is_refused(self, store: Storage, trigger: dict[str, str]) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        with pytest.raises(ValueError, match="trigger"):
+            store.observations.add("proj", "e1", ["b"], triggers=[trigger])
+        assert obs_contents(store.reads.get_entity("proj", "e1")) == ["a"]
+
     def test_add_observations_missing_entity_raises(self, store: Storage) -> None:
         with pytest.raises(ValueError, match="not found"):
             store.observations.add("proj", "missing", ["x"])
@@ -1850,6 +1901,25 @@ class TestTombstoneVisibility:
 
 
 class TestMergeEntities:
+    def test_merging_keeps_the_source_triggers_on_the_target(self, store: Storage) -> None:
+        store.entities.create(
+            "proj",
+            [
+                {"name": "dup", "entityType": "task", "observations": ["x"]},
+                {"name": "canon", "entityType": "task", "observations": ["shared"]},
+            ],
+        )
+        store.observations.add("proj", "dup", ["shared", "only-source"], triggers=[{"kind": "mention", "value": "m"}])
+        store.entities.merge("proj", "dup", "canon")
+        rows = sorted((row["entity"], row["content"]) for row in store.observations.trigger_rows())
+        assert rows == [("canon", "only-source"), ("canon", "shared")]
+
+    def test_merging_observations_keeps_the_source_triggers_on_the_target(self, store: Storage) -> None:
+        store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a", "b"]}])
+        store.observations.add("proj", "e1", ["a"], triggers=[{"kind": "mention", "value": "m"}])
+        store.observations.merge("proj", "e1", hash_observation("a"), hash_observation("b"))
+        assert [row["content"] for row in store.observations.trigger_rows()] == ["b"]
+
     def test_observations_merged_and_deduped(self, store: Storage) -> None:
         store.entities.create(
             "proj",

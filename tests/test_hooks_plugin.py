@@ -2253,3 +2253,54 @@ class TestStopNeedsTaskAfterWideWork:
         self._post(live_plugin, "execute_command", command="git -P log --grep commit")
         self._post(live_plugin, "fork", role="reader")
         assert live_plugin.on_hook("Stop", task_id="t1") is None
+
+
+class TestRecallTriggers:
+    @pytest.fixture(autouse=True)
+    def _serve(self, live_server: None, store: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server, "_db", store)
+        store.entities.create("proj", [{"name": "task/t", "entityType": "task", "observations": ["start"]}])
+        self.store = store
+
+    def _trigger(self, content: str, **trigger: str) -> None:
+        self.store.observations.add("proj", "task/t", [content], triggers=[trigger])
+
+    @pytest.mark.parametrize(
+        "caller",
+        [{}, {"agent_id": "sub1"}, {"parent_tool_call_id": "call-1"}],
+        ids=["main", "subagent", "nested"],
+    )
+    def test_a_pattern_blocks_the_first_matching_call_once(
+        self, live_plugin: MemoryPlugin, caller: dict[str, str]
+    ) -> None:
+        self._trigger("Force-pushing main loses others' work.", kind="pattern", value=r"push --force")
+        call = {"task_id": "t1", "tool_name": "execute_command", "parameters": {"command": "git push --force"}}
+
+        blocked = live_plugin.on_hook("PreToolUse", **call, **caller)
+        assert blocked is not None
+        assert blocked.block is not None
+        assert "Force-pushing main loses others' work." in blocked.block
+        assert live_plugin.on_hook("PreToolUse", **call, **caller) is None
+
+    def test_a_path_injects_on_the_first_read_of_a_matching_file_only(self, live_plugin: MemoryPlugin) -> None:
+        self._trigger("The API ops are the hook's only way to the database.", kind="path", value="src/*/api.py")
+        call = {"task_id": "t1", "tool_name": "read_file", "parameters": {"path": "/home/me/repo/src/pkg/api.py"}}
+
+        assert live_plugin.on_hook("PreToolUse", **call) is None
+        injected = live_plugin.on_hook("PostToolUse", **call, agent_id="sub1")
+        assert injected is not None
+        assert "The API ops are the hook's only way to the database." in injected.notes[0]
+        assert live_plugin.on_hook("PostToolUse", **call, agent_id="sub1") is None
+
+    def test_a_mention_injects_after_a_turn_that_names_it(self, live_plugin: MemoryPlugin, tmp_path: Path) -> None:
+        self._trigger("Deploys need the release checklist.", kind="mention", value=r"\bdeploy\b")
+        transcript = tmp_path / "transcript.jsonl"
+        turn = {"type": "assistant", "message": {"content": [{"type": "text", "text": "Next I will deploy it."}]}}
+        transcript.write_text(json.dumps(turn) + "\n")
+
+        with patch("cline_hooks.core.protocol._active_protocol", ClaudeCodeProtocol()):
+            injected = live_plugin.on_hook("Stop", task_id="t1", transcript_path=str(transcript))
+            repeat = live_plugin.on_hook("Stop", task_id="t1", transcript_path=str(transcript))
+        assert injected is not None
+        assert "Deploys need the release checklist." in injected.notes[0]
+        assert repeat is None

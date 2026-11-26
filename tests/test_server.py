@@ -680,6 +680,13 @@ class TestAddObservationsTool:
         assert {o["content"]: o.get("from") for o in observations} == {"a": None, "b3": "observed"}
         assert "error" in tools.add_observations("proj", "e1", ["c"], provenance="guess")
 
+    def test_triggers_are_stored_replaced_and_validated(self, server_db: Storage) -> None:
+        server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
+        tools.add_observations("proj", "e1", ["b"], triggers=[{"kind": "pattern", "value": "push"}])
+        tools.edit_observation("proj", "e1", hash_observation("b"), "b", triggers=[{"kind": "path", "value": "*.md"}])
+        assert [(row["kind"], row["value"]) for row in server_db.observations.trigger_rows()] == [("path", "*.md")]
+        assert "error" in tools.add_observations("proj", "e1", ["c"], triggers=[{"kind": "pattern", "value": "["}])
+
     def test_a_duplicate_or_merge_keeps_the_higher_ranked_provenance(self, server_db: Storage) -> None:
         entity = {"name": "e1", "entityType": "task", "observations": ["a", "b"], "provenance": "inferred"}
         server_db.entities.create("proj", [entity])
@@ -1398,13 +1405,17 @@ class TestEditObservationTool:
     def test_forwards_arguments_and_returns_new_hash(self, mock_db: MagicMock) -> None:
         mock_db.observations.edit.return_value = "newhash"
         result = tools.edit_observation("proj", "e1", "oldhash", "fixed", oldText="broken")
-        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", "broken", provenance=None)
+        mock_db.observations.edit.assert_called_once_with(
+            "proj", "e1", "oldhash", "fixed", "broken", provenance=None, triggers=None
+        )
         assert result == {"message": "Edited observation on 'e1'.", "hash": "newhash"}
 
     def test_old_text_defaults_to_whole_replace(self, mock_db: MagicMock) -> None:
         mock_db.observations.edit.return_value = "newhash"
         tools.edit_observation("proj", "e1", "oldhash", "fixed")
-        mock_db.observations.edit.assert_called_once_with("proj", "e1", "oldhash", "fixed", None, provenance=None)
+        mock_db.observations.edit.assert_called_once_with(
+            "proj", "e1", "oldhash", "fixed", None, provenance=None, triggers=None
+        )
 
     def test_value_error_returned_as_error(self, mock_db: MagicMock) -> None:
         mock_db.observations.edit.side_effect = ValueError("oldText not found in observation")

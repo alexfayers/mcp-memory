@@ -31,6 +31,7 @@ from cline_hooks.plugins.startup_blocks import StartupBlock
 
 from mcp_memory import api_client, nudge_count
 from mcp_memory.config import get_memory_url, get_workspace_markers
+from mcp_memory.hooks.recall import recall
 from mcp_memory.hooks.review_tracker import (
     record_write,
     reset as reset_review,
@@ -631,6 +632,16 @@ def _check_memory_write(
     return result
 
 
+def _with_recalled(result: HookResult | None, event: dict[str, object], kind: str) -> HookResult | None:
+    """Add the observations that this trigger kind recalls for the event to a hook result as a note."""
+    recalled = recall(str(event.get("task_id", "")), event, kind)
+    if not recalled:
+        return result
+    result = result or HookResult()
+    result.notes.append(recalled)
+    return result
+
+
 def _str_list(value: object) -> list[str]:
     """Coerce an object to a list of strings."""
     if isinstance(value, list):
@@ -822,6 +833,9 @@ class MemoryPlugin(HooksPlugin):
         return _AUTO_REGISTERED_NOTE.format(project=project, anchor=anchor)
 
     def _on_stop(self, **kwargs: object) -> HookResult | None:
+        return _with_recalled(self._gate_stop(**kwargs), kwargs, "mention")
+
+    def _gate_stop(self, **kwargs: object) -> HookResult | None:
         """Block finishing wide work once without a `task/`, then start the next piece of work."""
         task_id = str(kwargs.get("task_id", ""))
         if (
@@ -870,6 +884,9 @@ class MemoryPlugin(HooksPlugin):
 
     def _on_pre_tool_use(self, **kwargs: object) -> HookResult | None:
         tick_turn(str(kwargs.get("task_id", "")))
+        recalled = recall(str(kwargs.get("task_id", "")), kwargs, "pattern")
+        if recalled:
+            return HookResult(block=recalled)
         agent_type = str(kwargs.get("agent_type", ""))
         if _is_exempt_agent(agent_type):
             return None
@@ -919,6 +936,9 @@ class MemoryPlugin(HooksPlugin):
         return _check_block(task_id, project_scope)
 
     def _on_post_tool_use(self, **kwargs: object) -> HookResult | None:
+        return _with_recalled(self._count_tool_use(**kwargs), kwargs, "path")
+
+    def _count_tool_use(self, **kwargs: object) -> HookResult | None:
         agent_type = str(kwargs.get("agent_type", ""))
         if _is_exempt_agent(agent_type) or is_subagent(kwargs):
             return None
