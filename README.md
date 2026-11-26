@@ -20,8 +20,8 @@
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       74 |        4 |     95% |52-53, 88, 90 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
-| src/mcp\_memory/hooks/plugin.py                      |      549 |       27 |     95% |176-177, 301, 303, 331, 479, 718-719, 724-732, 754, 798, 854, 857-859, 870, 877-881, 936 |
-| src/mcp\_memory/hooks/recall.py                      |      105 |        1 |     99% |       122 |
+| src/mcp\_memory/hooks/plugin.py                      |      551 |       27 |     95% |176-177, 301, 303, 331, 479, 718-719, 724-732, 754, 798, 854, 857-859, 870, 877-881, 939 |
+| src/mcp\_memory/hooks/recall.py                      |      161 |        5 |     97% |91, 117, 137, 142, 203 |
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
 | src/mcp\_memory/hooks/tracker.py                     |      143 |        0 |    100% |           |
 | src/mcp\_memory/jsonc.py                             |       64 |       13 |     80% |13, 15, 37-42, 58-60, 77-78 |
@@ -29,7 +29,7 @@
 | src/mcp\_memory/migrations/\_\_init\_\_.py           |        0 |        0 |    100% |           |
 | src/mcp\_memory/migrations/runner.py                 |       32 |        4 |     88% |     24-27 |
 | src/mcp\_memory/migrations/schema.py                 |       23 |        0 |    100% |           |
-| src/mcp\_memory/models.py                            |       78 |        1 |     99% |        66 |
+| src/mcp\_memory/models.py                            |       81 |        1 |     99% |        68 |
 | src/mcp\_memory/nudge\_count.py                      |       43 |        0 |    100% |           |
 | src/mcp\_memory/path\_migration.py                   |       77 |       18 |     77% |27, 53-63, 67, 107, 109, 113-114, 150 |
 | src/mcp\_memory/path\_resolver.py                    |       22 |        1 |     95% |        15 |
@@ -98,12 +98,12 @@
 | tests/test\_backup.py                                |      140 |        0 |    100% |           |
 | tests/test\_cli.py                                   |      784 |        1 |     99% |       328 |
 | tests/test\_config.py                                |      176 |        0 |    100% |           |
-| tests/test\_database.py                              |     2082 |        2 |     99% | 617, 2108 |
+| tests/test\_database.py                              |     2082 |        2 |     99% | 617, 2113 |
 | tests/test\_db\_access.py                            |       13 |        0 |    100% |           |
 | tests/test\_dream.py                                 |      895 |        5 |     99% |506-507, 604, 1067, 1126 |
 | tests/test\_dream\_status.py                         |      254 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      331 |        0 |    100% |           |
-| tests/test\_hooks\_plugin.py                         |     1162 |       66 |     94% |1710-1715, 1720-1723, 1728-1736, 1747-1750, 1779-1782, 1824-1827, 1831-1834, 1838-1842, 1846-1848, 1853-1855, 1860-1865, 1869-1870, 1874-1876, 1881-1889 |
+| tests/test\_hooks\_plugin.py                         |     1197 |       66 |     94% |1712-1717, 1722-1725, 1730-1738, 1749-1752, 1781-1784, 1826-1829, 1833-1836, 1840-1844, 1848-1850, 1855-1857, 1862-1867, 1871-1872, 1876-1878, 1883-1891 |
 | tests/test\_metrics.py                               |      183 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_nudge\_count.py                          |       12 |        0 |    100% |           |
@@ -123,7 +123,7 @@
 | tests/test\_tracker.py                               |       88 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      661 |        0 |    100% |           |
-| **TOTAL**                                            | **17866** |  **487** | **97%** |           |
+| **TOTAL**                                            | **17962** |  **491** | **97%** |           |
 
 
 ## Setup coverage badge
