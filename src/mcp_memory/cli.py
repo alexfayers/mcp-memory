@@ -34,11 +34,13 @@ from .config import (
     get_db_path,
     get_default_db_path,
     get_memory_url,
+    get_old_default_db_path,
     get_surfaced_retention_days,
     resolve_port,
 )
 from .jsonc import load_jsonc_object
-from .relocate import parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
+from .path_migration import migrate
+from .relocate import SIDECAR_SUFFIXES, parse_db_path_from_plist, parse_db_path_from_systemd, relocate_db
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -548,13 +550,38 @@ def _cmd_telemetry_flush(_args: argparse.Namespace) -> None:
         return
 
 
+def _copy_old_default_folder(source: Path, target: Path) -> None:
+    """Copy the files next to a database at the old default path into the target's folder, once.
+
+    The database and its sidecars are left for `relocate_db`, and the old files stay in place.
+
+    Raises:
+        OSError: The folder could not be copied.
+    """
+    old = get_old_default_db_path().resolve()
+    if source != old or not old.parent.is_dir():
+        return
+    database = {old.name, *(f"{old.name}{suffix}" for suffix in SIDECAR_SUFFIXES)}
+    children = sorted(child for child in old.parent.iterdir() if child.name not in database)
+    copies = [(child, target.parent / child.name) for child in children]
+    failures = migrate(target.parent.parent, copies)
+    if failures:
+        raise OSError("; ".join(failures.values()))
+
+
 def _cmd_migrate_db(args: argparse.Namespace) -> None:
     """Move the database to the default location and repoint the service at it."""
     target = get_default_db_path()
     source = Path(args.source).expanduser() if args.source else None
     if source is None:
         detected = _detect_service_db_path()
-        source = Path(detected).expanduser() if detected else get_db_path()
+        if detected:
+            source = Path(detected).expanduser()
+        elif os.environ.get("MCP_MEMORY_DB_PATH"):
+            print(f"MCP_MEMORY_DB_PATH is set, so its database stays at {get_db_path()}")
+            return
+        else:
+            source = get_db_path()
 
     source = source.resolve()
     if source == target.resolve():
@@ -565,10 +592,16 @@ def _cmd_migrate_db(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     had_service = _stop_service()
+    if not had_service and _server_is_running():
+        print("Error: an mcp-memory server is running; stop it, then run migrate-db again", file=sys.stderr)
+        sys.exit(1)
     try:
+        _copy_old_default_folder(source, target)
         moved = relocate_db(source, target)
-    except (ValueError, FileNotFoundError) as exc:
+    except (ValueError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        if had_service:
+            _cmd_setup_service(argparse.Namespace(port=resolve_port(), db_path=str(source)))
         sys.exit(1)
     print(f"Moved {moved} entities: {source} -> {target}")
 
@@ -1129,7 +1162,7 @@ def _build_parser() -> argparse.ArgumentParser:
     setup.add_argument(
         "--db-path",
         default=str(get_db_path()),
-        help="Database path (default: ~/.local/share/mcp-memory/memory.db, or MCP_MEMORY_DB_PATH)",
+        help="Database path (default: MCP_MEMORY_DB_PATH, else mcp-memory/data/memory.db in the llm-prompts root)",
     )
 
     sub.add_parser("restart", help="Restart the running background service")

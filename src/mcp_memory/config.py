@@ -7,7 +7,11 @@ import os
 from pathlib import Path
 import re
 
-_DEFAULT_DB_PATH = "~/.local/share/mcp-memory/memory.db"
+from .tool_paths import tool_dir
+
+_TOOL = "mcp-memory"
+_DB_NAME = "memory.db"
+_OLD_DEFAULT_DB_PATH = f"~/.local/share/{_TOOL}/{_DB_NAME}"
 _DEFAULT_PORT = "8000"
 _DEFAULT_DREAM_MODEL = "claude-sonnet-5-5"
 _DEFAULT_DREAM_HEAVY_MODEL = "claude-opus-5-5"
@@ -52,13 +56,24 @@ def detect_service_port() -> str | None:
 
 
 def get_default_db_path() -> Path:
-    """Return the built-in default database path, ignoring any env override."""
-    return Path(_DEFAULT_DB_PATH).expanduser()
+    """Return the built-in default database path under the shared llm-prompts root, ignoring any env override."""
+    return tool_dir(_TOOL, "data") / _DB_NAME
+
+
+def get_old_default_db_path() -> Path:
+    """Return the default database path used before the shared llm-prompts root."""
+    return Path(_OLD_DEFAULT_DB_PATH).expanduser()
 
 
 def get_db_path() -> Path:
-    """Return the resolved database file path."""
-    return Path(os.environ.get("MCP_MEMORY_DB_PATH", _DEFAULT_DB_PATH)).expanduser()
+    """Return MCP_MEMORY_DB_PATH, else the default path, else the old default path while the database is still there.
+
+    Only `mcp-memory utils migrate-db` moves the database from the old default path.
+    """
+    if explicit := os.environ.get("MCP_MEMORY_DB_PATH"):
+        return Path(explicit).expanduser()
+    new, old = get_default_db_path(), get_old_default_db_path()
+    return old if old.exists() and not new.exists() else new
 
 
 def get_data_dir() -> Path:

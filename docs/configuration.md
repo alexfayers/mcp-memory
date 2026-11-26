@@ -8,7 +8,7 @@ Environment variables. The server reads the first table. The hook plugin reads t
 
 | Variable | Description | Default |
 |---|---|---|
-| `MCP_MEMORY_DB_PATH` | Database file | `~/.local/share/mcp-memory/memory.db` |
+| `MCP_MEMORY_DB_PATH` | Database file | `mcp-memory/data/memory.db` in the llm-prompts root (`$LLM_PROMPTS_HOME`, else `$XDG_DATA_HOME/llm-prompts`, else `~/.local/share/llm-prompts`) |
 | `MCP_MEMORY_PORT` | HTTP port | `8000` |
 | `MCP_MEMORY_URL` | Base URL that dream passes, the hook plugin and the CLI commands use to reach the server. Overrides `MCP_MEMORY_PORT` and the installed service's port | from the port |
 | `MCP_MEMORY_MAX_OBSERVATION_CHARS` | Per-entity observation character budget for reads, highest-voted first. Negative means unlimited | `2000` |

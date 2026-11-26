@@ -98,11 +98,32 @@ class TestRelocateDb:
         assert not Path(f"{src}-shm").exists()
 
 
+@pytest.fixture
+def shared_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point HOME and the shared root at tmp_path, with no database path set."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LLM_PROMPTS_HOME", str(tmp_path / "shared"))
+    monkeypatch.delenv("MCP_MEMORY_DB_PATH")
+    return tmp_path
+
+
 class TestDefaultDbPath:
-    def test_ignores_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_ignores_env_override(self, shared_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_MEMORY_DB_PATH", "/tmp/custom.db")
         assert get_db_path() == Path("/tmp/custom.db")
-        assert get_default_db_path() == Path("~/.local/share/mcp-memory/memory.db").expanduser()
+        assert get_default_db_path() == shared_home / "shared" / "mcp-memory" / "data" / "memory.db"
+
+    def test_the_old_database_stays_in_use_until_it_is_moved(self, shared_home: Path) -> None:
+        old = shared_home / ".local" / "share" / "mcp-memory" / "memory.db"
+        old.parent.mkdir(parents=True)
+        _make_db(old)
+        assert get_db_path() == old
+
+        _make_db(get_default_db_path())
+        assert get_db_path() == get_default_db_path()
+
+    def test_a_new_install_uses_the_shared_root(self, shared_home: Path) -> None:
+        assert get_db_path() == get_default_db_path()
 
 
 class TestMigrateDbCommand:
@@ -116,6 +137,7 @@ class TestMigrateDbCommand:
 
         monkeypatch.setattr(cli, "get_default_db_path", lambda: target)
         monkeypatch.setattr(cli, "_stop_service", lambda: False)
+        monkeypatch.setattr(cli, "_server_is_running", lambda: False)
 
         cli._cmd_migrate_db(argparse.Namespace(source=str(src)))
 
@@ -135,6 +157,73 @@ class TestMigrateDbCommand:
 
         assert "already at the default location" in capsys.readouterr().out
         assert target.exists()
+
+    def test_moves_the_old_default_folder_to_the_shared_root_and_keeps_the_old_files(
+        self, shared_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        old = shared_home / ".local" / "share" / "mcp-memory"
+        old.mkdir(parents=True)
+        _make_db(old / "memory.db", 2)
+        (old / "dream-status.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(cli, "_stop_service", lambda: False)
+        monkeypatch.setattr(cli, "_server_is_running", lambda: False)
+
+        cli._cmd_migrate_db(argparse.Namespace(source=None))
+
+        new = get_default_db_path()
+        assert open_writable(new).projects.names() == ["proj"]
+        assert (new.parent / "dream-status.json").read_text(encoding="utf-8") == "{}"
+        assert (old / "dream-status.json").is_file()
+        assert not (old / "memory.db").exists()
+        assert get_db_path() == new
+
+    def test_keeps_a_database_named_by_the_env_var(
+        self, shared_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        custom = shared_home / "custom" / "memory.db"
+        custom.parent.mkdir()
+        _make_db(custom)
+        monkeypatch.setenv("MCP_MEMORY_DB_PATH", str(custom))
+        monkeypatch.setattr(cli, "_detect_service_db_path", lambda: None)
+
+        cli._cmd_migrate_db(argparse.Namespace(source=None))
+
+        assert "MCP_MEMORY_DB_PATH" in capsys.readouterr().out
+        assert custom.exists()
+        assert not get_default_db_path().exists()
+
+    def test_refuses_while_a_server_without_a_service_is_running(
+        self, shared_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        old = shared_home / ".local" / "share" / "mcp-memory" / "memory.db"
+        old.parent.mkdir(parents=True)
+        _make_db(old)
+        monkeypatch.setattr(cli, "_detect_service_db_path", lambda: None)
+        monkeypatch.setattr(cli, "_stop_service", lambda: False)
+        monkeypatch.setattr(cli, "_server_is_running", lambda: True)
+
+        with pytest.raises(SystemExit):
+            cli._cmd_migrate_db(argparse.Namespace(source=None))
+
+        assert old.exists()
+
+    def test_restarts_the_service_on_the_old_database_when_the_move_fails(
+        self, shared_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        old = shared_home / ".local" / "share" / "mcp-memory" / "memory.db"
+        old.parent.mkdir(parents=True)
+        _make_db(old)
+        _make_db(get_default_db_path())
+        restarted: list[str] = []
+        monkeypatch.setattr(cli, "_detect_service_db_path", lambda: str(old))
+        monkeypatch.setattr(cli, "_stop_service", lambda: True)
+        monkeypatch.setattr(cli, "_cmd_setup_service", lambda args: restarted.append(args.db_path))
+
+        with pytest.raises(SystemExit):
+            cli._cmd_migrate_db(argparse.Namespace(source=None))
+
+        assert restarted == [str(old.resolve())]
+        assert old.exists()
 
 
 class TestParseServiceConfig:
