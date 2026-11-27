@@ -1,0 +1,64 @@
+{
+  "format": "mcp-memory-export",
+  "format_version": 1,
+  "schema_version": 1,
+  "exported_at": "2026-01-01T00:00:00+00:00",
+  "projects": {
+    "upgrade-smoke": {
+      "paths": [],
+      "groups": [],
+      "entities": [
+        {
+          "name": "feature/upgrade-smoke",
+          "entity_type": "feature",
+          "observations": [
+            {
+              "content": "The upgrade smoke test seeds this feature before the upgrade.",
+              "content_hash": "5634c000",
+              "vote_score": 0,
+              "created_at": "2026-01-01 00:00:00",
+              "provenance": "observed"
+            },
+            {
+              "content": "The upgrade keeps seeded observations.",
+              "content_hash": "87ff8aa4",
+              "vote_score": 0,
+              "created_at": "2026-01-01 00:00:00",
+              "provenance": "user"
+            }
+          ],
+          "status": null,
+          "created_at": "2026-01-01 00:00:00",
+          "updated_at": "2026-01-01 00:00:00",
+          "project_name": "upgrade-smoke",
+          "vote_score": 0
+        },
+        {
+          "name": "task/check-upgrade",
+          "entity_type": "task",
+          "observations": [
+            {
+              "content": "The seeded task checks the upgrade path.",
+              "content_hash": "1cc2bb08",
+              "vote_score": 0,
+              "created_at": "2026-01-01 00:00:00",
+              "provenance": "inferred"
+            }
+          ],
+          "status": "in-progress",
+          "created_at": "2026-01-01 00:00:00",
+          "updated_at": "2026-01-01 00:00:00",
+          "project_name": "upgrade-smoke",
+          "vote_score": 0
+        }
+      ],
+      "relations": [
+        {
+          "source": "task/check-upgrade",
+          "target": "feature/upgrade-smoke",
+          "relation_type": "implements"
+        }
+      ]
+    }
+  }
+}
