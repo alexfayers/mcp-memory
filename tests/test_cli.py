@@ -63,6 +63,41 @@ class TestSetupServiceDispatch:
         assert cli._build_parser().parse_args(["setup-service"]).port == "3000"
 
 
+class TestNoServiceEnv:
+    @pytest.fixture(autouse=True, params=["1", "true", " Yes "])
+    def _installed(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+        for name in ("_LAUNCHD_PLIST", "_SYSTEMD_UNIT", "_LEGACY_AGENT_PLIST", "_LEGACY_AGENT_UNIT"):
+            path = tmp_path / name
+            path.write_text("[Service]\nEnvironment=MCP_DREAM_ENABLED=true\n")
+            monkeypatch.setattr(cli, name, path)
+        monkeypatch.setenv("MCP_MEMORY_NO_SERVICE", request.param)
+        monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **_kw: pytest.fail(f"ran {cmd}"))
+
+    @pytest.mark.parametrize("system", ["Darwin", "Linux"])
+    def test_setup_service_is_a_noop(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], system: str
+    ) -> None:
+        monkeypatch.setattr(cli.platform, "system", lambda: system)
+        monkeypatch.setattr(cli.sys, "argv", ["mcp-memory", "setup-service"])
+
+        cli.main()
+
+        assert "MCP_MEMORY_NO_SERVICE" in capsys.readouterr().err
+        assert cli._LEGACY_AGENT_PLIST.exists()
+        assert cli._LEGACY_AGENT_UNIT.exists()
+
+    @pytest.mark.parametrize("system", ["Darwin", "Linux"])
+    def test_install_keeps_the_retired_service(self, monkeypatch: pytest.MonkeyPatch, system: str) -> None:
+        monkeypatch.setattr(cli.platform, "system", lambda: system)
+        monkeypatch.setattr(cli, "_cmd_install_pi", lambda: None)
+        monkeypatch.setattr(cli.sys, "argv", ["mcp-memory", "install", "pi"])
+
+        cli.main()
+
+        assert cli._LEGACY_AGENT_PLIST.exists()
+        assert cli._LEGACY_AGENT_UNIT.exists()
+
+
 class TestSetupServiceKeepsInstalledDreamEnv:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
