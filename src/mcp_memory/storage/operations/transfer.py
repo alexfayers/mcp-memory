@@ -67,7 +67,7 @@ class Transfer:
             project_id = get_or_create_project_id(self._conn, project)
             rows = self._conn.query_all(
                 "SELECT e.id, e.name, et.name AS entity_type, e.status, e.created_at, "
-                "e.updated_at, e.vote_score FROM entities e "
+                "e.updated_at, e.vote_score, e.location FROM entities e "
                 "JOIN entity_types et ON e.entity_type_id = et.id "
                 "WHERE e.project_id = ? AND e.deleted_at IS NULL ORDER BY e.id",
                 (project_id,),
@@ -87,6 +87,7 @@ class Transfer:
                     "updated_at": built.updated_at,
                     "project_name": project,
                     "vote_score": built.vote_score,
+                    "location": row["location"],
                 })
             relations = self._relations.for_entities(project_id, entity_ids)
             projects[project] = {
@@ -109,7 +110,7 @@ class Transfer:
         """Merge one project's exported entities, relations and groups into this database.
 
         Additive and merge-safe: new entities are inserted verbatim (preserving
-        created_at/updated_at/status/vote_score and each observation's created_at), existing
+        created_at/updated_at/status/vote_score/location and each observation's created_at), existing
         same-type entities gain the higher vote_score and any missing observations, and
         different-type collisions are skipped. Relations and groups are deduped. With dry_run,
         every write is rolled back so the returned counts match a real run without changing
@@ -155,8 +156,8 @@ class Transfer:
     ) -> tuple[str, int | None, str | None]:
         """Insert or merge one entity. Returns (classification, entity_id, updated_at_to_restore).
 
-        A new entity is inserted preserving its timestamps/status/vote_score. An existing
-        same-type entity keeps its own timestamps and status but takes the higher vote_score.
+        A new entity is inserted preserving its timestamps/status/vote_score/location. An existing
+        same-type entity keeps its own timestamps, status and location but takes the higher vote_score.
         A different-type collision is left untouched and reported as skipped.
         """
         name = entity["name"]
@@ -167,8 +168,8 @@ class Transfer:
             entity_type_id = get_or_create_entity_type_id(self._conn, entity_type)
             cursor = self._conn.write(
                 "INSERT INTO entities "
-                "(name, entity_type_id, project_id, status, created_at, updated_at, vote_score) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(name, entity_type_id, project_id, status, created_at, updated_at, vote_score, location) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     name,
                     entity_type_id,
@@ -177,6 +178,7 @@ class Transfer:
                     entity.get("created_at"),
                     entity.get("updated_at"),
                     entity.get("vote_score", 0),
+                    entity.get("location"),
                 ),
             )
             return "new", cast("int", cursor.lastrowid), entity.get("updated_at")

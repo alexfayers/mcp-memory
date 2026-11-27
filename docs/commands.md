@@ -83,9 +83,9 @@ mcp-memory import <input_path>                           # list projects in the 
 mcp-memory import <input_path> --project a,b [--dry-run] # merge them in
 ```
 
-Export writes every live project to one JSON file: entities with type, status, timestamps and votes, observations with hashes and votes, relations, registered paths and groups. Soft-deleted entities and telemetry are left out.
+Export writes every live project to one JSON file: entities with type, status, timestamps, votes and location, observations with hashes and votes, relations, registered paths and groups. Soft-deleted entities and telemetry are left out.
 
-Import is additive and safe to re-run. New entities are inserted as-is. An existing entity of the same type keeps its status and timestamps, takes the higher vote score and gains any missing observations. A name that clashes with a different entity type is skipped and reported. Paths are not imported. The summary prints the source paths so you can register local ones with `set_metadata`.
+Import is additive and safe to re-run. New entities are inserted as-is. An existing entity of the same type keeps its status, timestamps and location, takes the higher vote score and gains any missing observations. A name that clashes with a different entity type is skipped and reported. Paths are not imported. The summary prints the source paths so you can register local ones with `set_metadata`.
 
 ## restore
 
