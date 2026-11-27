@@ -232,6 +232,8 @@ CREATE_ENTITIES_DESC = (
     "which type to pick) - without them nothing is created. "
     "Observation wording, provenance and what not to store: see add_observations. "
     "Set `status` via the `status` argument, never as a `STATUS:` observation. "
+    "Pass `location`, the filesystem path the entity is about. If that path belongs to another project, "
+    "the reply adds a `scopeWarning`, and the entity is still saved where you asked. "
     "The server records each observation's timestamp; do NOT embed a date/timestamp in the text."
 )
 SEARCH_NODES_DESC = (
