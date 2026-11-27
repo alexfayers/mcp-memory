@@ -31,6 +31,40 @@ baseline:
 baseline-compare base head *args:
     {{uv_run}} python -m tests.eval.compare_baseline --base {{base}} --head {{head}} {{args}}
 
+upgrade_fixture := "tests/fixtures/upgrade-seed.json"
+upgrade_project := "upgrade-smoke"
+
+upgrade-seed:
+    #!/usr/bin/env bash
+    command -v mcp-memory > /dev/null || { echo "upgrade-seed: no mcp-memory on PATH" >&2; exit 1; }
+    mcp-memory import {{upgrade_fixture}} --project {{upgrade_project}} || { echo "upgrade-seed: import into the server on port ${MCP_MEMORY_PORT:-default} failed" >&2; exit 1; }
+
+upgrade-smoke:
+    #!/usr/bin/env bash
+    command -v mcp-memory > /dev/null || { echo "upgrade-smoke: no mcp-memory on PATH" >&2; exit 1; }
+    export_file="$(mktemp)"
+    trap 'rm "$export_file"' EXIT
+    mcp-memory export "$export_file" > /dev/null || { echo "upgrade-smoke: mcp-memory export failed" >&2; exit 1; }
+    facts='.projects["{{upgrade_project}}"] | [(.entities[]? | "entity \(.name) (\(.entity_type))", (.name as $name | .observations[] | "observation on \($name): \(.content)")), (.relations[]? | "relation \(.source) -\(.relation_type)-> \(.target)")]'
+    missing="$(jq -nr --slurpfile seed {{upgrade_fixture}} --slurpfile export "$export_file" "(\$seed[0] | $facts) - (\$export[0] | $facts) | .[]")" || { echo "upgrade-smoke: could not read the export" >&2; exit 1; }
+    if [ -n "$missing" ]; then
+        printf 'upgrade-smoke: the export lost seeded data:\n%s\n' "$missing" >&2
+        exit 1
+    fi
+    expected="$({{uv_run}} python -c 'from mcp_memory.migrations.schema import MIGRATIONS; print(max(m.version for m in MIGRATIONS))')" || { echo "upgrade-smoke: could not read the highest migration from the checkout" >&2; exit 1; }
+    actual="$(jq -r .schema_version "$export_file")"
+    if [ "$actual" != "$expected" ]; then
+        echo "upgrade-smoke: schema_version is $actual, expected the highest migration $expected" >&2
+        exit 1
+    fi
+    audit="$(mcp-memory utils audit --project {{upgrade_project}})" || { echo "upgrade-smoke: mcp-memory utils audit failed" >&2; exit 1; }
+    findings="$(jq -r 'to_entries[] | select(.value | type == "array" and length > 0) | "\(.key): \(.value | tojson)"' <<< "$audit")" || { echo "upgrade-smoke: could not read the audit report" >&2; exit 1; }
+    if [ -n "$findings" ]; then
+        printf 'upgrade-smoke: the audit found issues in the seeded data:\n%s\n' "$findings" >&2
+        exit 1
+    fi
+    echo "upgrade-smoke: seeded data, schema_version $actual and audit all pass"
+
 bench-diff ref="origin/main" *args:
     #!/usr/bin/env bash
     base_dir="../$(basename "$PWD")-bench-base"

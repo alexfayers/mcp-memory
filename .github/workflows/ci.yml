@@ -152,6 +152,14 @@ jobs:
     with:
       prompts-root: src/mcp_memory/prompts
 
+  upgrade-smoke:
+    if: github.head_ref != 'release-please--branches--main'
+    permissions:
+      contents: read
+    uses: alexfayers/llm-prompts-ci/.github/workflows/upgrade-smoke.yml@main
+    with:
+      repo: mcp-memory
+
   pr-template-check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
