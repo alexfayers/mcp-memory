@@ -570,6 +570,16 @@ class TestPruneSurfaced:
         }
         assert remaining == {"new"}
 
+    def test_prune_uses_each_scope_retention(self, store: Storage) -> None:
+        store.telemetry.record_surfaced("search_nodes", "q", "r1", [("short", "task/a", 1), ("default", "task/a", 1)])
+        store.projects.set_retention("short", ["surfaced_retention=5"])
+        with store.connection.transaction():
+            store.connection.write("UPDATE surfaced_entities SET surfaced_at = datetime('now', '-10 days')")
+
+        assert store.telemetry.prune_surfaced(-1) == 1
+        remaining = [row["project"] for row in store.connection.query_all("SELECT project FROM surfaced_entities")]
+        assert remaining == ["default"]
+
     def test_negative_retention_window_prunes_nothing(self, store: Storage) -> None:
         store.telemetry.record_surfaced("search_nodes", "q", "old", [("proj", "task/a", 1)])
         with store.connection.transaction():
@@ -1939,6 +1949,24 @@ class TestTombstoneVisibility:
         assert store.maintenance._purge_soft_deleted(grace_days=30) == 1
         assert get_entity_id(store.connection, "e1", project_id, include_deleted=True) is None
 
+    def test_purge_uses_each_scope_grace(self, store: Storage) -> None:
+        for project in ("short", "default"):
+            store.entities.create(project, [{"name": "e1", "entityType": "task", "observations": ["x", "y"]}])
+            store.observations.delete(project, "e1", ["y"])
+            store.entities.create(project, [{"name": "e2", "entityType": "task", "observations": ["x"]}])
+            soft_delete_store(store, project, "e2")
+        store.projects.set_retention("short", ["purge_grace=5"])
+        with store.connection.transaction():
+            store.connection.write("UPDATE entities SET deleted_at = datetime('now', '-10 days') WHERE name = 'e2'")
+            store.connection.write(
+                "UPDATE observations SET deleted_at = datetime('now', '-10 days') WHERE content = 'y'"
+            )
+        assert store.maintenance._purge_soft_deleted(grace_days=30) == 2
+        assert store.observations.restore("short", "e1", observations=["y"]) == []
+        assert store.observations.restore("default", "e1", observations=["y"]) == [hash_observation("y")]
+        default_id = get_or_create_project_id(store.connection, "default")
+        assert get_entity_id(store.connection, "e2", default_id, include_deleted=True) is not None
+
     def test_purge_removes_soft_deleted_observations_past_grace_only(self, store: Storage) -> None:
         store.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["old", "recent", "kept"]}])
         store.observations.delete("proj", "e1", ["old", "recent"])
@@ -2170,6 +2198,15 @@ class TestGcDownvotedOrphans:
         self._downvote(store, "proj", "e1", 9)
         assert store.maintenance._gc_downvoted_orphans() == 0
         assert obs_contents(store.reads.get_entity("proj", "e1")) == ["x"]
+
+    def test_scope_window_spares_its_orphans(self, store: Storage) -> None:
+        for project in ("never", "recent", "default"):
+            store.entities.create(project, [{"name": "e1", "entityType": "task", "observations": ["x"]}])
+            self._downvote(store, project, "e1", 10)
+        store.projects.set_retention("never", ["orphan_gc=-1"])
+        store.projects.set_retention("recent", ["orphan_gc=30"])
+        assert store.maintenance._gc_downvoted_orphans() == 1
+        assert [self._is_reaped(store, p, "e1") for p in ("never", "recent", "default")] == [False, False, True]
 
     def test_floored_orphan_holding_a_user_observation_is_spared(self, store: Storage) -> None:
         entity = {"name": "e1", "entityType": "task", "observations": ["x"], "provenance": "user"}

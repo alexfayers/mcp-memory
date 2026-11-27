@@ -16,7 +16,8 @@ from mcp_memory.config import (
 from mcp_memory.models import STRUCTURAL_ENTITY_TYPES, STRUCTURAL_RELATION_TYPES
 from mcp_memory.storage.pure.ranking import ARCHIVE_STALE_DAYS
 from mcp_memory.storage.pure.rows import hash_observation
-from mcp_memory.storage.pure.sql import days_ago, placeholders
+from mcp_memory.storage.pure.sql import days_ago, past_window, placeholders
+from mcp_memory.storage.repositories.projects import ORPHAN_GC, PURGE_GRACE
 
 if TYPE_CHECKING:
     from mcp_memory.storage.connection import Connection
@@ -51,23 +52,32 @@ class Maintenance:
     def _purge_soft_deleted(self, grace_days: int) -> int:
         """Hard-delete entities, observations and relations soft-deleted longer than the grace window.
 
+        A scope's own purge_grace window overrides grace_days. A negative window keeps the rows.
+
         Returns the total number of rows removed.
         """
-        cutoff = (days_ago(grace_days),)
         rows = self._conn.query_all(
             "SELECT e.id, e.name, p.name AS project FROM entities e "
             "JOIN projects p ON e.project_id = p.id "
-            "WHERE e.deleted_at IS NOT NULL AND e.deleted_at < datetime('now', ?)",
-            cutoff,
+            f"WHERE e.deleted_at IS NOT NULL AND {past_window('e.deleted_at', PURGE_GRACE, 'e.project_id')}",
+            (grace_days, grace_days),
         )
         with self._conn.transaction():
             for row in rows:
                 self._entities.hard_delete_row(row["id"], row["project"], row["name"])
             observations = self._conn.write(
-                "DELETE FROM observations WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?)", cutoff
+                "DELETE FROM observations WHERE deleted_at IS NOT NULL AND "
+                + past_window(
+                    "deleted_at", PURGE_GRACE, "(SELECT project_id FROM entities WHERE id = observations.entity_id)"
+                ),
+                (grace_days, grace_days),
             )
             relations = self._conn.write(
-                "DELETE FROM relations WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', ?)", cutoff
+                "DELETE FROM relations WHERE deleted_at IS NOT NULL AND "
+                + past_window(
+                    "deleted_at", PURGE_GRACE, "(SELECT project_id FROM entities WHERE id = relations.source_id)"
+                ),
+                (grace_days, grace_days),
             )
         return len(rows) + observations.rowcount + relations.rowcount
 
@@ -76,7 +86,8 @@ class Maintenance:
 
         Reaps an entity that is all of: live, at or below the downvote floor, without a live
         user-provenance observation, not a relation-exempt type, with no live incoming relation
-        and no live outgoing structural relation to a live entity. Removal is a reversible
+        and no live outgoing structural relation to a live entity, and untouched for longer than its
+        scope's orphan_gc window where one is set (a negative window spares it). Removal is a reversible
         soft-delete, so the grace-window purge stays the sole path to permanent removal.
         """
         with self._conn.transaction():
@@ -99,8 +110,11 @@ class Maintenance:
                 f"JOIN entities dst ON r.target_id = dst.id "
                 f"WHERE r.source_id = entities.id AND r.target_id != entities.id "
                 f"AND r.deleted_at IS NULL AND dst.deleted_at IS NULL "
-                f"AND rt.name IN ({placeholders(len(STRUCTURAL_RELATION_TYPES))}))",
-                (threshold, *STRUCTURAL_ENTITY_TYPES, *STRUCTURAL_RELATION_TYPES),
+                f"AND rt.name IN ({placeholders(len(STRUCTURAL_RELATION_TYPES))})) "
+                f"AND NOT EXISTS (SELECT 1 FROM project_retention pr "
+                f"WHERE pr.project_id = entities.project_id AND pr.setting = ? "
+                f"AND NOT {past_window('entities.updated_at', ORPHAN_GC, 'pr.project_id')})",
+                (threshold, *STRUCTURAL_ENTITY_TYPES, *STRUCTURAL_RELATION_TYPES, ORPHAN_GC, None, None),
             )
         return cursor.rowcount
 

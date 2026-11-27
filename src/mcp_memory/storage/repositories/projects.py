@@ -12,6 +12,12 @@ if TYPE_CHECKING:
     from mcp_memory.storage.connection import Connection
     from mcp_memory.storage.repositories.entities import EntityRepository
 
+# Per-scope retention settings, each a window in days that overrides the global default.
+PURGE_GRACE = "purge_grace"
+SURFACED_RETENTION = "surfaced_retention"
+ORPHAN_GC = "orphan_gc"
+RETENTION_SETTINGS = (PURGE_GRACE, SURFACED_RETENTION, ORPHAN_GC)
+
 
 class ProjectRepository:
     """CRUD, path/group membership and cross-scope move operations over projects."""
@@ -141,6 +147,37 @@ class ProjectRepository:
         )
         return [row["name"] for row in rows]
 
+    def set_retention(self, project: str, entries: list[str]) -> None:
+        """Replace a project's retention settings with the given ``setting=days`` entries."""
+        self.update_retention(project, entries, list(RETENTION_SETTINGS))
+
+    def update_retention(self, project: str, add: list[str], remove: list[str]) -> None:
+        """Remove settings by name, then set ``setting=days`` entries, in one transaction."""
+        if not project or not isinstance(project, str):
+            raise ValueError(f"Project must be a non-empty string, got: {project!r}")
+        windows = [_parse_retention(entry) for entry in add]
+        with self._conn.transaction():
+            project_id = get_or_create_project_id(self._conn, project)
+            for setting in remove:
+                self._conn.write(
+                    "DELETE FROM project_retention WHERE project_id = ? AND setting = ?", (project_id, setting)
+                )
+            for setting, days in windows:
+                self._conn.write(
+                    "INSERT OR REPLACE INTO project_retention (project_id, setting, days) VALUES (?, ?, ?)",
+                    (project_id, setting, days),
+                )
+
+    def retention(self, project: str | None = None) -> list[tuple[str, str, int]]:
+        """Return (project_name, setting, days) rows, optionally for one project."""
+        rows = self._conn.query_all(
+            "SELECT p.name, r.setting, r.days FROM project_retention r JOIN projects p ON r.project_id = p.id"
+            + ("" if project is None else " WHERE p.name = ?")
+            + " ORDER BY p.name, r.setting",
+            () if project is None else (project,),
+        )
+        return [(row["name"], row["setting"], row["days"]) for row in rows]
+
     def delete(self, project: str) -> None:
         """Delete a project with no live entities, hard-removing its soft-deleted ones and its paths.
 
@@ -200,3 +237,12 @@ class ProjectRepository:
             for entity_id in ids:
                 refresh_for_entity(self._conn, entity_id, delete=False)
         return len(ids)
+
+
+def _parse_retention(entry: str) -> tuple[str, int]:
+    setting, _, days = entry.partition("=")
+    if setting not in RETENTION_SETTINGS or not days.lstrip("-").isdigit():
+        raise ValueError(
+            f"Retention entry must be <setting>=<days> with setting one of {RETENTION_SETTINGS}, got: {entry!r}"
+        )
+    return setting, int(days)

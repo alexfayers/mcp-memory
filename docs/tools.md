@@ -10,7 +10,7 @@ Most tools take a `project` parameter that scopes the data. Entity types are `pr
 | `search_all_projects` | Same search across every project, grouped by project. `projects` narrows it, `expand_groups=true` adds each project's group siblings, `names_only=true` returns just names and statuses |
 | `read_graph` | The 10 most recent entities and their relations |
 | `get_entity_with_relations` | One entity with its relations and connected entities, filtered by `entityType` and `relationType` |
-| `list_metadata` | `kind` is `projects`, `paths` or `groups`. `project` narrows paths and groups |
+| `list_metadata` | `kind` is `projects`, `paths`, `groups` or `retention`. `project` narrows paths, groups and retention |
 | `get_project_for_path` | The project whose registered path contains a filesystem path. The longest match wins, or null |
 | `get_group_members` | Other projects in the same group |
 
@@ -47,7 +47,7 @@ On its first start, the server tags observations that have no provenance from th
 
 | Tool | What it does |
 |---|---|
-| `set_metadata` | Change a project's `paths` or `groups` with `add`/`remove` (or `values` to replace the list). A path belongs to one project. When the working directory is under a registered path, that project is the active scope |
+| `set_metadata` | Change a project's `paths`, `groups` or `retention` with `add`/`remove` (or `values` to replace the list). A path belongs to one project. When the working directory is under a registered path, that project is the active scope. A `retention` entry is `<setting>=<days>`, and `remove` takes the setting name |
 | `move_entity_cross_scope` | Move one entity to another project. Its relations are dropped and returned as `droppedRelations` so you can recreate them |
 | `move_project_entities` | Move all entities, with observations and relations, between projects. Fails on a name in both |
 | `delete_project` | Delete an empty project and its paths. Refuses `global` and projects with entities |

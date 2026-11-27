@@ -383,8 +383,10 @@ LIST_METADATA_DESC = (
     "graph (project is ignored). kind='paths': omit project to list all (project, path) "
     "mappings, or pass project to get just that project's registered filesystem path(s). "
     "kind='groups': omit project to list all (project, group) mappings, or pass project to "
-    "get just that project's registered group name(s). Returns an error listing valid kinds "
-    "if kind is not one of 'projects', 'paths', 'groups'."
+    "get just that project's registered group name(s). kind='retention': omit project to "
+    "list all (project, setting, days) rows, or pass project to get just that project's "
+    "settings. Returns an error listing valid kinds if kind is not one of 'projects', "
+    "'paths', 'groups', 'retention'."
 )
 SET_METADATA_DESC = (
     "Change a project's registry metadata. Prefer add/remove (remove applies first); values "
@@ -394,8 +396,11 @@ SET_METADATA_DESC = (
     "the active memory scope; a path can belong to only one project) and returns the "
     "project's resulting paths. kind='groups' registers the groups the project belongs to "
     "(e.g. sibling repos in one tooling system, resolved via get_group_members) and returns "
-    "the project's resulting group members. Auto-creates the project's root entity if "
-    "needed. Returns an error listing valid kinds if kind is not one of 'paths', 'groups'."
+    "the project's resulting group members. kind='retention' sets per-project retention as "
+    "'<setting>=<days>' entries. Settings: purge_grace, surfaced_retention, orphan_gc. "
+    "Negative days means never. remove takes setting names. Auto-creates the project's root "
+    "entity for paths and groups if needed. Returns an error listing valid kinds if kind is "
+    "not one of 'paths', 'groups', 'retention'."
 )
 DELETE_PROJECT_DESC = (
     "Delete an empty project and its registered paths. Refuses to delete the 'global' "
@@ -838,8 +843,12 @@ def _list_metadata(kind: str, project: str | None) -> dict[str, object]:
         result = {"mappings": [{"project": n, "group": g} for n, g in db.projects.groups()]}
     elif kind == "groups" and project is not None:
         result = {"mappings": [{"project": n, "group": g} for n, g in db.projects.groups(project)]}
+    elif kind == "retention" and project is None:
+        result = {"mappings": [{"project": n, "setting": s, "days": d} for n, s, d in db.projects.retention()]}
+    elif kind == "retention" and project is not None:
+        result = {"retention": {s: d for _, s, d in db.projects.retention(project)}}
     else:
-        result = {"error": f"Invalid kind '{kind}'. Must be one of: projects, paths, groups."}
+        result = {"error": f"Invalid kind '{kind}'. Must be one of: projects, paths, groups, retention."}
     return result
 
 
@@ -876,7 +885,13 @@ def _set_metadata(
         elif add or remove:
             db.projects.update_groups(project, add or [], remove or [])
         return {"project": project, "members": db.projects.group_members(project)}
-    return {"error": f"Invalid kind '{kind}'. Must be one of: paths, groups."}
+    if kind == "retention":
+        if values is not None:
+            db.projects.set_retention(project, values)
+        else:
+            db.projects.update_retention(project, add or [], remove or [])
+        return {"project": project, "retention": {s: d for _, s, d in db.projects.retention(project)}}
+    return {"error": f"Invalid kind '{kind}'. Must be one of: paths, groups, retention."}
 
 
 @mcp.tool(

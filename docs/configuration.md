@@ -32,6 +32,16 @@ Environment variables. The server reads the first table. The hook plugin reads t
 | `MCP_AUTO_VOTE_WINDOW_SECONDS` | How soon after a search an edit counts as an automatic `+1` | `1800` |
 | `MCP_AUTO_VOTE_MAX_PER_DAY` | Per-entity daily cap on automatic votes | `3` |
 
+### Per-scope retention
+
+`set_metadata` with `kind='retention'` gives one project its own window in days. The window overrides the global default for that project only. A negative window means never.
+
+| Setting | Overrides |
+|---|---|
+| `purge_grace` | `MCP_MEMORY_PURGE_GRACE_DAYS` |
+| `surfaced_retention` | `MCP_MEMORY_SURFACED_RETENTION_DAYS` |
+| `orphan_gc` | No global default. Orphan GC spares an entity updated within this many days |
+
 ## Hook plugin
 
 | Variable | Description | Default |
