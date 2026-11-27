@@ -6,7 +6,7 @@
 |----------------------------------------------------- | -------: | -------: | ------: | --------: |
 | conftest.py                                          |       11 |        0 |    100% |           |
 | src/mcp\_memory/\_\_init\_\_.py                      |        0 |        0 |    100% |           |
-| src/mcp\_memory/activity.py                          |      113 |        3 |     97% |147-148, 198 |
+| src/mcp\_memory/activity.py                          |      113 |        3 |     97% |152-153, 203 |
 | src/mcp\_memory/api.py                               |      109 |        8 |     93% |66, 75, 102-103, 158, 188, 192-193 |
 | src/mcp\_memory/api\_client.py                       |       22 |        3 |     86% | 27, 31-32 |
 | src/mcp\_memory/atomic\_write.py                     |       16 |        3 |     81% |     20-22 |
@@ -65,7 +65,7 @@
 | src/mcp\_memory/tool\_names.py                       |        4 |        0 |    100% |           |
 | src/mcp\_memory/tool\_paths.py                       |       14 |        3 |     79% | 23-24, 34 |
 | src/mcp\_memory/usefulness.py                        |       73 |        2 |     97% |     51-52 |
-| src/mcp\_memory/visualise.py                         |      184 |        5 |     97% |166, 235-236, 309, 313 |
+| src/mcp\_memory/visualise.py                         |      190 |        5 |     97% |169, 241-242, 315, 319 |
 | tests/\_\_init\_\_.py                                |       43 |        1 |     98% |        85 |
 | tests/conftest.py                                    |       53 |        0 |    100% |           |
 | tests/eval/\_\_init\_\_.py                           |        0 |        0 |    100% |           |
@@ -92,7 +92,7 @@
 | tests/eval/test\_regen\_baseline.py                  |       56 |        0 |    100% |           |
 | tests/eval/test\_size\_baseline.py                   |       42 |        0 |    100% |           |
 | tests/naming\_check.py                               |      105 |      105 |      0% |    12-162 |
-| tests/test\_activity.py                              |      149 |        0 |    100% |           |
+| tests/test\_activity.py                              |      153 |        0 |    100% |           |
 | tests/test\_api\_client.py                           |       69 |        0 |    100% |           |
 | tests/test\_audit.py                                 |      306 |        0 |    100% |           |
 | tests/test\_backup.py                                |      140 |        0 |    100% |           |
@@ -122,8 +122,8 @@
 | tests/test\_tool\_schemas.py                         |       66 |        0 |    100% |           |
 | tests/test\_tracker.py                               |       88 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
-| tests/test\_visualise.py                             |      661 |        0 |    100% |           |
-| **TOTAL**                                            | **18065** |  **494** | **97%** |           |
+| tests/test\_visualise.py                             |      708 |        0 |    100% |           |
+| **TOTAL**                                            | **18122** |  **494** | **97%** |           |
 
 
 ## Setup coverage badge
