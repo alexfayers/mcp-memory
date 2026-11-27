@@ -32,7 +32,7 @@
 
 ## Service
 
-`setup-service` installs a launchd job on macOS or a systemd unit on Linux (needs sudo). It takes `--port` (default 8000) and `--db-path` (default `MCP_MEMORY_DB_PATH`, else `mcp-memory/data/memory.db` in the llm-prompts root). Re-running it without `--port` keeps the installed service's port.
+`setup-service` installs a launchd job on macOS or a systemd unit on Linux (needs sudo). It takes `--port` (default 8000) and `--db-path` (default `MCP_MEMORY_DB_PATH`, else `mcp-memory/data/memory.db` in the llm-prompts root). Re-running it without `--port` keeps the installed service's port. With `MCP_MEMORY_NO_SERVICE` true it does nothing.
 
 It refuses to replace a `com.mcp-memory` job that launchd loaded from another plist, and on Linux an existing unit while HOME is not your real home.
 

@@ -11,6 +11,7 @@ Environment variables. The server reads the first table. The hook plugin reads t
 | `MCP_MEMORY_DB_PATH` | Database file | `mcp-memory/data/memory.db` in the llm-prompts root (`$LLM_PROMPTS_HOME`, else `$XDG_DATA_HOME/llm-prompts`, else `~/.local/share/llm-prompts`) |
 | `MCP_MEMORY_PORT` | HTTP port | `8000` |
 | `MCP_MEMORY_URL` | Base URL that dream passes, the hook plugin and the CLI commands use to reach the server. Overrides `MCP_MEMORY_PORT` and the installed service's port | from the port |
+| `MCP_MEMORY_NO_SERVICE` | When true (`1`, `true`, `yes` or `on`), `setup-service` and `install` leave launchd and systemd alone. They install no service and remove no retired one | off |
 | `MCP_MEMORY_MAX_OBSERVATION_CHARS` | Per-entity observation character budget for reads, highest-voted first. Negative means unlimited | `2000` |
 | `MCP_MEMORY_DEDUPE_TURNS` | How many tool calls a memory read's observations stay deduplicated as hashes in `seen` within one context window. `0` disables | `40` |
 | `MCP_MEMORY_STRICT_POLICY` | Reject project-scoped `user-preferences` and direct `task -> project` relations | off |

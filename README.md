@@ -39,6 +39,7 @@ Set with environment variables. The common ones:
 
 - `MCP_MEMORY_DB_PATH`: database file, default `mcp-memory/data/memory.db` in the llm-prompts root (`$LLM_PROMPTS_HOME`, else `$XDG_DATA_HOME/llm-prompts`, else `~/.local/share/llm-prompts`)
 - `MCP_MEMORY_PORT`: HTTP port, default `8000`
+- `MCP_MEMORY_NO_SERVICE`: when true, `setup-service` and `install` leave launchd and systemd alone. They install no service and remove no retired one. Use it when you run the server yourself
 - `MCP_DREAM_ENABLED`, `MCP_DREAM_HEAVY_ENABLED`: let the server curate memory while idle, off by default
 
 Re-run `mcp-memory setup-service` after changing them so the service picks them up.

@@ -34,6 +34,7 @@ from .config import (
     get_db_path,
     get_default_db_path,
     get_memory_url,
+    get_no_service,
     get_old_default_db_path,
     get_surfaced_retention_days,
     resolve_port,
@@ -360,6 +361,8 @@ def _migrate_legacy_dream_env() -> None:
 
 def _remove_legacy_agent_service() -> None:
     """Stop and delete the retired memory-agent service, if one is installed."""
+    if get_no_service():
+        return
     _migrate_legacy_dream_env()
     system = platform.system()
     if system == "Darwin" and _LEGACY_AGENT_PLIST.exists():
@@ -379,6 +382,9 @@ def _remove_legacy_agent_service() -> None:
 
 def _cmd_setup_service(args: argparse.Namespace) -> None:
     """Handle the setup-service subcommand."""
+    if get_no_service():
+        print("MCP_MEMORY_NO_SERVICE is set, so no background service was installed", file=sys.stderr)
+        return
     _setup_service_from_spec(_keep_installed_env(_memory_spec(args.port, Path(args.db_path).expanduser())))
     _remove_legacy_agent_service()
 

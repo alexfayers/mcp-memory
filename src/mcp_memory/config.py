@@ -352,3 +352,8 @@ def get_strict_policy_enabled() -> bool:
     explicitly opts into tighter scope and relation constraints.
     """
     return os.environ.get("MCP_MEMORY_STRICT_POLICY", "false").strip().lower() in _TRUTHY
+
+
+def get_no_service() -> bool:
+    """Return whether MCP_MEMORY_NO_SERVICE tells the CLI to leave launchd and systemd alone."""
+    return os.environ.get("MCP_MEMORY_NO_SERVICE", "false").strip().lower() in _TRUTHY
