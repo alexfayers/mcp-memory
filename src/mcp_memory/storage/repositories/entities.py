@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from mcp_memory.config import get_strict_policy_enabled
@@ -12,6 +13,7 @@ from mcp_memory.models import (
     validate_provenance,
     validate_vote,
 )
+from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_today_date_prefix
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
@@ -55,6 +57,11 @@ class EntityRepository:
         if status is not None and status not in VALID_STATUSES:
             raise ValueError(f"Invalid status '{status}' for entity '{name}'. Must be one of: {VALID_STATUSES}")
         validate_provenance(cast("str | None", entity_data.get("provenance")))
+        location = entity_data.get("location")
+        if location is not None and (not isinstance(location, str) or not Path(location).expanduser().is_absolute()):
+            raise ValueError(
+                f"Entity location must be an absolute path (or start with ~) for entity '{name}', got: {location!r}"
+            )
 
         if get_strict_policy_enabled() and project != "global" and entity_type == "user-preferences":
             raise ValueError(
@@ -74,6 +81,7 @@ class EntityRepository:
                 observations = cast("list[str]", entity_data.get("observations"))
                 observations = [strip_today_date_prefix(obs) for obs in observations]
                 status = entity_data.get("status")
+                location = entity_data.get("location")
                 provenance = entity_data.get("provenance")
 
                 if get_entity_id(self._conn, str(name), project_id) is not None:
@@ -87,8 +95,8 @@ class EntityRepository:
                 self.purge_tombstone(str(name), project, project_id)
 
                 cursor = self._conn.write(
-                    "INSERT INTO entities (name, entity_type_id, project_id, status) VALUES (?, ?, ?, ?)",
-                    (name, entity_type_id, project_id, status),
+                    "INSERT INTO entities (name, entity_type_id, project_id, status, location) VALUES (?, ?, ?, ?, ?)",
+                    (name, entity_type_id, project_id, status, normalize_path(str(location)) if location else None),
                 )
                 entity_id = cast("int", cursor.lastrowid)
 

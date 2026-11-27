@@ -166,7 +166,7 @@ _ENTITY_INPUTS = Annotated[
         "items": {
             "type": "object",
             "properties": {
-                **dict.fromkeys(["name", "entityType", "status"], _STRING_SCHEMA),
+                **dict.fromkeys(["name", "entityType", "status", "location"], _STRING_SCHEMA),
                 "observations": {"type": "array", "items": _STRING_SCHEMA},
                 "relations": {"type": "array", "items": _object_schema(["target", "type"], ["target", "type"])},
                 "provenance": {"type": "string", "enum": list(VALID_PROVENANCES)},
@@ -659,6 +659,19 @@ def _link_note(project: str, names: list[str]) -> dict[str, str]:
     return {"linkHint": " ".join(f"{', '.join(found)}: {_LINK_RULES[kind][2]}" for kind, found in unlinked.items())}
 
 
+def _scope_note(project: str, entities: _ENTITY_INPUTS) -> dict[str, str]:
+    """Return a non-blocking warning naming entities whose location belongs to another project's registered path."""
+    mismatches = [
+        f"{entity_data.get('name')} (location in '{owner}')"
+        for entity_data in entities
+        if isinstance(location := entity_data.get("location"), str)
+        and (owner := _get_db().projects.get_project_for_path(location)) not in {None, project}
+    ]
+    if not mismatches:
+        return {}
+    return {"scopeWarning": f"Written to '{project}', but: {', '.join(mismatches)}. Check the scope."}
+
+
 def _create_entities(
     project: str, entities: list[dict[str, str | list[str] | list[dict[str, str]] | None]]
 ) -> dict[str, str]:
@@ -689,7 +702,11 @@ def _create_entities(
             db.relations.create(project, all_relations)
 
     names = [str(entity_data.get("name", "")) for entity_data in entities]
-    return {"message": f"Created {len(entities)} entities in project '{project}'.", **_link_note(project, names)}
+    return {
+        "message": f"Created {len(entities)} entities in project '{project}'.",
+        **_link_note(project, names),
+        **_scope_note(project, entities),
+    }
 
 
 def _create_dream_entities(project: str, entities: _ENTITY_INPUTS) -> dict[str, str]:

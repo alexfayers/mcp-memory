@@ -23,6 +23,7 @@ from mcp_memory.export_import import (
 )
 from mcp_memory.migrations.schema import MIGRATIONS
 from mcp_memory.models import Relation
+from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage import open_writable
 from tests import soft_delete_store
 
@@ -48,7 +49,13 @@ def _make_db(path: Path) -> Storage:
         "proj",
         [
             {"name": "feature/f", "entityType": "feature", "observations": ["b", "c"]},
-            {"name": "task/t", "entityType": "task", "observations": ["d"], "status": "planned"},
+            {
+                "name": "task/t",
+                "entityType": "task",
+                "observations": ["d"],
+                "status": "planned",
+                "location": "/tmp/proj/src",
+            },
         ],
     )
     db.relations.create("proj", [Relation("task/t", "feature/f", "implements")])
@@ -185,6 +192,7 @@ class TestExport:
         assert exported["entity_type"] == "task"
         assert exported["status"] == "planned"
         assert exported["vote_score"] == 2
+        assert exported["location"] == normalize_path("/tmp/proj/src")
         assert exported["created_at"] == task.created_at
         assert exported["updated_at"] == task.updated_at
         obs = exported["observations"][0]
@@ -218,6 +226,8 @@ class TestRoundTrip:
         assert task.entity_type == "task"
         assert task.status == "planned"
         assert task.vote_score == 2
+        location_row = dest.connection.query_one("SELECT location FROM entities WHERE name = 'task/t'")
+        assert location_row["location"] == normalize_path("/tmp/proj/src")
         assert task.created_at == src_task.created_at
         assert task.updated_at == src_task.updated_at
         assert [(o.content, o.content_hash, o.vote_score) for o in task.observations] == [
