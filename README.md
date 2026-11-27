@@ -37,20 +37,20 @@
 | src/mcp\_memory/plan\_apply.py                       |       39 |        1 |     97% |        40 |
 | src/mcp\_memory/provenance\_backfill.py              |       26 |        0 |    100% |           |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      669 |       35 |     95% |84-85, 540, 550, 586, 599, 675-677, 681, 771-772, 802-803, 811, 819, 831-832, 894-895, 909-910, 1109-1110, 1255, 1298-1299, 1650-1651, 1683-1687, 1691 |
+| src/mcp\_memory/server.py                            |      674 |       35 |     95% |84-85, 540, 550, 586, 599, 688-690, 694, 788-789, 819-820, 828, 836, 848-849, 911-912, 926-927, 1126-1127, 1272, 1315-1316, 1667-1668, 1700-1704, 1708 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
 | src/mcp\_memory/storage/operations/\_\_init\_\_.py   |        0 |        0 |    100% |           |
 | src/mcp\_memory/storage/operations/maintenance.py    |       53 |        3 |     94% |152-153, 160 |
 | src/mcp\_memory/storage/operations/reads.py          |      160 |        3 |     98% |301, 318-319 |
-| src/mcp\_memory/storage/operations/transfer.py       |      126 |        2 |     98% |  222, 251 |
+| src/mcp\_memory/storage/operations/transfer.py       |      126 |        2 |     98% |  224, 253 |
 | src/mcp\_memory/storage/pure/\_\_init\_\_.py         |        0 |        0 |    100% |           |
 | src/mcp\_memory/storage/pure/ranking.py              |       27 |        0 |    100% |           |
 | src/mcp\_memory/storage/pure/rows.py                 |       40 |        0 |    100% |           |
 | src/mcp\_memory/storage/pure/sql.py                  |       19 |        0 |    100% |           |
 | src/mcp\_memory/storage/repositories/\_\_init\_\_.py |        0 |        0 |    100% |           |
-| src/mcp\_memory/storage/repositories/entities.py     |      179 |        6 |     97% |48, 53, 111-113, 115 |
+| src/mcp\_memory/storage/repositories/entities.py     |      185 |        6 |     97% |50, 55, 119-121, 123 |
 | src/mcp\_memory/storage/repositories/observations.py |      178 |        0 |    100% |           |
 | src/mcp\_memory/storage/repositories/projects.py     |      101 |        0 |    100% |           |
 | src/mcp\_memory/storage/repositories/relations.py    |       88 |        4 |     95% |100, 103, 129, 141 |
@@ -102,7 +102,7 @@
 | tests/test\_db\_access.py                            |       13 |        0 |    100% |           |
 | tests/test\_dream.py                                 |      895 |        5 |     99% |506-507, 604, 1067, 1126 |
 | tests/test\_dream\_status.py                         |      254 |        0 |    100% |           |
-| tests/test\_export\_import.py                        |      331 |        0 |    100% |           |
+| tests/test\_export\_import.py                        |      335 |        0 |    100% |           |
 | tests/test\_hooks\_plugin.py                         |     1220 |       66 |     95% |1713-1718, 1723-1726, 1731-1739, 1750-1753, 1782-1785, 1827-1830, 1834-1837, 1841-1845, 1849-1851, 1856-1858, 1863-1868, 1872-1873, 1877-1879, 1884-1892 |
 | tests/test\_metrics.py                               |      183 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
@@ -114,7 +114,7 @@
 | tests/test\_recall.py                                |       52 |        0 |    100% |           |
 | tests/test\_relocate.py                              |      174 |        0 |    100% |           |
 | tests/test\_review\_tracker.py                       |       42 |        0 |    100% |           |
-| tests/test\_server.py                                |     1097 |        1 |     99% |      1835 |
+| tests/test\_server.py                                |     1135 |        1 |     99% |      1896 |
 | tests/test\_server\_http.py                          |      121 |        0 |    100% |           |
 | tests/test\_telemetry.py                             |      451 |        1 |     99% |       757 |
 | tests/test\_telemetry\_contract.py                   |       11 |        0 |    100% |           |
@@ -123,7 +123,7 @@
 | tests/test\_tracker.py                               |       88 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      708 |        0 |    100% |           |
-| **TOTAL**                                            | **18122** |  **494** | **97%** |           |
+| **TOTAL**                                            | **18175** |  **494** | **97%** |           |
 
 
 ## Setup coverage badge
