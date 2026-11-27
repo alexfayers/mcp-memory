@@ -40,5 +40,16 @@ def days_ago(n: int) -> str:
     return f"-{n} days"
 
 
+def past_window(column: str, setting: str, project_id: str) -> str:
+    """Return SQL that is true when column is older than the scope's setting window.
+
+    The window falls back to a default bound twice as parameters. A negative window is never past.
+    """
+    window = (
+        f"COALESCE((SELECT days FROM project_retention WHERE project_id = {project_id} AND setting = '{setting}'), ?)"
+    )
+    return f"({window} >= 0 AND {column} < datetime('now', '-' || {window} || ' days'))"
+
+
 def seconds_ago(n: float) -> str:
     return f"-{n} seconds"

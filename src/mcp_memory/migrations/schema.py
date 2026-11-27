@@ -859,4 +859,17 @@ MIGRATIONS: list[Migration] = [
         # Optional filesystem path the entity is about. NULL means none. Not in the FTS projection.
         statements=["ALTER TABLE entities ADD COLUMN location TEXT"],
     ),
+    Migration(
+        version=33,
+        # Per-scope retention windows in days. A missing row means the global default applies.
+        statements=[
+            """CREATE TABLE project_retention (
+                project_id INTEGER NOT NULL,
+                setting TEXT NOT NULL,
+                days INTEGER NOT NULL,
+                PRIMARY KEY (project_id, setting),
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            )"""
+        ],
+    ),
 ]

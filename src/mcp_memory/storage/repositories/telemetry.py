@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from mcp_memory.storage.pure.sql import days_ago, seconds_ago
+from mcp_memory.storage.pure.sql import days_ago, past_window, seconds_ago
+from mcp_memory.storage.repositories.projects import SURFACED_RETENTION
 from mcp_memory.storage.services.ids import get_entity_id, get_project_id
 
 if TYPE_CHECKING:
@@ -92,14 +93,14 @@ class TelemetryRepository:
     def prune_surfaced(self, retention_days: int) -> int:
         """Delete retrieval telemetry older than the retention window, returning the row count.
 
-        A negative window means unlimited retention: nothing is deleted and 0 is returned.
+        A scope's own surfaced_retention window overrides retention_days. A negative window
+        means unlimited retention.
         """
-        if retention_days < 0:
-            return 0
+        project_id = "(SELECT id FROM projects WHERE name = surfaced_entities.project)"
         with self._conn.transaction():
             cursor = self._conn.write(
-                "DELETE FROM surfaced_entities WHERE surfaced_at < datetime('now', ?)",
-                (days_ago(retention_days),),
+                f"DELETE FROM surfaced_entities WHERE {past_window('surfaced_at', SURFACED_RETENTION, project_id)}",
+                (retention_days, retention_days),
             )
         return cursor.rowcount
 

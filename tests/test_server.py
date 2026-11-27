@@ -1408,6 +1408,28 @@ class TestProjectGroupTools:
         assert "error" in tools.set_metadata("", "groups", ["tooling"])
 
 
+class TestProjectRetentionTools:
+    def test_set_and_list_retention(self, server_db: Storage) -> None:
+        tools.set_metadata("first", "retention", ["purge_grace=7", "surfaced_retention=30"])
+        result = tools.set_metadata("first", "retention", add=["purge_grace=3"], remove=["surfaced_retention"])
+        assert result == {"project": "first", "retention": {"purge_grace": 3}}
+        tools.set_metadata("second", "retention", ["orphan_gc=-1"])
+        assert tools.list_metadata("retention")["mappings"] == [
+            {"project": "first", "setting": "purge_grace", "days": 3},
+            {"project": "second", "setting": "orphan_gc", "days": -1},
+        ]
+        assert tools.list_metadata("retention", "second") == {"retention": {"orphan_gc": -1}}
+
+    @pytest.mark.parametrize("entry", ["unknown=3", "purge_grace", "purge_grace=soon"])
+    def test_invalid_retention_entry_returns_error(self, server_db: Storage, entry: str) -> None:
+        assert "error" in tools.set_metadata("first", "retention", [entry])
+
+    def test_project_with_retention_can_be_deleted(self, server_db: Storage) -> None:
+        server_db.projects.set_retention("first", ["purge_grace=7"])
+        server_db.projects.delete("first")
+        assert tools.list_metadata("retention")["mappings"] == []
+
+
 @pytest.fixture
 def mock_db() -> Iterator[MagicMock]:
     original = server._db

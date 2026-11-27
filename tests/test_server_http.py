@@ -94,7 +94,7 @@ def test_failed_tool_call_is_an_mcp_error_with_the_message_text() -> None:
 
     result = asyncio.run(scenario())
     assert result.is_error
-    assert _text(result) == "Invalid kind 'bogus'. Must be one of: projects, paths, groups."
+    assert _text(result) == "Invalid kind 'bogus'. Must be one of: projects, paths, groups, retention."
 
 
 @pytest.mark.usefixtures("server_db")
