@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_3352f668749ccb62_models_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.5">coverage.py v7.17.5</a>,
-            created at 2026-11-27 19:58 +0000
+            created at 2026-11-27 21:57 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -941,7 +941,20 @@
     <p class="run run2"><span class="n"><a id="t859" href="#t859">859</a></span><span class="t">        <span class="com"># Optional filesystem path the entity is about. NULL means none. Not in the FTS projection.</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t860" href="#t860">860</a></span><span class="t">        <span class="nam">statements</span><span class="op">=</span><span class="op">[</span><span class="str">&quot;ALTER TABLE entities ADD COLUMN location TEXT&quot;</span><span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t861" href="#t861">861</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t862" href="#t862">862</a></span><span class="t"><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t862" href="#t862">862</a></span><span class="t">    <span class="nam">Migration</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t863" href="#t863">863</a></span><span class="t">        <span class="nam">version</span><span class="op">=</span><span class="num">33</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t864" href="#t864">864</a></span><span class="t">        <span class="com"># Per-scope retention windows in days. A missing row means the global default applies.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t865" href="#t865">865</a></span><span class="t">        <span class="nam">statements</span><span class="op">=</span><span class="op">[</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t866" href="#t866">866</a></span><span class="t">            <span class="str">&quot;&quot;&quot;CREATE TABLE project_retention (</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t867" href="#t867">867</a></span><span class="t"><span class="str">                project_id INTEGER NOT NULL,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t868" href="#t868">868</a></span><span class="t"><span class="str">                setting TEXT NOT NULL,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t869" href="#t869">869</a></span><span class="t"><span class="str">                days INTEGER NOT NULL,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t870" href="#t870">870</a></span><span class="t"><span class="str">                PRIMARY KEY (project_id, setting),</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t871" href="#t871">871</a></span><span class="t"><span class="str">                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t872" href="#t872">872</a></span><span class="t"><span class="str">            )&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t873" href="#t873">873</a></span><span class="t">        <span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t874" href="#t874">874</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t875" href="#t875">875</a></span><span class="t"><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -951,7 +964,7 @@
             <a class="nav" href="z_3352f668749ccb62_models_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.17.5">coverage.py v7.17.5</a>,
-            created at 2026-11-27 19:58 +0000
+            created at 2026-11-27 21:57 +0000
         </p>
     </div>
 </footer>
