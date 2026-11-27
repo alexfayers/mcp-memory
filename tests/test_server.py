@@ -537,6 +537,67 @@ class TestCreateEntitiesAtomicity:
         assert not server_db.entities.exists_in("task/bad", "proj")
 
 
+class TestCreateEntitiesLocation:
+    @staticmethod
+    def _create(location: str) -> dict[str, str]:
+        return tools.create_entities(
+            "proj",
+            [
+                {
+                    "name": "knowledge/k",
+                    "entityType": "knowledge",
+                    "observations": ["obs"],
+                    "relations": [{"target": "project/proj", "type": "relates-to"}],
+                    "location": location,
+                }
+            ],
+        )
+
+    @staticmethod
+    def _stored_location(store: Storage) -> str | None:
+        row = store.connection.query_one("SELECT location FROM entities WHERE name = 'knowledge/k'")
+        return None if row is None else row["location"]
+
+    def test_location_inside_the_written_scope_is_silent(self, server_db: Storage, tmp_path: Path) -> None:
+        server_db.projects.set_paths("proj", [str(tmp_path)])
+        result = self._create(str(tmp_path / "src"))
+        assert "scopeWarning" not in result
+        assert self._stored_location(server_db) == normalize_path(str(tmp_path / "src"))
+
+    def test_location_of_another_scope_warns_and_keeps_the_requested_scope(
+        self, server_db: Storage, tmp_path: Path
+    ) -> None:
+        server_db.projects.set_paths("other", [str(tmp_path)])
+        result = self._create(str(tmp_path / "src"))
+        assert "'other'" in result["scopeWarning"]
+        assert "knowledge/k" in result["scopeWarning"]
+        assert server_db.entities.exists_in("knowledge/k", "proj")
+        assert not server_db.entities.exists_in("knowledge/k", "other")
+
+    def test_location_outside_every_registered_path_is_silent(self, server_db: Storage, tmp_path: Path) -> None:
+        result = self._create(str(tmp_path))
+        assert "scopeWarning" not in result
+        assert self._stored_location(server_db) == normalize_path(str(tmp_path))
+
+    def test_relative_location_is_rejected(self, server_db: Storage) -> None:
+        assert "absolute" in self._create("src/app")["error"]
+        assert not server_db.entities.exists_in("knowledge/k", "proj")
+
+    def test_home_relative_location_is_accepted(self, server_db: Storage) -> None:
+        assert "error" not in self._create("~/repo")
+        assert self._stored_location(server_db) == normalize_path("~/repo")
+
+    def test_location_is_stored_normalised(self, server_db: Storage, tmp_path: Path) -> None:
+        (tmp_path / "real").mkdir()
+        (tmp_path / "link").symlink_to(tmp_path / "real")
+        self._create(f"{tmp_path}/link/")
+        assert self._stored_location(server_db) == normalize_path(str(tmp_path / "real"))
+
+    def test_non_string_location_is_rejected(self, server_db: Storage) -> None:
+        assert "location" in self._create(5)["error"]  # type: ignore[arg-type]
+        assert not server_db.entities.exists_in("knowledge/k", "proj")
+
+
 class TestRuntimePolicyErrors:
     def test_create_relations_returns_error_for_task_project_belongs_to(self, server_db: Storage) -> None:
         server_db.entities.create(

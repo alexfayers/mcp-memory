@@ -854,4 +854,9 @@ MIGRATIONS: list[Migration] = [
             )""",
         ],
     ),
+    Migration(
+        version=32,
+        # Optional filesystem path the entity is about. NULL means none. Not in the FTS projection.
+        statements=["ALTER TABLE entities ADD COLUMN location TEXT"],
+    ),
 ]
