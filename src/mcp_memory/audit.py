@@ -14,7 +14,13 @@ import sqlite3
 from typing import TYPE_CHECKING, cast
 
 from .models import is_protected_observation
-from .storage.pure.rows import build_observation
+from .storage.pure.rows import (
+    STATUS_OBSERVATION_RE,
+    build_observation,
+    hash_observation,
+    labels_match_day,
+    strip_redundant_labels,
+)
 
 if TYPE_CHECKING:
     from .models import Observation
@@ -191,6 +197,29 @@ def _scan_relations(rows: list[sqlite3.Row]) -> tuple[list[dict[str, object]], l
     return relation_violations, star_graph_tasks
 
 
+def _scan_labels(rows: list[sqlite3.Row]) -> dict[str, list[dict[str, object]]]:
+    """Sort observations with a redundant leading label into safe edits and ones that need review."""
+    found: dict[str, list[dict[str, object]]] = {"redundant_labels": [], "review_labels": []}
+    taken = {(row["entity_id"], row["content"]) for row in rows}
+    for row in rows:
+        cleaned, labels = strip_redundant_labels(row["content"], row["provenance"])
+        if not labels or STATUS_OBSERVATION_RE.match(cleaned):
+            continue
+        finding: dict[str, object] = {
+            "name": row["name"],
+            "project": row["project"],
+            "content_hash": row["content_hash"],
+            "content": row["content"],
+            "cleaned": cleaned,
+        }
+        if (row["entity_id"], cleaned) in taken:
+            found["review_labels"].append({**finding, "duplicate_of": hash_observation(cleaned)})
+            continue
+        taken.add((row["entity_id"], cleaned))
+        found["redundant_labels" if labels_match_day(labels, row["created_at"]) else "review_labels"].append(finding)
+    return found
+
+
 def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
     """Build the structural-hygiene report for one project scope, or all when project is None.
 
@@ -208,6 +237,10 @@ def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
     entity_findings = _scan_entities(entity_rows)
     relation_violations, star_graph_tasks = _scan_relations(relation_rows)
 
+    observation_rows = db.connection.query_all(
+        _OBSERVATION_SQL + ("" if project is None else " AND p.name = ?"), entity_params
+    )
+
     scope_rows = db.connection.query_all(_SCOPE_COUNT_SQL)
     ghost_scopes = [r["project"] for r in scope_rows if r["n"] == 0 and (project is None or r["project"] == project)]
 
@@ -217,6 +250,7 @@ def audit_graph(db: Storage, project: str | None = None) -> dict[str, object]:
         "relation_violations": relation_violations,
         "star_graph_tasks": star_graph_tasks,
         **entity_findings,
+        **_scan_labels(observation_rows),
     }
 
 
@@ -446,6 +480,25 @@ def _orphan_step(entity: Finding, names: dict[tuple[str, str], bool]) -> dict[st
     }
 
 
+def _label_step(finding: Finding, *, needs_review: bool) -> dict[str, object]:
+    """Drop a redundant label in place, or fold the labelled copy into the observation it duplicates."""
+    target = {"project": finding["project"], "entityName": finding["name"]}
+    if "duplicate_of" in finding:
+        return {
+            "tool": "merge_observations",
+            "arguments": {**target, "sourceHash": finding["content_hash"], "targetHash": finding["duplicate_of"]},
+            "reason": "observation repeats another one apart from a redundant date or provenance label",
+            "needs_review": True,
+        }
+    return {
+        "tool": "edit_observation",
+        "arguments": {**target, "observationHash": finding["content_hash"], "newText": finding["cleaned"]},
+        "reason": "observation text repeats its date or provenance"
+        + ("; check the date is not part of the fact" if needs_review else ""),
+        "needs_review": needs_review,
+    }
+
+
 def propose_plan(db: Storage, report: dict[str, object]) -> list[dict[str, object]]:
     """Turn an audit report into a structured, deterministic list of fix-it tool calls."""
     project = cast("str | None", report["project"])
@@ -458,7 +511,21 @@ def propose_plan(db: Storage, report: dict[str, object]) -> list[dict[str, objec
     }
     steps: list[dict[str, object]] = []
 
-    steps.extend(_merge_observation_steps(grouped))
+    label_steps = [
+        _label_step(f, needs_review=key == "review_labels")
+        for key in ("redundant_labels", "review_labels")
+        for f in _findings(report, key)
+    ]
+    relabel_merges = {
+        (args["project"], args["entityName"], args["sourceHash"])
+        for label_step in label_steps
+        if "sourceHash" in (args := cast("dict[str, object]", label_step["arguments"]))
+    }
+    for merge_step in _merge_observation_steps(grouped):
+        args = cast("dict[str, object]", merge_step["arguments"])
+        if (args["project"], args["entityName"], args["targetHash"]) not in relabel_merges:
+            steps.append(merge_step)
+    steps.extend(label_steps)
 
     for entity in _findings(report, "oversized"):
         step = _oversized_step(entity, grouped[cast("int", entity["entity_id"])].survivors)

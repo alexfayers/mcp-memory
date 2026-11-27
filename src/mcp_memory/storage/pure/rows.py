@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import hashlib
 import re
 import sqlite3
 
 from mcp_memory.models import Entity, Observation, Relation
 
-_STATUS_OBSERVATION = re.compile(r"\s*status:", re.IGNORECASE)
+STATUS_OBSERVATION_RE = re.compile(r"\s*status:", re.IGNORECASE)
 
 _MONTH = (
     r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
@@ -26,7 +27,7 @@ _LABEL_STAMP_RE = re.compile(rf"^[^:()\n]{{1,60}}?( \({_STAMP}\))(?=:)", re.IGNO
 
 def reject_status_observation(content: str) -> None:
     """Raise if the date-stripped observation content starts with ``status:``, since status has its own field."""
-    if _STATUS_OBSERVATION.match(content):
+    if STATUS_OBSERVATION_RE.match(content):
         raise ValueError(
             "Observation starts with 'status:'. Set the entity status with set_entity_status instead, "
             "not as an observation."
@@ -58,6 +59,28 @@ def strip_redundant_labels(content: str, provenance: str | None) -> tuple[str, l
             return content, labels
         labels.append(content[span[0] : span[1]])
         content = rest
+
+
+def labels_match_day(labels: list[str], created_at: str | None) -> bool:
+    """True when every date in the labels is the created_at day, and any time label comes with such a date."""
+    if created_at is None:
+        return False
+    created = datetime.fromisoformat(created_at[:10])
+    for label in labels:
+        dates = list(_DATE_RE.finditer(label))
+        if _TIME_RE.search(label) and not dates:
+            return False
+        for date in dates:
+            iso, day, month, year = date.groups()
+            if iso is not None and iso != created_at[:10]:
+                return False
+            if iso is None and (
+                int(day) != created.day
+                or month[:3].lower() != created.strftime("%b").lower()
+                or (year is not None and int(year) != created.year)
+            ):
+                return False
+    return True
 
 
 def budget_observations(observations: list[Observation], max_chars: int) -> list[Observation]:
