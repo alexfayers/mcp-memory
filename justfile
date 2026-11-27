@@ -23,7 +23,7 @@ test *args:
     {{uv_run}} pytest {{args}}
 
 js-test:
-    node --test tests/js/
+    node --test tests/js/*.test.mjs
 
 baseline:
     {{uv_run}} python -m tests.eval.regen_baseline
