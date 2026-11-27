@@ -16,7 +16,7 @@ from mcp_memory.storage.pure.rows import (
     build_observation,
     hash_observation,
     reject_status_observation,
-    strip_today_date_prefix,
+    strip_redundant_labels,
 )
 from mcp_memory.storage.pure.sql import placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
@@ -83,7 +83,7 @@ class ObservationRepository:
         if entity_id is None:
             raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
 
-        observations = [strip_today_date_prefix(obs) for obs in observations]
+        observations = [strip_redundant_labels(obs, provenance)[0] for obs in observations]
         rows = self._conn.query_all(
             "SELECT id, content, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL",
             (entity_id,),
@@ -361,7 +361,7 @@ class ObservationRepository:
             if occurrences > 1:
                 raise ValueError(f"oldText matches {occurrences} times; include more surrounding text")
             new_text = content.replace(old_text, new_text)
-        new_content = strip_today_date_prefix(new_text)
+        new_content, _ = strip_redundant_labels(new_text, provenance or row["provenance"])
         if not new_content.strip():
             raise ValueError("Edited observation must not be empty")
         reject_status_observation(new_content)

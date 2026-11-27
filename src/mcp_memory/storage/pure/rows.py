@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import hashlib
 import re
 import sqlite3
 
 from mcp_memory.models import Entity, Observation, Relation
 
-_TODAY_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ \t]*[:,-][ \t]+")
 _STATUS_OBSERVATION = re.compile(r"\s*status:", re.IGNORECASE)
+
+_MONTH = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+    r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b"
+)
+_DATE_RE = re.compile(rf"(\d{{4}}-\d{{2}}-\d{{2}})|(\d{{1,2}}) ({_MONTH})(?: (\d{{4}}))?", re.IGNORECASE)
+_TIME_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?Z?")
+_STAMP = rf"(?:(?:{_DATE_RE.pattern})(?:[ T,]+{_TIME_RE.pattern})?|{_TIME_RE.pattern})"
+_PROVENANCE_LABEL_RE = re.compile(
+    rf"^(user|observed|inferred)(?: [a-z]+)?(?: (?:on|at) {_STAMP}| \({_STAMP}\))?: +", re.IGNORECASE
+)
+_STAMP_LABEL_RE = re.compile(rf"^\(?{_STAMP}\)? *[:,-] +", re.IGNORECASE)
+_LABEL_STAMP_RE = re.compile(rf"^[^:()\n]{{1,60}}?( \({_STAMP}\))(?=:)", re.IGNORECASE)
 
 
 def reject_status_observation(content: str) -> None:
@@ -27,22 +38,26 @@ def hash_observation(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
 
 
-def strip_today_date_prefix(content: str, today: str | None = None) -> str:
-    """Strip a leading "<today's date><separator>" label, since created_at already carries it.
+def strip_redundant_labels(content: str, provenance: str | None) -> tuple[str, list[str]]:
+    """Strip leading labels that repeat a date, a time or the matching provenance, returning the text and the labels.
 
-    Only strips when the captured date equals `today` (UTC, defaults to the current date) and
-    the remainder after the required separator and whitespace is non-empty - a bare date with
-    no separator (e.g. "2026-09-08 was the day...") is left untouched as real content, and a
-    past date is left untouched as real history rather than a redundant label.
+    Handles "User decision on 26 Nov: X", "2026-11-20 11:14Z: X" and "Design preference (26 Nov): X".
+    A date inside the content itself ("the cert expires 2027-01-01") is kept, and so is an empty remainder.
     """
-    match = _TODAY_DATE_PREFIX_RE.match(content)
-    if match is None:
-        return content
-    if today is None:
-        today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
-    if match.group(1) != today:
-        return content
-    return content[match.end() :] or content
+    labels: list[str] = []
+    while True:
+        match = _PROVENANCE_LABEL_RE.match(content)
+        if (match is not None and match.group(1).lower() == provenance) or (match := _STAMP_LABEL_RE.match(content)):
+            span = match.span()
+        elif match := _LABEL_STAMP_RE.match(content):
+            span = match.span(1)
+        else:
+            return content, labels
+        rest = content[: span[0]] + content[span[1] :]
+        if not rest.strip():
+            return content, labels
+        labels.append(content[span[0] : span[1]])
+        content = rest
 
 
 def budget_observations(observations: list[Observation], max_chars: int) -> list[Observation]:

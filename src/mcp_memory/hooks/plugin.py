@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable
 import contextlib
-from datetime import UTC, datetime
 import itertools
 import json
 import os
@@ -58,7 +57,7 @@ from mcp_memory.hooks.tracker import (
 )
 from mcp_memory.nudge_count import NudgeKind
 from mcp_memory.path_resolver import match_project_for_path
-from mcp_memory.storage.pure.rows import strip_today_date_prefix
+from mcp_memory.storage.pure.rows import strip_redundant_labels
 from mcp_memory.tool_names import DEDUPED_READ_TOOLS, MUTATING_TOOLS, READ_ONLY_TOOLS
 
 _MEMORY_WRITE_TOOL_NAMES = frozenset(MUTATING_TOOLS)
@@ -407,10 +406,10 @@ _SCOPE_MISMATCH_WARNING = (
     " intentional, run the exact same call again to proceed."
 )
 
-_DATE_PREFIX_WARNING = (
-    "REDUNDANT DATE PREFIX: {count} observation(s) in this call start with today's date"
-    " (first: `{example}`). The server records each observation's timestamp itself and strips"
-    " this prefix on write, so it only wastes text. Drop the date and keep the fact."
+_REDUNDANT_LABEL_WARNING = (
+    "REDUNDANT LABEL: {count} observation(s) in this call start with a date, time or provenance label"
+    " (first: `{example}`). The server records each observation's timestamp and provenance itself and strips"
+    " this label on write, so it only wastes text. Drop the label and keep the fact."
 )
 
 
@@ -443,41 +442,44 @@ def _parse_mcp_arguments(
 _OBSERVATION_TEXT_TOOLS = frozenset({"create_entities", "add_observations", "edit_observation"})
 
 
-def _observation_texts(tool_name: str, parameters: dict[str, object]) -> list[str]:
-    """Return the observation texts a memory write would store, or [] for other tools."""
+def _observation_texts(tool_name: str, parameters: dict[str, object]) -> list[tuple[str, str]]:
+    """Return the (text, provenance) pairs a memory write would store, or [] for other tools."""
     name = _resolve_memory_tool(tool_name, parameters)
     if name not in _OBSERVATION_TEXT_TOOLS:
         return []
     args = _parse_mcp_arguments(tool_name, parameters)
+    provenance = str(args.get("provenance") or "")
     if name == "add_observations":
-        return _str_list(args.get("observations"))
+        return [(text, provenance) for text in _str_list(args.get("observations"))]
     if name == "edit_observation":
         new_text = args.get("newText")
-        return [new_text] if isinstance(new_text, str) else []
-    texts: list[str] = []
+        return [(new_text, provenance)] if isinstance(new_text, str) else []
+    texts: list[tuple[str, str]] = []
     entities_raw = args.get("entities", [])
     entities: list[object] = entities_raw if isinstance(entities_raw, list) else []
     for entity in entities:
         if isinstance(entity, dict):
-            texts.extend(_str_list(entity.get("observations")))
+            entity_provenance = str(entity.get("provenance") or "")
+            texts.extend((text, entity_provenance) for text in _str_list(entity.get("observations")))
     return texts
 
 
-_DATE_PREFIX_EXAMPLE_CHARS = 80
+_REDUNDANT_LABEL_EXAMPLE_CHARS = 80
 
 
-def _date_prefix_note(tool_name: str, parameters: dict[str, object]) -> str | None:
-    """Return a nudge when observations carry a date prefix the server would strip."""
-    today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+def _redundant_label_note(tool_name: str, parameters: dict[str, object]) -> str | None:
+    """Return a nudge when observations carry a label the server would strip."""
     flagged = [
-        text for text in _observation_texts(tool_name, parameters) if strip_today_date_prefix(text, today=today) != text
+        text
+        for text, provenance in _observation_texts(tool_name, parameters)
+        if strip_redundant_labels(text, provenance)[1]
     ]
     if not flagged:
         return None
-    example = flagged[0][:_DATE_PREFIX_EXAMPLE_CHARS]
-    if len(flagged[0]) > _DATE_PREFIX_EXAMPLE_CHARS:
+    example = flagged[0][:_REDUNDANT_LABEL_EXAMPLE_CHARS]
+    if len(flagged[0]) > _REDUNDANT_LABEL_EXAMPLE_CHARS:
         example += "..."
-    return _DATE_PREFIX_WARNING.format(count=len(flagged), example=example)
+    return _REDUNDANT_LABEL_WARNING.format(count=len(flagged), example=example)
 
 
 def _workspace_entity_note(workspace_roots: list[str]) -> str | None:
@@ -623,7 +625,7 @@ def _check_memory_write(
 ) -> HookResult | None:
     """Combine the wrong-scope check with the redundant-date-prefix nudge."""
     result = _check_memory_scope(task_id, project_scope, tool_name, parameters)
-    note = _date_prefix_note(tool_name, parameters)
+    note = _redundant_label_note(tool_name, parameters)
     if note is None:
         return result
     if result is None:
