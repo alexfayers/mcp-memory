@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 import functools
 import getpass
 from importlib.metadata import version
+import itertools
 import json
 import os
 from pathlib import Path
@@ -770,15 +771,17 @@ def _any_entry(_entry: object) -> bool:
 
 def _remove_mcp_servers(
     mcp_path: Path,
-    servers_key: str,
+    servers_path: tuple[str, ...],
     names: tuple[str, ...] = _LEGACY_AGENT_SERVERS,
     owned: Callable[[object], bool] = _any_entry,
 ) -> bool:
-    """Delete the named entries that `owned` accepts from an MCP config file, leaving all else intact."""
+    """Delete the named entries that `owned` accepts under `servers_path` in an MCP config, leaving all else intact."""
     if not mcp_path.exists() or mcp_path.stat().st_size == 0:
         return False
     config = load_jsonc_object(mcp_path)
-    servers = config.get(servers_key)
+    servers: object = config
+    for key in servers_path:
+        servers = servers.get(key) if isinstance(servers, dict) else None
     if not isinstance(servers, dict):
         return False
     stale = [name for name in names if name in servers and owned(servers[name])]
@@ -1028,7 +1031,7 @@ def _cmd_install_antigravity() -> None:
     agy_bin = shutil.which("agy")
     url = f"http://localhost:{resolve_port()}/mcp"
     mcp_path = _antigravity_mcp_config_path()
-    _remove_mcp_servers(mcp_path, "mcpServers")
+    _remove_mcp_servers(mcp_path, ("mcpServers",))
     if agy_bin:
         _register_antigravity_server(agy_bin, "memory", url)
     else:
@@ -1081,7 +1084,7 @@ def _cmd_uninstall_copilot(args: argparse.Namespace) -> None:
     """Remove the memory servers from VS Code Copilot MCP config."""
     mcp_path = Path(args.mcp_config).expanduser() if args.mcp_config else _default_copilot_mcp_config_path()
     try:
-        _remove_mcp_servers(mcp_path, "servers", ("memory", *_LEGACY_AGENT_SERVERS))
+        _remove_mcp_servers(mcp_path, ("servers",), ("memory", *_LEGACY_AGENT_SERVERS))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: failed to update {mcp_path}: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -1128,7 +1131,7 @@ def _cmd_install_pi() -> None:
     """Register memory servers in pi's global MCP config."""
     mcp_path = _pi_mcp_config_path()
     try:
-        _remove_mcp_servers(mcp_path, "mcpServers")
+        _remove_mcp_servers(mcp_path, ("mcpServers",))
         _register_mcp_server(
             mcp_path, ("mcpServers",), "memory", {"url": f"http://localhost:{resolve_port()}/mcp"}, "Pi"
         )
@@ -1174,29 +1177,42 @@ def _cmd_install_opencode() -> None:
         sys.exit(1)
 
 
+_TEARDOWN_AGENTS = ("antigravity", "claude-code", "codex", "copilot", "kiro", "opencode", "pi")
+
+
 def _cmd_teardown(args: argparse.Namespace) -> None:
     """Undo setup-service and install: remove the service and the memory server entries, keeping the database."""
     name = ("memory",)
-    steps: list[tuple[object, Callable[[], bool]]] = [
-        (
-            Path.home() / ".claude" / "settings.json",
-            functools.partial(_remove_claude_code_servers, shutil.which("claude"), name, _is_own_listing),
-        ),
-    ]
+    steps: dict[str, list[tuple[object, Callable[[], bool]]]] = {
+        "claude-code": [
+            (
+                Path.home() / ".claude" / "settings.json",
+                functools.partial(_remove_claude_code_servers, shutil.which("claude"), name, _is_own_listing),
+            )
+        ],
+        "codex": [],
+        "kiro": [
+            (kiro, functools.partial(_remove_kiro_servers, kiro))
+            for kiro in (Path(path).expanduser() for path in args.kiro_agent_config)
+        ],
+    }
     if codex_bin := shutil.which("codex"):
-        steps.append(("Codex", functools.partial(_remove_codex_servers, codex_bin, name, _is_own_listing)))
-    for path, key in [
-        (_antigravity_mcp_config_path(), "mcpServers"),
-        (_pi_mcp_config_path(), "mcpServers"),
-        (_default_copilot_mcp_config_path(), "servers"),
+        steps["codex"].append(("Codex", functools.partial(_remove_codex_servers, codex_bin, name, _is_own_listing)))
+    for agent, path, key in [
+        ("antigravity", _antigravity_mcp_config_path(), ("mcpServers",)),
+        ("pi", _pi_mcp_config_path(), ("mcpServers",)),
+        ("copilot", _default_copilot_mcp_config_path(), ("servers",)),
+        ("opencode", _opencode_config_dir() / "opencode.json", ("mcp", "servers")),
     ]:
-        steps.append((path, functools.partial(_remove_mcp_servers, path, key, name, _is_own_entry)))
-    if args.kiro_agent_config:
-        kiro = Path(args.kiro_agent_config).expanduser()
-        steps.append((kiro, functools.partial(_remove_kiro_servers, kiro)))
-    found = [_remove_service()]
+        steps[agent] = [(path, functools.partial(_remove_mcp_servers, path, key, name, _is_own_entry))]
+    agents = args.agent or steps
+    if "kiro" in (args.agent or ()) and not args.kiro_agent_config:
+        print("warning: --agent kiro needs --kiro-agent-config, skipped Kiro", file=sys.stderr)
+    if "kiro" not in agents and args.kiro_agent_config:
+        print("warning: --kiro-agent-config is ignored because --agent leaves out kiro", file=sys.stderr)
+    found = [] if args.keep_service else [_remove_service()]
     skipped = False
-    for label, remove in steps:
+    for label, remove in itertools.chain.from_iterable(steps[agent] for agent in agents):
         try:
             found.append(remove())
         except (OSError, TypeError, ValueError):
@@ -1344,7 +1360,19 @@ def _build_parser() -> argparse.ArgumentParser:
     teardown = sub.add_parser(
         "teardown", help="Remove the background service and the memory MCP server from agent config (keeps data)"
     )
-    teardown.add_argument("--kiro-agent-config", help="Path to a Kiro agent JSON file to remove the server from.")
+    teardown.add_argument(
+        "--kiro-agent-config",
+        action="append",
+        default=[],
+        help="Path to a Kiro agent JSON file to remove the server from. Repeat for several.",
+    )
+    teardown.add_argument(
+        "--agent",
+        action="append",
+        choices=_TEARDOWN_AGENTS,
+        help="Only remove the server from this agent's config. Repeat for several. Default: every agent.",
+    )
+    teardown.add_argument("--keep-service", action="store_true", help="Leave the background service installed.")
 
     uninstall = sub.add_parser("uninstall", help="Remove the memory MCP server from agent config")
     uninstall.add_argument("target", choices=["copilot"], help="Agent to uninstall from.")
