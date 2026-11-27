@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.0](https://github.com/alexfayers/mcp-memory/compare/v0.5.0...v0.6.0) (2026-11-27)
+
+
+### Features
+
+* **hooks:** drop tracker and recall state once a rewind, /tree or compaction removes its point from the context ([#242](https://github.com/alexfayers/mcp-memory/issues/242)) ([c88b82a](https://github.com/alexfayers/mcp-memory/commit/c88b82a5a1132c55561dfa325834fba4c84e03c3))
+* **hooks:** name the memories that strongly match each user message ([#245](https://github.com/alexfayers/mcp-memory/issues/245)) ([a8c07d1](https://github.com/alexfayers/mcp-memory/commit/a8c07d11c5884be9f0bd2c2b58d90688fd3c3a7b))
+* **hooks:** recall observations anchored to a commit's patch-id ([#243](https://github.com/alexfayers/mcp-memory/issues/243)) ([7a8022b](https://github.com/alexfayers/mcp-memory/commit/7a8022bf7eeac091143a14b94942818725c0b0c0))
+* **hooks:** recall observations from their triggers ([#239](https://github.com/alexfayers/mcp-memory/issues/239)) ([1ce2dc3](https://github.com/alexfayers/mcp-memory/commit/1ce2dc37aec26a405ffbd30951dfbc25f4b2540f))
+* keep the database and state files under the shared llm-prompts root ([#237](https://github.com/alexfayers/mcp-memory/issues/237)) ([e19caaf](https://github.com/alexfayers/mcp-memory/commit/e19caaf67ce665a8f6b62f112b2593d560295eb5))
+* **rules:** add a recall trigger when recording a do-not-run gotcha ([#244](https://github.com/alexfayers/mcp-memory/issues/244)) ([d864d87](https://github.com/alexfayers/mcp-memory/commit/d864d8759f6f86e21e5fe387c6c390fa12280a9f))
+* **rules:** keep dates and provenance prefixes out of observation text ([#246](https://github.com/alexfayers/mcp-memory/issues/246)) ([ea879ef](https://github.com/alexfayers/mcp-memory/commit/ea879ef981923b11ffbbb9c33bc178ade6d85c47))
+* **server:** warn when an entity's location belongs to another scope ([#255](https://github.com/alexfayers/mcp-memory/issues/255)) ([55725d7](https://github.com/alexfayers/mcp-memory/commit/55725d7931f1c2ca4f523151f60dc08bcd586a32))
+* **visualise:** rebuild the visualiser around a searchable entity list ([#247](https://github.com/alexfayers/mcp-memory/issues/247)) ([43f7aae](https://github.com/alexfayers/mcp-memory/commit/43f7aaeda2ebf3bdee5cf052704309592eabcc55))
+* **visualise:** vote from -3 to 3 on the dashboard ([#250](https://github.com/alexfayers/mcp-memory/issues/250)) ([21f5d09](https://github.com/alexfayers/mcp-memory/commit/21f5d09ee7365de58cf31b17d388dee3b9be73ac))
+
+
+### Bug Fixes
+
+* **ci:** pass the JS test files to node --test by glob ([#253](https://github.com/alexfayers/mcp-memory/issues/253)) ([324d3bf](https://github.com/alexfayers/mcp-memory/commit/324d3bfb1af029da1a20245fb0fe00566d74fd22))
+
 ## [0.5.0](https://github.com/alexfayers/mcp-memory/compare/v0.4.0...v0.5.0) (2026-11-26)
 
 
