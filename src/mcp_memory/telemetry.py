@@ -41,6 +41,7 @@ from .models import VALID_RELATION_TYPES
 from .tool_names import MUTATING_TOOLS, SEARCH_TOOLS
 
 if TYPE_CHECKING:
+    from .dream_status import PassMetrics
     from .storage import Storage
 
 _SCHEMA = 2
@@ -146,8 +147,16 @@ def report_exception(exc: BaseException, where: str) -> None:
         pass
 
 
-def report_dream(tier: str, *, ok: bool, duration_ms: int, error_type: str | None, operations: Counter[str]) -> None:
-    """Send one dream pass's tier, outcome, duration, error class name and per-action counts. Never raises."""
+def report_dream(
+    tier: str,
+    *,
+    ok: bool,
+    duration_ms: int,
+    error_type: str | None,
+    operations: Counter[str],
+    metrics: PassMetrics,
+) -> None:
+    """Send one dream pass's tier, outcome, duration, error class, per-action counts and agent usage. Never raises."""
     try:
         install_id = _install_id()
         if install_id is not None and _core is not None:
@@ -157,6 +166,7 @@ def report_dream(tier: str, *, ok: bool, duration_ms: int, error_type: str | Non
                 "duration_ms": duration_ms,
                 "error_type": error_type,
                 "operations": dict(operations),
+                **{key: value for key, value in metrics.items() if key != "duration_ms" and value is not None},
                 **_context(_core),
             }
             _core.send({"event": "memory_dream", "properties": properties}, install_id)

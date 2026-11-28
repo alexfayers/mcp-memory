@@ -464,6 +464,49 @@ def test_dream_pass_reports_counts_without_text(sent: list[dict[str, Any]], monk
     assert "secret-project" not in json.dumps(sent)
 
 
+def test_dream_event_carries_agent_usage(sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
+    async def metered_pass() -> str:
+        dream._pass_metrics = {"input_tokens": 120, "output_tokens": 340, "num_turns": 6, "cost_usd": 0.09}
+        return "nothing demoted"
+
+    asyncio.run(dream._run_claimed(dream.TierSpec("light", lambda: True, lambda: 0.0, lambda: 1.0, metered_pass)))
+
+    properties = sent[0]["properties"]
+    assert (properties["input_tokens"], properties["output_tokens"]) == (120, 340)
+    assert (properties["num_turns"], properties["cost_usd"]) == (6, 0.09)
+    assert set(properties) == {
+        "tier",
+        "ok",
+        "duration_ms",
+        "error_type",
+        "operations",
+        "input_tokens",
+        "output_tokens",
+        "num_turns",
+        "cost_usd",
+        *telemetry._context(telemetry._core),
+    }
+
+
+def test_failed_dream_pass_without_usage_sends_no_usage_keys(
+    sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def failing_pass() -> str:
+        dream._pass_metrics = {"cost_usd": None, "num_turns": None, "duration_ms": 5}
+        raise ValueError("boom")
+
+    asyncio.run(dream._run_claimed(dream.TierSpec("light", lambda: True, lambda: 0.0, lambda: 1.0, failing_pass)))
+
+    assert set(sent[0]["properties"]) == {
+        "tier",
+        "ok",
+        "duration_ms",
+        "error_type",
+        "operations",
+        *telemetry._context(telemetry._core),
+    }
+
+
 @pytest.mark.parametrize(
     ("cli", "script", "error_type"),
     [
