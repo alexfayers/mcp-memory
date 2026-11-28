@@ -33,4 +33,4 @@ Unless a `Startup block: recent memory` is present, `read_graph`. Then `search_n
 
 ## Recommending
 
-Memory is a snapshot: except `user-preferences`, MUST re-check lists, measurements and source-pointing facts live before quoting, on pushback, or before costly action; surface conflicts rather than pick a side. MUST verify an `inferred` observation before quoting it as fact.
+Memory is a snapshot: except `user-preferences`, MUST re-check lists, measurements and source-pointing facts live before quoting, on pushback, or before costly action; surface conflicts to the user rather than pick a side. MUST verify an `inferred` observation before quoting it as fact.
