@@ -16,7 +16,7 @@
 | src/mcp\_memory/config.py                            |      153 |        5 |     97% |142-143, 178-179, 290 |
 | src/mcp\_memory/dedupe.py                            |       35 |        1 |     97% |        45 |
 | src/mcp\_memory/dream.py                             |      571 |       13 |     98% |272, 360-362, 372-374, 684, 689, 734, 801, 941-942 |
-| src/mcp\_memory/dream\_status.py                     |      150 |        2 |     99% |  298, 332 |
+| src/mcp\_memory/dream\_status.py                     |      162 |        2 |     99% |  319, 353 |
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       74 |        4 |     95% |52-53, 88, 90 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
@@ -101,7 +101,7 @@
 | tests/test\_database.py                              |     2149 |        1 |     99% |       627 |
 | tests/test\_db\_access.py                            |       13 |        0 |    100% |           |
 | tests/test\_dream.py                                 |      895 |        5 |     99% |506-507, 604, 1067, 1126 |
-| tests/test\_dream\_status.py                         |      254 |        0 |    100% |           |
+| tests/test\_dream\_status.py                         |      262 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      335 |        0 |    100% |           |
 | tests/test\_hooks\_plugin.py                         |     1248 |       66 |     95% |1787-1792, 1797-1800, 1805-1813, 1824-1827, 1856-1859, 1901-1904, 1908-1911, 1915-1919, 1923-1925, 1930-1932, 1937-1942, 1946-1947, 1951-1953, 1958-1966 |
 | tests/test\_metrics.py                               |      183 |        0 |    100% |           |
@@ -123,7 +123,7 @@
 | tests/test\_tracker.py                               |       88 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      708 |        0 |    100% |           |
-| **TOTAL**                                            | **18722** |  **484** | **97%** |           |
+| **TOTAL**                                            | **18742** |  **484** | **97%** |           |
 
 
 ## Setup coverage badge
