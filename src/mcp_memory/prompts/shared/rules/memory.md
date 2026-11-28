@@ -28,6 +28,7 @@ Unless a `Startup block: recent memory` is present, `read_graph`. Then `search_n
 - Observation text MUST NOT contain a date, a time, or a `User`/`Observed`/`Inferred` prefix. The `provenance` field and the server timestamp already carry them.
 - Recording a do-not-run gotcha (a command that must not run, or only under a condition): MUST pass `triggers: [{kind: "pattern", value: "<regex over the call input>"}]` so the hook blocks the first matching call.
 - MUST render a presented `vote_score` as stars (e.g. ★3), not the raw number.
+- MUST vote +3/-3 on a memory the user directly instructed, and +1/-1 otherwise.
 - Before you {{TOOL_COMPLETE}}: MUST record lasting facts only. MUST record reusable lessons in `global`. MUST set the task `resolved`.
 
 ## Recommending

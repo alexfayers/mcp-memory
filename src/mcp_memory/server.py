@@ -361,7 +361,8 @@ SET_ENTITY_STATUS_DESC = (
 VOTE_DESC = (
     "Record a usefulness vote as you retrieve a memory: a positive vote for one that proved "
     "useful, a negative vote for one that was stale or unhelpful. The vote's magnitude sets its "
-    "strength, so cast a stronger vote in one call instead of looping. Omit observation and "
+    "strength: +3/-3 for a direct user instruction, +1/-1 otherwise. Cast it in one call instead "
+    "of looping. Omit observation and "
     "observationHash to vote on the entity, or pass exactly one (observationHash, from "
     "read output, saves tokens) to vote on that observation. Votes nudge ranking (unhelpful memories "
     "sink but stay findable) without changing content or updated_at. A vote is a light alternative to "
