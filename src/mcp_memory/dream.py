@@ -1262,6 +1262,7 @@ async def _run_claimed(spec: TierSpec) -> None:
             duration_ms=round((time.monotonic() - started) * 1000),
             error_type=error_type or _pass_error_type,
             operations=Counter(op["action"] for op in dream_status.parse_operations(audit)),
+            metrics=_pass_metrics,
         )
         _dream_running = False
         _session.last_pass_end = time.monotonic()
