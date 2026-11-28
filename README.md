@@ -20,7 +20,7 @@
 | src/mcp\_memory/eval.py                              |      135 |        0 |    100% |           |
 | src/mcp\_memory/export\_import.py                    |       74 |        4 |     95% |52-53, 88, 90 |
 | src/mcp\_memory/hooks/\_\_init\_\_.py                |        0 |        0 |    100% |           |
-| src/mcp\_memory/hooks/plugin.py                      |      557 |       27 |     95% |175-176, 300, 302, 330, 481, 720-721, 726-734, 756, 800, 856, 859-861, 878, 885-889, 947 |
+| src/mcp\_memory/hooks/plugin.py                      |      565 |       27 |     95% |183-184, 308, 310, 338, 489, 728-729, 734-742, 764, 808, 864, 867-869, 886, 893-897, 959 |
 | src/mcp\_memory/hooks/recall.py                      |      175 |        5 |     97% |93, 119, 139, 144, 205 |
 | src/mcp\_memory/hooks/review\_tracker.py             |       28 |        0 |    100% |           |
 | src/mcp\_memory/hooks/tracker.py                     |      143 |        0 |    100% |           |
@@ -103,7 +103,7 @@
 | tests/test\_dream.py                                 |      895 |        5 |     99% |506-507, 604, 1067, 1126 |
 | tests/test\_dream\_status.py                         |      254 |        0 |    100% |           |
 | tests/test\_export\_import.py                        |      335 |        0 |    100% |           |
-| tests/test\_hooks\_plugin.py                         |     1224 |       66 |     95% |1731-1736, 1741-1744, 1749-1757, 1768-1771, 1800-1803, 1845-1848, 1852-1855, 1859-1863, 1867-1869, 1874-1876, 1881-1886, 1890-1891, 1895-1897, 1902-1910 |
+| tests/test\_hooks\_plugin.py                         |     1248 |       66 |     95% |1787-1792, 1797-1800, 1805-1813, 1824-1827, 1856-1859, 1901-1904, 1908-1911, 1915-1919, 1923-1925, 1930-1932, 1937-1942, 1946-1947, 1951-1953, 1958-1966 |
 | tests/test\_metrics.py                               |      183 |        0 |    100% |           |
 | tests/test\_models.py                                |       13 |        0 |    100% |           |
 | tests/test\_nudge\_count.py                          |       12 |        0 |    100% |           |
@@ -123,7 +123,7 @@
 | tests/test\_tracker.py                               |       88 |        0 |    100% |           |
 | tests/test\_usefulness.py                            |       84 |        0 |    100% |           |
 | tests/test\_visualise.py                             |      708 |        0 |    100% |           |
-| **TOTAL**                                            | **18411** |  **493** | **97%** |           |
+| **TOTAL**                                            | **18443** |  **493** | **97%** |           |
 
 
 ## Setup coverage badge
