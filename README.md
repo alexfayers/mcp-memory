@@ -37,7 +37,7 @@
 | src/mcp\_memory/plan\_apply.py                       |       43 |        1 |     98% |        44 |
 | src/mcp\_memory/provenance\_backfill.py              |       26 |        0 |    100% |           |
 | src/mcp\_memory/relocate.py                          |       50 |        2 |     96% |     33-34 |
-| src/mcp\_memory/server.py                            |      683 |       35 |     95% |84-85, 547, 557, 593, 606, 697-699, 703, 797-798, 828-829, 837, 845, 861-862, 930-931, 945-946, 1145-1146, 1291, 1334-1335, 1686-1687, 1719-1723, 1727 |
+| src/mcp\_memory/server.py                            |      683 |       35 |     95% |84-85, 548, 558, 594, 607, 698-700, 704, 798-799, 829-830, 838, 846, 862-863, 931-932, 946-947, 1146-1147, 1292, 1335-1336, 1687-1688, 1720-1724, 1728 |
 | src/mcp\_memory/storage/\_\_init\_\_.py              |        5 |        0 |    100% |           |
 | src/mcp\_memory/storage/bootstrap.py                 |       37 |        0 |    100% |           |
 | src/mcp\_memory/storage/connection.py                |       69 |        0 |    100% |           |
