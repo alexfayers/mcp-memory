@@ -241,78 +241,62 @@ _RESOLVED_OBS_CEILING = 3
 # Tool descriptions
 _MAX_OBSERVATION_CHARS_DOC = (
     " Observations are trimmed per entity to a character budget (highest-voted first, omitted count noted); "
-    "max_observation_chars: negative for full detail, 0 for the top observation only, positive for a custom budget."
+    "max_observation_chars: <0 full detail, 0 top observation only, >0 custom budget."
 )
 _TARGET_MAX_OBSERVATION_CHARS_DOC = (
     " Observations are trimmed per entity to a character budget (highest-voted first, omitted count noted); "
-    "max_observation_chars: negative for full detail for the named entity only (related entities keep the "
-    "default budget), 0 for the top observation only, positive for a custom budget."
+    "max_observation_chars: <0 full detail for the named entity only (related ones keep the default), "
+    "0 top observation only, >0 custom budget."
 )
-_RELATIONS_WIRE_DOC = ' Relations are returned as "source relation-type target" strings.'
+_RELATIONS_WIRE_DOC = ' Relations: "source relation-type target" strings.'
 CREATE_ENTITIES_DESC = (
-    "Create new entities with observations in a project. "
-    "Raises if any entity name already exists in that project - use add_observations to "
-    "append to an existing entity instead. "
-    "Valid entity types: project, feature, task, user-preferences, pattern, knowledge. "
-    "Each entity name MUST start with its type prefix (e.g. task/<id>, feature/<area>); "
-    "a 'project' entity MUST be named exactly 'project/<project>' (one root per scope, "
-    "auto-created on first write; if its name does not match the repo, rename_entity it, "
-    "never add a second root). "
-    "Name forms: feature/<project>/<area>, task/<TICKET-ID>-<slug> (name an investigation "
-    "for its ticket, not its symptom), user-preferences/<alias>-<topic>, pattern/<short-noun>. "
-    "Unless entityType is project, pass non-empty relations inline (see create_relations for "
-    "which type to pick) - without them nothing is created. "
+    "Create entities with observations in a project. Raises if a name already exists there - use "
+    "add_observations. Types: project, feature, task, user-preferences, pattern, knowledge. "
+    "A name MUST start with its type prefix (task/<id>, feature/<area>); a 'project' entity MUST be named "
+    "exactly 'project/<project>' (one root per scope, auto-created on first write; if misnamed, rename_entity "
+    "it, never add a second root). "
+    "Name forms: feature/<project>/<area>, task/<TICKET-ID>-<slug> (name an investigation for its ticket, "
+    "not its symptom), user-preferences/<alias>-<topic>, pattern/<short-noun>. "
+    "Unless entityType is project, pass non-empty relations inline (types: see create_relations) - without "
+    "them nothing is created. "
     "Observation wording, provenance and what not to store: see add_observations. "
-    "Set `status` via the `status` argument, never as a `STATUS:` observation. "
-    "Pass `location`, the filesystem path the entity is about. If that path belongs to another project, "
-    "the reply adds a `scopeWarning`, and the entity is still saved where you asked. "
-    "The server records each observation's timestamp; do NOT embed a date/timestamp in the text."
+    "Set `status` via the argument, never a `STATUS:` observation. "
+    "Pass `location`, the path the entity is about: a path in another project adds a `scopeWarning`, and the "
+    "entity is still saved where you asked. "
+    "No dates in the text: the server timestamps observations."
 )
 SEARCH_NODES_DESC = (
-    "Search entities and relations by text query within a project. "
-    "Uses FTS5 full-text search with BM25 relevance ranking, weighted by type-aware recency "
-    "(durable types like pattern/knowledge decay slower than task) and by usefulness votes "
-    "(see vote: upvoted entities rank higher, downvoted ones sink but stay findable). "
-    "A multi-word query matches entities containing ANY of the terms by default, with "
-    "entities matching more terms ranked first; pass match_all=true to require ALL terms. "
-    "Optionally filter by entityType, status (a single value or a list, OR'd together), "
-    "and/or date range (start/end support relative formats like '30m', '1h', '7d', '2w', "
-    "'3mo' and ISO dates). "
-    "Archived entities are hidden unless status explicitly asks for them or "
-    "include_archived=true is passed. "
-    "Within each returned entity, observations are ordered best-first by their own votes "
-    "(see vote). Each observation carries a content_hash usable with "
-    "vote, delete_observations, and merge_observations to address it without "
-    "pasting its full content. Use compact=true to omit observations for a lightweight summary. "
+    "Search a project's entities and relations (FTS5 BM25, weighted by type-aware recency - pattern/knowledge "
+    "decay slower than task - and by votes: upvoted rank higher, downvoted sink but stay findable). "
+    "A multi-word query matches ANY term, more matches first; match_all=true requires ALL. "
+    "Filter by entityType, status (a value or list, OR'd) and/or start/end ('30m', '1h', '7d', '2w', '3mo' "
+    "or ISO). Archived entities are hidden unless status asks for them or include_archived=true. "
+    "Observations come best-voted first, each with a content_hash for vote, delete_observations and "
+    "merge_observations. compact=true omits observations. "
     "Repeats are hashes in `seen` (include_seen=true for text). "
     "A hyphenated term (auth-service) is one token and will not match authservice - use bare "
     "keywords and retry variants before concluding nothing exists." + _MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
 READ_GRAPH_DESC = (
-    "Get the most recent entities and their relations for a project. "
-    "Returns up to 10 recent entities ordered by creation time. "
-    "Use compact=true to omit observations for a lightweight summary."
-    + _MAX_OBSERVATION_CHARS_DOC
-    + _RELATIONS_WIRE_DOC
+    "Get a project's 10 most recent entities (by creation time) with relations. "
+    "compact=true omits observations." + _MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
 CREATE_RELATIONS_DESC = (
     "Create relations between entities in a project. "
-    "Relations are the core of the graph model. "
     "Prefer a specific type over relates-to: task implements feature (none fits: create one in the "
     "task's create_entities call), task depends-on task, feature part-of project, pattern used-in project."
 )
 DELETE_ENTITY_DESC = (
-    "Soft-delete an entity with its observations and relations (restorable with restore_entity until a "
+    "Soft-delete an entity with its observations and relations (restore_entity undoes it until a "
     "grace-window purge). Use sparingly for stale, incorrect or misleading memory - prefer marking it deprecated "
-    "or a downvote unless it would mislead. Refused while it has live incoming relations or live implements or "
-    "depends-on relations - delete or retarget those first, then retry."
+    "or a downvote unless it would mislead. Refused while it has live incoming, implements or depends-on "
+    "relations - delete or retarget those first, then retry."
 )
 DELETE_RELATION_DESC = (
-    "Soft-delete a relation (restorable with restore_relation until a grace-window purge). "
-    "Use sparingly, for a wrong or misleading relation."
+    "Soft-delete a wrong or misleading relation, sparingly (restore_relation undoes it until a grace-window purge)."
 )
 RESTORE_ENTITY_DESC = (
-    "Restore a soft-deleted entity (a delete_entity target or a merge_entities loser). "
+    "Restore a soft-deleted entity (a delete_entity target or merge_entities loser). "
     "Observations and relations deleted separately beforehand stay deleted."
 )
 RESTORE_OBSERVATIONS_DESC = (
@@ -321,24 +305,21 @@ RESTORE_OBSERVATIONS_DESC = (
 )
 RESTORE_RELATION_DESC = "Restore a soft-deleted relation between two live entities. Throws if it never existed."
 GET_ENTITY_WITH_RELATIONS_DESC = (
-    "Get an entity along with all its relations and related entities within a project. "
-    "Traverses the graph to discover linked context. "
+    "Get an entity with all its relations and related entities in a project. "
     "Optionally filter by entityType and/or relationType." + _TARGET_MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
 ADD_OBSERVATIONS_DESC = (
-    "Append observations to an existing entity, skipping duplicates. "
-    "Throws if the entity does not exist. Returns the added content hashes. "
-    "To reorder by usefulness instead of adding, see vote. "
-    "If this replaces or contradicts an observation, search_nodes then edit_observation instead. "
+    "Append observations to an existing entity (throws if missing), skipping duplicates; returns the added "
+    "content hashes. To reorder by usefulness, vote. To replace or contradict an observation, search_nodes "
+    "then edit_observation. "
     "One atomic fact per observation, on the entity it concerns - create one rather than "
     "dump onto an unrelated entity. MUST store only what code and git can't show: a decision "
     "and why, gotcha, preference, where something lives, external outcome (merge, deploy). "
-    "MUST NOT store: implementation narration ('Added X'), content duplicating rules "
-    "or skills, session logs, global file paths, ephemeral status, commit SHAs, retired-tool "
-    "workarounds. Rationale goes in its own observation. "
+    "MUST NOT store: implementation narration ('Added X'), rule or skill duplicates, session logs, global file "
+    "paths, ephemeral status, commit SHAs, retired-tool workarounds. Rationale goes in its own observation. "
     "Memory holds the why: for what changed or how it works, read the code and git log/git blame. "
     "Past ~30 observations, extract focused pattern/ entities. "
-    "Do NOT embed a date: the server timestamps each observation. "
+    "No dates: the server timestamps each observation. "
     "provenance: user (the user said, asked, decided or corrected it), observed (you read or ran it) or "
     "inferred (unchecked). One provenance per call. "
     "triggers ({kind, value, tool?}) make a hook surface the observations: pattern (regex over a tool call's "
@@ -348,125 +329,99 @@ ADD_OBSERVATIONS_DESC = (
 )
 DELETE_OBSERVATIONS_DESC = (
     "Soft-delete observations by exact content (observations) and/or content_hash (observationHashes - cheaper). "
-    "Returns the count and hashes deleted (restorable with restore_observations until a grace-window purge). "
-    "Throws if the entity does not exist. "
+    "Returns the count and hashes (restore_observations undoes it until a grace-window purge). "
+    "Throws if the entity is missing. "
     "Downvote a stale observation instead. Delete only an outright wrong one. To correct one, use edit_observation."
 )
 EDIT_OBSERVATION_DESC = (
     "Edit one observation in place by content_hash, keeping its votes and timestamp. "
-    "Prefer oldText: its single exact match is replaced with newText; without oldText, newText "
-    "replaces the whole content. Returns the new content_hash. Raises if nothing matches, "
-    "oldText matches more than once, or the result duplicates another observation. "
+    "Prefer oldText (its single exact match becomes newText); without it, newText "
+    "replaces the whole content. Returns the new content_hash. Raises on no match, a repeated oldText match, "
+    "or a result duplicating another observation. "
     "Pass provenance only if the origin changes. Passed triggers (see add_observations) replace the observation's."
 )
 TRIM_OBSERVATIONS_TO_OUTCOME_DESC = (
-    "Soft-delete all observations on an entity except those in keep_hashes (content_hash). "
-    "Use to trim an oversized resolved entity down to its ask, a decision and why, and any outcome line. "
-    "keep_hashes must be non-empty. Returns the count and hashes trimmed (restorable with restore_observations "
-    "until a grace-window purge)."
+    "Soft-delete all observations on an entity except keep_hashes (content_hash, non-empty), to trim an "
+    "oversized resolved entity to its ask, a decision and why, and any outcome line. Returns the count and "
+    "hashes trimmed (restore_observations undoes it until a grace-window purge)."
 )
 RENAME_ENTITY_DESC = (
-    "Rename a single entity in place within a project scope. "
-    "All relations and observations are preserved (relations key on entity id, not name). "
-    "Fails if new_name already exists in the scope, or would collide across the global/project "
-    "name-uniqueness boundary. A different valid type prefix also changes the type; a "
-    "non-project type needs a relation first."
+    "Rename an entity in place within a project scope, keeping relations and observations. "
+    "Fails if new_name exists in the scope or collides across the global/project name-uniqueness boundary. "
+    "A different valid type prefix also changes the type; a non-project type needs a relation first."
 )
 MOVE_ENTITY_CROSS_SCOPE_DESC = (
-    "Move one entity from one project scope to another. "
-    "Because relations cannot span scopes, ALL of the entity's relations are dropped and returned "
-    "(as droppedRelations) so the caller can recreate the appropriate ones in the target scope. "
-    "Fails if an entity with the same name already exists in the target scope. "
+    "Move one entity to another project scope. Relations cannot span scopes, so ALL its relations are dropped "
+    "and returned (droppedRelations) to recreate in the target. Fails if the target has an entity with the "
+    "same name. "
     "Where a found entity's scope does not match its subject, fix it with this tool BEFORE "
     "appending to it, then recreate a relation before the next `create_entities` touch."
 )
 SET_ENTITY_STATUS_DESC = (
-    "Set or clear the status of an entity. "
-    "Valid statuses: planned, in-progress, blocked, resolved, archived. Use null to clear. "
-    "archived entities are hidden from search_nodes/search_all_projects by default; pass "
-    "status='archived' or include_archived=true to see them. "
+    "Set or clear (null) an entity's status: planned, in-progress, blocked, resolved, archived. "
+    "archived entities are hidden from search_nodes/search_all_projects unless status='archived' or "
+    "include_archived=true; archived hides, never deletes - get_entity_with_relations still fetches it. "
     "This is the only correct way to record status; a `STATUS:` observation is wrong. "
-    "Set resolved when the task completes. archived hides, never deletes - "
-    "get_entity_with_relations still fetches it. A resolved entity untouched for 56 days "
+    "Set resolved when the task completes. A resolved entity untouched for 56 days "
     "auto-archives unless it was ever surfaced and used in a search."
 )
 VOTE_DESC = (
-    "Record a usefulness vote as you retrieve a memory: a positive vote for one that proved "
-    "useful, a negative vote for one that was stale or unhelpful. The vote's magnitude sets its "
-    "strength: +3/-3 for a direct user instruction, +1/-1 otherwise. Cast it in one call instead "
-    "of looping. Omit observation and "
-    "observationHash to vote on the entity, or pass exactly one (observationHash, from "
+    "Record a usefulness vote as you retrieve a memory: positive if useful, negative if stale or unhelpful. "
+    "Magnitude sets strength: +3/-3 for a direct user instruction, +1/-1 otherwise, in one call, not a loop. "
+    "Omit observation and observationHash to vote on the entity, or pass exactly one (observationHash, from "
     "read output, saves tokens) to vote on that observation. Votes nudge ranking (unhelpful memories "
-    "sink but stay findable) without changing content or updated_at. A vote is a light alternative to "
-    "delete_entity/delete_observations for memory not wrong enough to remove. vote "
-    "must be a nonzero integer from -3 to 3; returns the new net vote_score. "
+    "sink but stay findable) without changing content or updated_at - a light alternative to "
+    "delete_entity/delete_observations for memory not wrong enough to remove. "
+    "vote: a nonzero integer from -3 to 3; returns the new net vote_score. "
     "Prefer a downvote over deleting an entity. "
     "Show vote_score to the user as stars (e.g. \u26053), not the raw number."
 )
-GET_PROJECT_FOR_PATH_DESC = (
-    "Return the project whose registered path contains the given filesystem path, "
-    "or null if none match. The longest matching registered path wins."
-)
-GET_GROUP_MEMBERS_DESC = (
-    "Return the other projects sharing a group with the given project, or an empty list if "
-    "the project belongs to no group."
-)
+GET_PROJECT_FOR_PATH_DESC = "Return the project whose registered path contains the path (longest match wins), or null."
+GET_GROUP_MEMBERS_DESC = "Return the other projects sharing a group with the project, or an empty list."
 LIST_METADATA_DESC = (
-    "List registry metadata. kind='projects' returns every project name in the knowledge "
-    "graph (project is ignored). kind='paths': omit project to list all (project, path) "
-    "mappings, or pass project to get just that project's registered filesystem path(s). "
-    "kind='groups': omit project to list all (project, group) mappings, or pass project to "
-    "get just that project's registered group name(s). kind='retention': omit project to "
-    "list all (project, setting, days) rows, or pass project to get just that project's "
-    "settings. Returns an error listing valid kinds if kind is not one of 'projects', "
-    "'paths', 'groups', 'retention'."
+    "List registry metadata. kind='projects': every project name (project is ignored). "
+    "kind='paths', 'groups' or 'retention': omit project for all (project, path), (project, group) or "
+    "(project, setting, days) rows, or pass project for just its own. "
+    "Returns an error listing valid kinds ('projects', 'paths', 'groups', 'retention') if kind is invalid."
 )
 SET_METADATA_DESC = (
     "Change a project's registry metadata. Prefer add/remove (remove applies first); values "
     "replaces the whole list and cannot be combined with them. "
-    "kind='paths' registers filesystem paths for the "
-    "project (when the working directory falls under a registered path, that project becomes "
-    "the active memory scope; a path can belong to only one project) and returns the "
-    "project's resulting paths. kind='groups' registers the groups the project belongs to "
-    "(e.g. sibling repos in one tooling system, resolved via get_group_members) and returns "
-    "the project's resulting group members. kind='retention' sets per-project retention as "
-    "'<setting>=<days>' entries. Settings: purge_grace, surfaced_retention, orphan_gc. "
-    "Negative days means never. remove takes setting names. Auto-creates the project's root "
-    "entity for paths and groups if needed. Returns an error listing valid kinds if kind is "
-    "not one of 'paths', 'groups', 'retention'."
+    "kind='paths' registers filesystem paths (a working directory under one makes that project the active "
+    "memory scope; a path belongs to one project) and returns the project's paths. "
+    "kind='groups' registers its groups (e.g. sibling repos, resolved via get_group_members) and returns its "
+    "group members. kind='retention' sets '<setting>=<days>' entries (purge_grace, surfaced_retention, "
+    "orphan_gc; negative days means never; remove takes setting names). "
+    "Auto-creates the project's root entity for paths and groups if needed. "
+    "Returns an error listing valid kinds ('paths', 'groups', 'retention') if kind is invalid."
 )
 DELETE_PROJECT_DESC = (
-    "Delete an empty project and its registered paths. Refuses to delete the 'global' "
-    "project or any project that still has entities - delete those entities first."
+    "Delete an empty project and its registered paths. "
+    "Refuses 'global' or any project with entities - delete those first."
 )
 MOVE_PROJECT_ENTITIES_DESC = (
-    "Move all entities (with their observations and relations) from one project scope into "
-    "another. Useful for consolidating a mis-scoped folder-name project into its real project. "
-    "Fails if any entity name exists in both scopes."
+    "Move all entities (with observations and relations) from one project scope into another, e.g. to fold a "
+    "mis-scoped folder-name project into its real one. Fails if any entity name exists in both."
 )
 MERGE_ENTITIES_DESC = (
-    "Fold a duplicate entity (source) into its canonical twin (target) within one project. "
-    "The source's observations are copied onto the target (deduped, keeping their votes), all "
-    "the source's relations are repointed to the target (self-loops and duplicates dropped), "
-    "the target keeps the higher of the two vote scores, and the source is SOFT-DELETED. The "
-    "merge is reversible: restore_entity brings the source back until a grace-window purge. "
-    "Both entities must already exist in the same project."
+    "Fold a duplicate entity (source) into its canonical twin (target) in one project: observations copied "
+    "(deduped, keeping votes), relations repointed (self-loops and duplicates dropped), the target keeps the "
+    "higher vote score, the source is SOFT-DELETED (restore_entity undoes it until a grace-window purge). "
+    "Both must exist in the project."
 )
 MERGE_OBSERVATIONS_DESC = (
     "Fold a duplicate observation (source) into another (target) WITHIN THE SAME ENTITY, by content_hash. "
-    "The target keeps the higher vote score and its own timestamp. The source is soft-deleted (its hash is "
-    "returned, restorable with restore_observations until a grace-window purge, without lowering the target's "
-    "vote score). Raises if either hash matches no observation or the hashes are "
-    "equal. Only for genuine duplicates: for a merely more useful one, use `vote`."
+    "The target keeps the higher vote score and its own timestamp. The source is soft-deleted and its hash "
+    "returned (restore_observations undoes it until a grace-window purge, without lowering the target's "
+    "vote score). Raises if either hash matches no observation or the hashes are equal. "
+    "Only for genuine duplicates: for a merely more useful one, use `vote`."
 )
 
 SEARCH_ALL_PROJECTS_DESC = (
-    "Search entities and relations across ALL projects in a single call, with the same query, ranking, "
-    "filter, compact and archived semantics as search_nodes. "
-    "Returns results grouped by project name. "
-    "Pass projects to narrow the scan to specific project names instead of every project. "
-    "Add expand_groups=true to also union each named project with its group siblings "
-    "(resolved server-side via get_group_members); it requires projects to be set. "
+    "Search ALL projects in one call, with search_nodes's query, ranking, "
+    "filter, compact and archived semantics. Results are grouped by project. "
+    "projects narrows the scan. expand_groups=true also unions each named project's group siblings "
+    "(via get_group_members) and requires projects. "
     'names_only=true returns just "name status" strings per project.' + _MAX_OBSERVATION_CHARS_DOC + _RELATIONS_WIRE_DOC
 )
 
