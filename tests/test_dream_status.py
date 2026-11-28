@@ -292,6 +292,15 @@ class TestRecordAndRead:
         assert status["last_pass"] is not None
         assert status["last_pass"]["operations"][0]["name"] == "task/x"
 
+    def test_write_keeps_on_disk_configs_for_tiers_this_process_has_not_recorded(self) -> None:
+        for tier in ("light", "heavy"):
+            dream_status.record_startup(tier=tier, enabled=True, idle_threshold_seconds=1.0, poll_seconds=1.0)
+        dream_status.clear()  # a separate process starts with empty in-memory configs
+        dream_status.record_pass("nothing demoted", ok=True)
+        status = dream_status.read_status()
+        assert status is not None
+        assert set(status["configs"]) == {"light", "heavy"}
+
     def test_corrupt_file_reads_as_none(self) -> None:
         path = dream_status._status_path()
         path.parent.mkdir(parents=True, exist_ok=True)
