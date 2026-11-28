@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 import functools
 import getpass
+from importlib.metadata import version
 import json
 import os
 from pathlib import Path
@@ -1289,6 +1290,7 @@ def _add_utils_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(prog="mcp-memory", description="MCP memory server")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {version('mcp-memory')}")
     sub = parser.add_subparsers(dest="command")
 
     setup = sub.add_parser("setup-service", help="Install as a persistent background service")
