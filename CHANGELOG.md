@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/alexfayers/mcp-memory/compare/v0.7.0...v0.7.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **dream:** keep on-disk tier configs when another process writes status ([#270](https://github.com/alexfayers/mcp-memory/issues/270)) ([78e75dd](https://github.com/alexfayers/mcp-memory/commit/78e75dd35e6b6c7e8748fb24341c9b63fe53ba46))
+
 ## [0.7.0](https://github.com/alexfayers/mcp-memory/compare/v0.6.0...v0.7.0) (2026-11-28)
 
 
