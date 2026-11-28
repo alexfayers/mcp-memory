@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import UTC, datetime
 import functools
+from importlib.metadata import version
 import io
 import json
 import os
@@ -25,6 +26,19 @@ def _eval_since_help() -> str:
         a for a in utils._subparsers._group_actions[0].choices["eval"]._actions if "--since" in a.option_strings
     )
     return str(action.help)
+
+
+class TestVersion:
+    def test_prints_the_installed_version(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(cli.sys, "argv", ["mcp-memory", "--version"])
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+        assert capsys.readouterr().out == f"mcp-memory {version('mcp-memory')}\n"
 
 
 class TestUtilsGroup:
