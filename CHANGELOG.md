@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0](https://github.com/alexfayers/mcp-memory/compare/v0.6.0...v0.7.0) (2026-11-28)
+
+
+### Features
+
+* **audit:** clean up observation labels that repeat their date or provenance ([#251](https://github.com/alexfayers/mcp-memory/issues/251)) ([7e271f4](https://github.com/alexfayers/mcp-memory/commit/7e271f4d528d5e59dddbf5f57b7967aec59670f3))
+* **cli:** add a --version flag that prints the installed version ([#266](https://github.com/alexfayers/mcp-memory/issues/266)) ([b669791](https://github.com/alexfayers/mcp-memory/commit/b669791c2cacec9e94e149192011083408c55f31))
+* **cli:** add a teardown command that removes the service and the agent config entries ([#248](https://github.com/alexfayers/mcp-memory/issues/248)) ([03f806f](https://github.com/alexfayers/mcp-memory/commit/03f806f5aaca1b91220deb2bfccdcef946325eeb))
+* **cli:** let teardown cover opencode and only the chosen agents ([#256](https://github.com/alexfayers/mcp-memory/issues/256)) ([ba4d4ab](https://github.com/alexfayers/mcp-memory/commit/ba4d4abe3b335675dae215cfca4a457f498acda2))
+* **cli:** skip the background service when MCP_MEMORY_NO_SERVICE=1 ([#260](https://github.com/alexfayers/mcp-memory/issues/260)) ([663b15b](https://github.com/alexfayers/mcp-memory/commit/663b15b0057926a46cd3dfdc7a9fb75570681a5a))
+* **hooks:** block memory writes from subagents ([#249](https://github.com/alexfayers/mcp-memory/issues/249)) ([8c6cf73](https://github.com/alexfayers/mcp-memory/commit/8c6cf73f9b7cc8b0cc8718a0047357924d0c73cf))
+* **maintenance:** set retention windows per project scope ([#259](https://github.com/alexfayers/mcp-memory/issues/259)) ([27d22a3](https://github.com/alexfayers/mcp-memory/commit/27d22a3a0fec4071bd52ccf632b717d2fd1e6d33))
+* **server:** suggest close entity names and show expected arguments on bad calls ([#264](https://github.com/alexfayers/mcp-memory/issues/264)) ([62aebe8](https://github.com/alexfayers/mcp-memory/commit/62aebe86759dcc59982032be046bab2d826ed47e))
+* **storage:** strip redundant date, time and provenance labels on write ([#252](https://github.com/alexfayers/mcp-memory/issues/252)) ([41d272f](https://github.com/alexfayers/mcp-memory/commit/41d272feea760956baf8d4034f9ee0baea4f8fa1))
+
 ## [0.6.0](https://github.com/alexfayers/mcp-memory/compare/v0.5.0...v0.6.0) (2026-11-27)
 
 
