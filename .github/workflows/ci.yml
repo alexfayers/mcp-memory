@@ -156,7 +156,7 @@ jobs:
     if: github.head_ref != 'release-please--branches--main'
     permissions:
       contents: read
-    uses: alexfayers/llm-prompts-ci/.github/workflows/upgrade-smoke.yml@main
+    uses: alexfayers/llm-prompts-ci/.github/workflows/upgrade-smoke.yml@alexfayers/upgrade-smoke-cline-hooks-check
     with:
       repo: mcp-memory
 
