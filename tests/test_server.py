@@ -757,6 +757,25 @@ class TestAddObservationsTool:
         observations = tools.get_entity_with_relations("proj", "e2")["entity"]["observations"]
         assert {o["content"]: o.get("from") for o in observations} == {"a": "user", "b": "observed"}
 
+    def test_a_missing_entity_suggests_the_closest_names(self, server_db: Storage) -> None:
+        names = ["user-preferences/a-ci", "user-preferences/a-git", "user-preferences/a-tests", "pattern/other"]
+        server_db.entities.create(
+            "proj", [{"name": n, "entityType": n.split("/")[0], "observations": ["x"]} for n in names]
+        )
+        server_db.entities.create(
+            "other", [{"name": "user-preferences/b-elsewhere", "entityType": "user-preferences", "observations": ["x"]}]
+        )
+        error = tools.add_observations("proj", "user-preferences", ["b"])["error"]
+        assert error == (
+            "Entity 'user-preferences' not found in project 'proj'. "
+            "Did you mean: 'user-preferences/a-ci', 'user-preferences/a-git', 'user-preferences/a-tests'?"
+        )
+        assert "Did you mean: 'pattern/other'?" in tools.set_entity_status("proj", "pattern/othr", "resolved")["error"]
+        assert "Did you mean: 'pattern/other'?" in tools.get_entity_with_relations("proj", "pattern/othr")["error"]
+        tools.delete_entity("proj", "pattern/other")
+        assert "Did you mean: 'pattern/other'?" in tools.restore_entity("proj", "pattern/othr")["error"]
+        assert tools.add_observations("proj", "zzz", ["b"])["error"] == "Entity 'zzz' not found in project 'proj'"
+
     def test_a_duplicate_write_compares_each_row_by_id(self, server_db: Storage) -> None:
         server_db.entities.create("proj", [{"name": "e1", "entityType": "task", "observations": ["a"]}])
         server_db.connection.write(

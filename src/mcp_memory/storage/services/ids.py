@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -52,3 +53,44 @@ def get_entity_type_name(connection: Connection, entity_id: int) -> str:
     )
     assert row is not None
     return str(row["name"])
+
+
+_MAX_SUGGESTIONS = 3
+
+
+def entity_not_found(
+    connection: Connection,
+    name: str,
+    project: str,
+    project_id: int,
+    label: str = "Entity",
+    *,
+    deleted: bool = False,
+) -> ValueError:
+    """Build a not-found error naming up to three entities in the project closest to ``name``.
+
+    Names that extend ``name`` as a path prefix (``name/...``) come first, then the closest by spelling.
+    ``deleted`` suggests soft-deleted entities instead of live ones.
+    """
+    state = "deleted_at IS NOT NULL" if deleted else "deleted_at IS NULL"
+    suggestions = [
+        str(row["name"])
+        for row in connection.query_all(
+            f"SELECT name FROM entities WHERE project_id = ? AND {state} AND name >= ? AND name < ? "
+            "ORDER BY name LIMIT ?",
+            (project_id, f"{name}/", f"{name}0", _MAX_SUGGESTIONS),
+        )
+    ]
+    if len(suggestions) < _MAX_SUGGESTIONS:
+        names = [
+            str(row["name"])
+            for row in connection.query_all(
+                f"SELECT name FROM entities WHERE project_id = ? AND {state}", (project_id,)
+            )
+        ]
+        suggestions += difflib.get_close_matches(name, names, n=_MAX_SUGGESTIONS)
+    suggestions = list(dict.fromkeys(suggestions))[:_MAX_SUGGESTIONS]
+    message = f"{label} '{name}' not found in project '{project}'"
+    if not suggestions:
+        return ValueError(message)
+    return ValueError(f"{message}. Did you mean: {', '.join(repr(n) for n in suggestions)}?")

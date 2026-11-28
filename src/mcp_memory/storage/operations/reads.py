@@ -17,7 +17,7 @@ from mcp_memory.storage.pure.ranking import (
 from mcp_memory.storage.pure.rows import build_entity
 from mcp_memory.storage.pure.sql import parse_date, placeholders
 from mcp_memory.storage.services.fts import sanitize_fts_query
-from mcp_memory.storage.services.ids import get_entity_id, get_project_id
+from mcp_memory.storage.services.ids import entity_not_found, get_entity_id, get_project_id
 
 if TYPE_CHECKING:
     from mcp_memory.models import Entity, EntityStatus, Observation, Relation
@@ -157,6 +157,8 @@ class Reads:
                 (name, project_id),
             )
         if row is None:
+            if project_id is not None:
+                raise entity_not_found(self._conn, name, project, project_id)
             raise ValueError(f"Entity '{name}' not found in project '{project}'")
         return self._hydrate_entity(row, row["id"], compact=compact, max_observation_chars=max_observation_chars)
 

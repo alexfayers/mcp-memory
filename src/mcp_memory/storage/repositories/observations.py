@@ -20,7 +20,7 @@ from mcp_memory.storage.pure.rows import (
 )
 from mcp_memory.storage.pure.sql import placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
-from mcp_memory.storage.services.ids import get_entity_id, get_or_create_project_id
+from mcp_memory.storage.services.ids import entity_not_found, get_entity_id, get_or_create_project_id
 from mcp_memory.storage.services.provenance import raise_provenance
 from mcp_memory.storage.services.triggers import add_triggers, copy_triggers, triggers_of
 
@@ -81,7 +81,7 @@ class ObservationRepository:
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, entity_name, project_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, entity_name, project, project_id)
 
         observations = [strip_redundant_labels(obs, provenance)[0] for obs in observations]
         rows = self._conn.query_all(
@@ -189,9 +189,10 @@ class ObservationRepository:
         return [str(row["content_hash"]) for row in rows]
 
     def _require_entity_id(self, project: str, entity_name: str) -> int:
-        entity_id = get_entity_id(self._conn, entity_name, get_or_create_project_id(self._conn, project))
+        project_id = get_or_create_project_id(self._conn, project)
+        entity_id = get_entity_id(self._conn, entity_name, project_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, entity_name, project, project_id)
         return entity_id
 
     def refuse_user_loss(
@@ -277,7 +278,7 @@ class ObservationRepository:
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, entity_name, project_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, entity_name, project, project_id)
 
         with self._conn.transaction():
             cursor = self._conn.write(
@@ -306,7 +307,7 @@ class ObservationRepository:
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, entity_name, project_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, entity_name, project, project_id)
 
         self._find_by_hash(entity_id, entity_name, source_hash, "Source observation")
         self._find_by_hash(entity_id, entity_name, target_hash, "Target observation")
@@ -350,7 +351,7 @@ class ObservationRepository:
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, entity_name, project_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{entity_name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, entity_name, project, project_id)
 
         row = self._find_by_hash(entity_id, entity_name, content_hash, "Observation")
         content = str(row["content"])
