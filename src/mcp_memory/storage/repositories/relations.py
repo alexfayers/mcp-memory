@@ -9,6 +9,7 @@ from mcp_memory.models import VALID_RELATION_TYPES, Relation, normalize_relation
 from mcp_memory.storage.pure.rows import build_relation
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.ids import (
+    entity_not_found,
     get_entity_id,
     get_entity_type_name,
     get_or_create_project_id,
@@ -60,10 +61,10 @@ class RelationRepository:
                     raise ValueError(f"Self-referential relation not allowed: '{relation.source}'")
                 source_id = get_entity_id(self._conn, relation.source, project_id)
                 if source_id is None:
-                    raise ValueError(f"Source entity '{relation.source}' not found in project '{project}'")
+                    raise entity_not_found(self._conn, relation.source, project, project_id, "Source entity")
                 target_id = get_entity_id(self._conn, relation.target, project_id)
                 if target_id is None:
-                    raise ValueError(f"Target entity '{relation.target}' not found in project '{project}'")
+                    raise entity_not_found(self._conn, relation.target, project, project_id, "Target entity")
                 source_type = get_entity_type_name(self._conn, source_id)
                 target_type = get_entity_type_name(self._conn, target_id)
                 if source_type == "task" and target_type == "project" and relation.relation_type == "belongs-to":
@@ -97,10 +98,10 @@ class RelationRepository:
         project_id = get_or_create_project_id(self._conn, project)
         source_id = get_entity_id(self._conn, source, project_id)
         if source_id is None:
-            raise ValueError(f"Source entity '{source}' not found in project '{project}'")
+            raise entity_not_found(self._conn, source, project, project_id, "Source entity")
         target_id = get_entity_id(self._conn, target, project_id)
         if target_id is None:
-            raise ValueError(f"Target entity '{target}' not found in project '{project}'")
+            raise entity_not_found(self._conn, target, project, project_id, "Target entity")
 
         row = self._conn.query_one(
             "SELECT id FROM relation_types WHERE name = ?", (normalize_relation_type(relation_type),)
@@ -135,10 +136,10 @@ class RelationRepository:
         project_id = get_or_create_project_id(self._conn, project)
         source_id = get_entity_id(self._conn, source, project_id)
         if source_id is None:
-            raise ValueError(f"Source entity '{source}' not found in project '{project}'")
+            raise entity_not_found(self._conn, source, project, project_id, "Source entity")
         target_id = get_entity_id(self._conn, target, project_id)
         if target_id is None:
-            raise ValueError(f"Target entity '{target}' not found in project '{project}'")
+            raise entity_not_found(self._conn, target, project, project_id, "Target entity")
 
         with self._conn.transaction():
             cursor = self._conn.write(

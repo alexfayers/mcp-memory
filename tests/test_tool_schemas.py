@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+import re
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -87,6 +88,17 @@ class TestValidationUnchanged:
     def test_wrong_type_argument_is_rejected(self) -> None:
         with pytest.raises(ToolError):
             asyncio.run(server.mcp.call_tool("read_graph", {"project": "p", "compact": "notabool"}))
+
+    def test_a_batch_shaped_call_shows_the_expected_arguments(self) -> None:
+        batch = {"project": "p", "observations": [{"entityName": "e", "contents": ["a"]}]}
+        with pytest.raises(
+            ToolError,
+            match=re.escape(
+                "Expected arguments: project: string, entityName: string, observations: [string], "
+                "provenance?: string, triggers?: [object]"
+            ),
+        ):
+            asyncio.run(server.mcp.call_tool("add_observations", batch))
 
     def test_context_window_arguments_are_accepted_but_hidden_and_include_seen_is_advertised(self) -> None:
         asyncio.run(server.mcp.call_tool("read_graph", {"project": "p", "context_window_id": "w", "context_turn": 1}))

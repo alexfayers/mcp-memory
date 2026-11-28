@@ -14,8 +14,9 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import anyio
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
-from pydantic import WithJsonSchema
+from pydantic import ValidationError, WithJsonSchema
 from starlette.responses import Response
 
 from . import activity, backup, dream, metrics, provenance_backfill, telemetry, usefulness
@@ -118,14 +119,45 @@ def _prune_schema(node: Any) -> Any:
     return pruned
 
 
+def _schema_type(schema: dict[str, Any]) -> str:
+    """Render a JSON schema node as a short type, e.g. ``string`` or ``[object]``."""
+    if schema.get("type") == "array":
+        return f"[{_schema_type(schema.get('items', {}))}]"
+    if "anyOf" in schema:
+        return " | ".join(_schema_type(branch) for branch in schema["anyOf"])
+    return str(schema.get("type", "any"))
+
+
+def _expected_arguments(schema: dict[str, Any]) -> str:
+    """List a tool's arguments with their types, marking optional ones with ``?``."""
+    required = set(schema.get("required", []))
+    return ", ".join(
+        f"{name}{'' if name in required else '?'}: {_schema_type(node)}"
+        for name, node in schema.get("properties", {}).items()
+    )
+
+
 class _PrunedSchemaMCPServer(MCPServer):
-    """MCPServer whose advertised tool input schemas omit tokens the client does not need."""
+    """MCPServer whose advertised tool input schemas omit tokens the client does not need.
+
+    A call whose arguments fail validation gets the tool's expected arguments appended to its error.
+    """
 
     async def list_tools(self) -> list[Tool]:
         return [
             tool.model_copy(update={"input_schema": _prune_schema(tool.input_schema)})
             for tool in await super().list_tools()
         ]
+
+    async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        try:
+            return await super().call_tool(name, arguments, context)
+        except ToolError as exc:
+            tool = self._tool_manager.get_tool(name)
+            if tool is None or isinstance(exc, UnexpectedToolError) or not isinstance(exc.__cause__, ValidationError):
+                raise
+            schema = _prune_schema(tool.parameters)
+            raise ToolError(f"{exc}\nExpected arguments: {_expected_arguments(schema)}") from exc.__cause__
 
 
 mcp = _PrunedSchemaMCPServer("mcp-memory")

@@ -17,7 +17,12 @@ from mcp_memory.path_resolver import normalize_path
 from mcp_memory.storage.pure.rows import build_relation, hash_observation, strip_redundant_labels
 from mcp_memory.storage.pure.sql import REVIVE_RELATION_ON_CONFLICT, placeholders
 from mcp_memory.storage.services.fts import refresh_for_entity
-from mcp_memory.storage.services.ids import get_entity_id, get_or_create_entity_type_id, get_or_create_project_id
+from mcp_memory.storage.services.ids import (
+    entity_not_found,
+    get_entity_id,
+    get_or_create_entity_type_id,
+    get_or_create_project_id,
+)
 from mcp_memory.storage.services.integrity import orphaned_neighbors_if_entity_deleted
 from mcp_memory.storage.services.provenance import raise_provenance
 from mcp_memory.storage.services.triggers import copy_triggers
@@ -110,7 +115,7 @@ class EntityRepository:
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, old_name, project_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{old_name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, old_name, project, project_id)
 
         if get_entity_id(self._conn, new_name, project_id) is not None:
             raise ValueError(f"Entity '{new_name}' already exists in project '{project}'")
@@ -140,7 +145,7 @@ class EntityRepository:
         target_id = get_or_create_project_id(self._conn, target_project)
         entity_id = get_entity_id(self._conn, name, source_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{name}' not found in project '{source_project}'")
+            raise entity_not_found(self._conn, name, source_project, source_id)
 
         if get_entity_id(self._conn, name, target_id) is not None:
             raise ValueError(f"Entity '{name}' already exists in project '{target_project}'")
@@ -193,7 +198,7 @@ class EntityRepository:
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, name, project_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, name, project, project_id)
 
         with self._conn.transaction():
             self._conn.write("UPDATE entities SET status = ? WHERE id = ?", (status, entity_id))
@@ -215,7 +220,7 @@ class EntityRepository:
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, name, project_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, name, project, project_id)
 
         with self._conn.transaction():
             self._conn.write(
@@ -234,7 +239,7 @@ class EntityRepository:
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, name, project_id)
         if entity_id is None:
-            raise ValueError(f"Entity '{name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, name, project, project_id)
 
         incoming = self._conn.query_all(
             "SELECT e.name FROM relations r "
@@ -310,7 +315,7 @@ class EntityRepository:
         project_id = get_or_create_project_id(self._conn, project)
         entity_id = get_entity_id(self._conn, name, project_id, include_deleted=True)
         if entity_id is None:
-            raise ValueError(f"Entity '{name}' not found in project '{project}'")
+            raise entity_not_found(self._conn, name, project, project_id, deleted=True)
         with self._conn.transaction():
             self._conn.write("UPDATE entities SET deleted_at = NULL WHERE id = ?", (entity_id,))
 
@@ -329,10 +334,10 @@ class EntityRepository:
         project_id = get_or_create_project_id(self._conn, project)
         source_id = get_entity_id(self._conn, source, project_id)
         if source_id is None:
-            raise ValueError(f"Source entity '{source}' not found in project '{project}'")
+            raise entity_not_found(self._conn, source, project, project_id, "Source entity")
         target_id = get_entity_id(self._conn, target, project_id)
         if target_id is None:
-            raise ValueError(f"Target entity '{target}' not found in project '{project}'")
+            raise entity_not_found(self._conn, target, project, project_id, "Target entity")
 
         live_sql = "SELECT id, content, provenance FROM observations WHERE entity_id = ? AND deleted_at IS NULL"
         sources = self._conn.query_all(live_sql, (source_id,))
