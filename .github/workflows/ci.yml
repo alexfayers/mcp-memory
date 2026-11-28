@@ -2,10 +2,14 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review, edited, labeled, unlabeled]
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
   push:
     branches:
       - main
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -19,6 +23,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       - run: just lint-check
+      - run: just naming-check
 
   type-check:
     if: github.head_ref != 'release-please--branches--main'
@@ -71,7 +76,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked
-      - run: just test -vv --cov=.
+      - run: just test -vv
       - run: just js-test
 
   benchmark:
@@ -158,14 +163,3 @@ jobs:
     uses: alexfayers/llm-prompts-ci/.github/workflows/upgrade-smoke.yml@main
     with:
       repo: mcp-memory
-
-  pr-template-check:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v7
-      - run: node --test .github/scripts/*.test.js
-      - uses: alexfayers/llm-prompts-ci/.github/actions/pr-template@main
