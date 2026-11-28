@@ -1,6 +1,6 @@
 [project]
 name = "mcp-memory"
-version = "0.7.0"
+version = "0.7.1"
 description = "SQLite-backed persistent memory MCP server with FTS5 search and project scoping"
 readme = "README.md"
 license = "MIT"
