@@ -136,6 +136,14 @@ _WRAPPER_TOOLS_ENV = "MCP_MEMORY_WRAPPER_TOOLS"
 _UNCOUNTED_TOOLS = BOOKKEEPING_TOOLS | SKILL_TOOLS | MESSAGE_TOOLS
 _UNCOUNTED_TOOLS_ENV = "MCP_MEMORY_UNCOUNTED_TOOLS"
 
+_ALLOW_SUBAGENT_WRITES_ENV = "MCP_MEMORY_ALLOW_SUBAGENT_WRITES"
+_SUBAGENT_WRITE_BLOCK = "Subagents MUST NOT write memory. Report this fact to your lead instead."
+
+
+def _blocks_subagent_write(kwargs: dict[str, object], is_write: bool) -> bool:
+    """Return True if a memory write comes from a subagent while subagent writes are blocked."""
+    return is_write and is_subagent(kwargs) and not os.environ.get(_ALLOW_SUBAGENT_WRITES_ENV)
+
 
 def _read_only_agent_types() -> frozenset[str]:
     """Return the agent types exempt from the memory gate, including env overrides."""
@@ -898,12 +906,14 @@ class MemoryPlugin(HooksPlugin):
         return _with_recalled(self._gate_tool_use(**kwargs), kwargs, "change")
 
     def _gate_tool_use(self, **kwargs: object) -> HookResult | None:
+        tool_name = str(kwargs.get("tool_name", ""))
+        parameters = _str_dict(kwargs.get("parameters", {}))
+        if _blocks_subagent_write(kwargs, _is_memory_write(tool_name, parameters)):
+            return HookResult(block=_SUBAGENT_WRITE_BLOCK)
         agent_type = str(kwargs.get("agent_type", ""))
         if _is_exempt_agent(agent_type):
             return None
         task_id = str(kwargs.get("task_id", ""))
-        tool_name = str(kwargs.get("tool_name", ""))
-        parameters = _str_dict(kwargs.get("parameters", {}))
         project_scope = _task_scope(task_id, _str_list(kwargs.get("workspace_roots", [])))
         if _is_memory_write(tool_name, parameters):
             return _check_memory_write(task_id, project_scope, tool_name, parameters)
@@ -927,11 +937,13 @@ class MemoryPlugin(HooksPlugin):
         return result
 
     def _gate_mcp_tool_use(self, **kwargs: object) -> HookResult | None:
+        mcp_tool_name = str(kwargs.get("mcp_tool_name", ""))
+        if _blocks_subagent_write(kwargs, mcp_tool_name in _MEMORY_WRITE_TOOL_NAMES):
+            return HookResult(block=_SUBAGENT_WRITE_BLOCK)
         agent_type = str(kwargs.get("agent_type", ""))
         if _is_exempt_agent(agent_type):
             return None
         task_id = str(kwargs.get("task_id", ""))
-        mcp_tool_name = str(kwargs.get("mcp_tool_name", ""))
         project_scope = _task_scope(task_id, _str_list(kwargs.get("workspace_roots", [])))
         if mcp_tool_name in _MEMORY_WRITE_TOOL_NAMES:
             mcp_arguments = kwargs.get("mcp_arguments", "{}")

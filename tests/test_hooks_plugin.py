@@ -1613,6 +1613,62 @@ class TestReadOnlyAgentExemption:
         assert result is None
 
 
+class TestSubagentMemoryWritesBlocked:
+    @pytest.mark.parametrize("agent_type", ["general-purpose", "Explore"])
+    def test_subagent_write_blocked(self, plugin: MemoryPlugin, agent_type: str) -> None:
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="mcp__memory__add_observations",
+            parameters={},
+            agent_type=agent_type,
+            agent_id="sub1",
+        )
+        assert result is not None
+        assert result.block is not None
+        assert "lead" in result.block
+
+    @pytest.mark.parametrize("agent_type", ["general-purpose", "Explore"])
+    def test_pre_mcp_tool_use_subagent_write_blocked(self, plugin: MemoryPlugin, agent_type: str) -> None:
+        result = plugin.on_hook(
+            "PreMcpToolUse",
+            task_id="t1",
+            mcp_tool_name="create_entities",
+            agent_type=agent_type,
+            agent_id="sub1",
+        )
+        assert result is not None
+        assert result.block is not None
+
+    @pytest.mark.parametrize("hook", ["PreToolUse", "PreMcpToolUse"])
+    def test_subagent_read_allowed(self, plugin: MemoryPlugin, hook: str) -> None:
+        result = plugin.on_hook(
+            hook,
+            task_id="t1",
+            tool_name="mcp__memory__search_nodes",
+            mcp_tool_name="search_nodes",
+            parameters={},
+            agent_id="sub1",
+        )
+        assert result is None or result.block is None
+
+    @pytest.mark.parametrize("tool", ["add_observations", "vote"])
+    def test_main_thread_write_allowed(self, plugin: MemoryPlugin, tool: str) -> None:
+        result = plugin.on_hook("PreToolUse", task_id="t1", tool_name=f"mcp__memory__{tool}", parameters={})
+        assert result is None or result.block is None
+
+    def test_flag_off_allows_subagent_write(self, plugin: MemoryPlugin, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MCP_MEMORY_ALLOW_SUBAGENT_WRITES", "1")
+        result = plugin.on_hook(
+            "PreToolUse",
+            task_id="t1",
+            tool_name="mcp__memory__add_observations",
+            parameters={},
+            agent_id="sub1",
+        )
+        assert result is None or result.block is None
+
+
 class TestSubagentIdentification:
     def test_agent_id_without_agent_type_is_subagent(self, plugin: MemoryPlugin) -> None:
         with patch("mcp_memory.hooks.plugin.should_block", return_value=True):
