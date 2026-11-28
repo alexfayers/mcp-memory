@@ -10,7 +10,7 @@
 | `restart` | Restart the service |
 | `install <target>` | Register the server with an agent |
 | `uninstall copilot [--mcp-config]` | Remove the server from VS Code's `mcp.json` |
-| `teardown [--kiro-agent-config]` | Remove the service and the server from agent configs, keeping the database |
+| `teardown [--agent ...] [--keep-service] [--kiro-agent-config ...]` | Remove the service and the server from agent configs, keeping the database. `--agent` and `--kiro-agent-config` repeat |
 | `utils audit` | Hygiene report on the graph |
 | `utils eval` | Search ranking quality |
 | `utils metrics` | Tool usage report |

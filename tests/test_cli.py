@@ -448,6 +448,7 @@ class TestTeardown:
         monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path))
         monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi"))
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
         monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
         monkeypatch.setattr(cli, "_LAUNCHD_PLIST", tmp_path / "com.mcp-memory.plist")
         monkeypatch.setattr(cli, "_SYSTEMD_UNIT", tmp_path / "mcp-memory.service")
@@ -572,6 +573,70 @@ class TestTeardown:
             assert json.loads(path.read_text()) == {key: {"other": {}} if own else {"memory": entry, "other": {}}}
         kept = {"mcpServers": {"other": {}}, "allowedTools": ["@other"], "tools": ["*"]}
         assert json.loads(kiro.read_text()) == (kept if own else agent)
+
+    @pytest.mark.parametrize("own", [True, False], ids=["own", "foreign"])
+    def test_memory_entry_is_removed_from_opencode(self, tmp_path: cli.Path, own: bool) -> None:
+        entry = {"type": "remote", "url": "http://localhost:3000/mcp" if own else "https://example.com/mcp"}
+        config = tmp_path / ".config" / "opencode" / "opencode.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"mcp": {"servers": {"memory": entry, "other": {}}}}))
+
+        self._teardown()
+
+        servers = {"other": {}} if own else {"memory": entry, "other": {}}
+        assert json.loads(config.read_text()) == {"mcp": {"servers": servers}}
+
+    def _json_config(self, path: cli.Path, key: str) -> cli.Path:
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({key: {"memory": {"url": "http://localhost:3000/mcp"}}}))
+        return path
+
+    def test_agent_flag_limits_teardown_to_the_named_agents(self, tmp_path: cli.Path) -> None:
+        pi = self._json_config(tmp_path / "pi" / "mcp.json", "mcpServers")
+        copilot = self._json_config(tmp_path / ".config" / "Code" / "User" / "mcp.json", "servers")
+        antigravity = self._json_config(tmp_path / ".gemini" / "config" / "mcp_config.json", "mcpServers")
+        settings = self._claude_settings(tmp_path)
+
+        self._teardown("--agent", "pi", "--agent", "copilot")
+
+        assert json.loads(pi.read_text()) == {"mcpServers": {}}
+        assert json.loads(copilot.read_text()) == {"servers": {}}
+        assert "memory" in json.loads(antigravity.read_text())["mcpServers"]
+        assert self._allow(settings) == ["mcp__memory__*", "Bash(ls)"]
+
+    def test_keep_service_leaves_the_service_installed(self, tmp_path: cli.Path) -> None:
+        unit = tmp_path / "mcp-memory.service"
+        unit.write_text("[Unit]")
+        pi = self._json_config(tmp_path / "pi" / "mcp.json", "mcpServers")
+
+        self._teardown("--keep-service")
+
+        assert self.calls == []
+        assert unit.exists()
+        assert json.loads(pi.read_text()) == {"mcpServers": {}}
+
+    def test_kiro_agent_config_is_repeatable(self, tmp_path: cli.Path) -> None:
+        kiros = [self._json_config(tmp_path / name / "agent.json", "mcpServers") for name in ("a", "b")]
+
+        self._teardown(*(arg for kiro in kiros for arg in ("--kiro-agent-config", str(kiro))))
+
+        for kiro in kiros:
+            assert json.loads(kiro.read_text()) == {"mcpServers": {}}
+
+    @pytest.mark.parametrize(
+        ("argv", "warning"),
+        [
+            (("--agent", "kiro"), "--agent kiro needs --kiro-agent-config"),
+            (("--agent", "pi", "--kiro-agent-config", "agent.json"), "--kiro-agent-config is ignored"),
+        ],
+        ids=["kiro-without-config", "config-without-kiro"],
+    )
+    def test_an_unused_kiro_option_is_warned_about(
+        self, argv: tuple[str, ...], warning: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._teardown(*argv)
+
+        assert warning in capsys.readouterr().err
 
     def test_a_malformed_config_is_skipped_with_a_warning(
         self, tmp_path: cli.Path, capsys: pytest.CaptureFixture[str]
