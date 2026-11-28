@@ -428,6 +428,158 @@ class TestRegisterCodexServer:
         assert not any("add" in c for c in calls)
 
 
+class TestTeardown:
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cli.Path, "home", classmethod(lambda _cls: tmp_path))
+        monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi"))
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+        monkeypatch.setattr(cli, "_LAUNCHD_PLIST", tmp_path / "com.mcp-memory.plist")
+        monkeypatch.setattr(cli, "_SYSTEMD_UNIT", tmp_path / "mcp-memory.service")
+        monkeypatch.setattr(cli.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+        self.calls: list[list[str]] = []
+        monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **_kw: self.calls.append(cmd))
+
+    def _teardown(self, *argv: str) -> None:
+        cli._cmd_teardown(cli._build_parser().parse_args(["teardown", *argv]))
+
+    def test_nothing_installed_exits_cleanly(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._teardown()
+
+        assert capsys.readouterr().out == "Nothing to tear down.\n"
+        assert self.calls == []
+
+    def test_systemd_unit_is_disabled_and_deleted_and_data_kept(self, tmp_path: cli.Path) -> None:
+        (tmp_path / "mcp-memory.service").write_text("[Unit]")
+        db = tmp_path / "memory.db"
+        db.write_text("data")
+
+        self._teardown()
+
+        assert ["sudo", "systemctl", "disable", "mcp-memory.service"] in self.calls
+        assert ["sudo", "rm", str(tmp_path / "mcp-memory.service")] in self.calls
+        assert db.read_text() == "data"
+
+    def test_launchd_job_is_booted_out_and_plist_deleted(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plist = tmp_path / "com.mcp-memory.plist"
+        plist.write_text("<plist/>")
+        monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+
+        self._teardown()
+
+        assert not plist.exists()
+        assert any(c[:2] == ["launchctl", "bootout"] and c[-1] == str(plist) for c in self.calls)
+
+    def _fake_agent_clis(self, monkeypatch: pytest.MonkeyPatch, url: str, remove_code: int = 0) -> None:
+        monkeypatch.setattr(cli.shutil, "which", lambda name: f"/bin/{name}")
+
+        def fake_run(cmd: list[str], **_kw: object) -> object:
+            self.calls.append(cmd)
+            if cmd[2] == "get":
+                return SimpleNamespace(returncode=0 if cmd[-1] == "memory" else 1, stdout=f"  URL: {url}\n")
+            return SimpleNamespace(returncode=remove_code, stdout="")
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    def _claude_settings(self, tmp_path: cli.Path, content: str | None = None) -> cli.Path:
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text(content or json.dumps({"permissions": {"allow": ["mcp__memory__*", "Bash(ls)"]}}))
+        return settings
+
+    def _allow(self, settings: cli.Path) -> list[str]:
+        return json.loads(settings.read_text())["permissions"]["allow"]
+
+    def test_claude_code_and_codex_servers_are_removed(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = self._claude_settings(tmp_path)
+        self._fake_agent_clis(monkeypatch, "http://127.0.0.1:3000/mcp")
+
+        self._teardown()
+
+        assert ["/bin/claude", "mcp", "remove", "--scope", "user", "memory"] in self.calls
+        assert ["/bin/codex", "mcp", "remove", "memory"] in self.calls
+        assert self._allow(settings) == ["Bash(ls)"]
+
+    def test_foreign_claude_code_and_codex_servers_are_kept(
+        self, tmp_path: cli.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = self._claude_settings(tmp_path)
+        self._fake_agent_clis(monkeypatch, "https://example.com/mcp")
+
+        self._teardown()
+
+        assert not any("remove" in c for c in self.calls)
+        assert self._allow(settings) == ["mcp__memory__*", "Bash(ls)"]
+
+    def test_a_failed_remove_is_not_reported(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._fake_agent_clis(monkeypatch, "http://localhost:3000/mcp", remove_code=1)
+
+        self._teardown()
+
+        assert "Removed" not in capsys.readouterr().out
+
+    def test_allow_rule_is_removed_without_claude_on_path(self, tmp_path: cli.Path) -> None:
+        settings = self._claude_settings(tmp_path)
+
+        self._teardown()
+
+        assert self._allow(settings) == ["Bash(ls)"]
+
+    @pytest.mark.parametrize("own", [True, False], ids=["own", "foreign"])
+    def test_memory_entries_are_removed_from_json_configs(self, tmp_path: cli.Path, own: bool) -> None:
+        url = "http://localhost:3000/mcp" if own else "https://example.com/mcp"
+        configs = {
+            tmp_path / ".gemini" / "config" / "mcp_config.json": ("mcpServers", {"serverUrl": url, "disabled": False}),
+            tmp_path / "pi" / "mcp.json": ("mcpServers", {"url": url}),
+            tmp_path / ".config" / "Code" / "User" / "mcp.json": ("servers", {"url": url}),
+        }
+        for path, (key, entry) in configs.items():
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({key: {"memory": entry, "other": {}}}))
+        kiro = tmp_path / "agent.json"
+        agent = {
+            "mcpServers": {"memory": {"url": url}, "other": {}},
+            "allowedTools": ["@memory", "@other"],
+            "tools": ["*"],
+        }
+        kiro.write_text(json.dumps(agent))
+
+        self._teardown("--kiro-agent-config", str(kiro))
+
+        for path, (key, entry) in configs.items():
+            assert json.loads(path.read_text()) == {key: {"other": {}} if own else {"memory": entry, "other": {}}}
+        kept = {"mcpServers": {"other": {}}, "allowedTools": ["@other"], "tools": ["*"]}
+        assert json.loads(kiro.read_text()) == (kept if own else agent)
+
+    def test_a_malformed_config_is_skipped_with_a_warning(
+        self, tmp_path: cli.Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        settings = self._claude_settings(tmp_path, "{")
+        pi = tmp_path / "pi" / "mcp.json"
+        pi.parent.mkdir()
+        pi.write_text("[]")
+        copilot = tmp_path / ".config" / "Code" / "User" / "mcp.json"
+        copilot.parent.mkdir(parents=True)
+        copilot.write_text(json.dumps({"servers": {"memory": {"url": "http://localhost:3000/mcp"}}}))
+
+        with pytest.raises(SystemExit) as exit_info:
+            self._teardown()
+
+        assert exit_info.value.code == 1
+        err = capsys.readouterr().err
+        assert str(settings) in err
+        assert str(pi) in err
+        assert json.loads(copilot.read_text()) == {"servers": {}}
+
+
 class TestRegisterPiServer:
     def test_adds_url_only_servers(self, tmp_path: cli.Path) -> None:
         mcp_path = tmp_path / "agent" / "mcp.json"
@@ -591,7 +743,7 @@ class TestInstallClaudeCodeRemovesRetiredAgent:
         def fake_run(cmd: list[str], **_kw: object) -> object:
             calls.append(cmd)
             known = cmd[1:3] == ["mcp", "get"] and cmd[3] in registered
-            return type("R", (), {"returncode": 0 if known else 1, "stdout": ""})()
+            return type("R", (), {"returncode": 0 if known or cmd[2] == "remove" else 1, "stdout": ""})()
 
         monkeypatch.setattr(cli.subprocess, "run", fake_run)
         cli._cmd_install_claude_code()
